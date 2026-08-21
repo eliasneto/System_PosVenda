@@ -1,0 +1,93 @@
+{% extends "core/base.html" %}
+
+{% block content %}
+<div class="w-full max-w-[950px] mx-auto">
+    <div class="flex flex-col md:flex-row bg-white rounded-[3rem] overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-white/10">
+
+        <div class="w-full md:w-1/2 bg-pv-black p-12 flex flex-col justify-between text-white relative overflow-hidden">
+            <div class="absolute -top-24 -left-24 w-64 h-64 bg-pv-yellow/10 blur-[100px] rounded-full"></div>
+
+            <div class="relative z-10">
+                <div class="space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-1 bg-pv-yellow rounded-full"></div>
+                        <span class="text-pv-yellow font-black tracking-[0.3em] text-xs uppercase italic">Faturamento EACE</span>
+                    </div>
+                    <h1 class="text-5xl font-black italic uppercase leading-[0.9] tracking-tighter">
+                        <span class="text-white/50 text-3xl">Gerenciador</span><br>
+                        Pós Venda
+                    </h1>
+                    <p class="text-gray-400 text-sm max-w-[280px] leading-relaxed pt-4">
+                        Acompanhe o faturamento dos kits (RI) instalados, do confronto com a EACE até a Nota Fiscal.
+                    </p>
+                </div>
+            </div>
+
+            <div class="relative z-10 mt-12">
+                <div class="flex items-center gap-2">
+                    <span class="flex h-2 w-2">
+                        <span class="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-pv-yellow opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-pv-yellow"></span>
+                    </span>
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
+                        Servidor Online
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <div class="w-full md:w-1/2 p-12 bg-white flex flex-col justify-center">
+            <div class="mb-10 text-center md:text-left">
+                <h2 class="text-3xl font-black text-gray-900 tracking-tight">Login</h2>
+                <p class="text-sm text-gray-400 mt-1">Entre com seu usuário e senha do sistema.</p>
+            </div>
+
+            {% if form.errors %}
+                <div class="p-4 mb-8 text-xs font-bold text-red-700 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3">
+                    <i data-lucide="alert-circle" class="w-5 h-5"></i>
+                    <span>Usuário ou senha inválidos.</span>
+                </div>
+            {% endif %}
+
+            <form method="POST" class="space-y-6">
+                {% csrf_token %}
+
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Usuário</label>
+                    <div class="relative group">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-4 text-gray-400 group-focus-within:text-pv-yellow transition-colors">
+                            <i data-lucide="user" class="w-5 h-5"></i>
+                        </span>
+                        <input type="text" name="username" required autofocus
+                               class="w-full pl-12 pr-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none focus:ring-4 focus:ring-pv-yellow/10 focus:border-pv-yellow transition-all placeholder:text-gray-300"
+                               placeholder="Nome do usuário">
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Senha</label>
+                    <div class="relative group">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-4 text-gray-400 group-focus-within:text-pv-yellow transition-colors">
+                            <i data-lucide="lock" class="w-5 h-5"></i>
+                        </span>
+                        <input type="password" name="password" required
+                               class="w-full pl-12 pr-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl outline-none focus:ring-4 focus:ring-pv-yellow/10 focus:border-pv-yellow transition-all placeholder:text-gray-300"
+                               placeholder="••••••••">
+                    </div>
+                </div>
+
+                <button type="submit" class="w-full bg-pv-yellow text-black font-black py-5 rounded-2xl shadow-[0_10px_30px_rgba(255,193,7,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all flex justify-center items-center gap-3 group">
+                    <span class="uppercase tracking-widest text-xs">Entrar no Sistema</span>
+                    <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition-transform"></i>
+                </button>
+            </form>
+
+            <div class="mt-12 flex items-center justify-center gap-4">
+                <div class="h-px w-8 bg-gray-100"></div>
+                <p class="text-[9px] text-gray-300 font-bold uppercase tracking-[0.3em]">Gerenciador Pós Venda</p>
+                <div class="h-px w-8 bg-gray-100"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

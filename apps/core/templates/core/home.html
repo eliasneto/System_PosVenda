@@ -1,0 +1,22 @@
+{% extends "core/base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-2xl font-black text-gray-900 tracking-tight">Bem-vindo(a), {{ user.username }}</h1>
+    <p class="text-sm text-gray-500 mt-1">
+        Gerenciador Pós Venda — faturamento EACE por INEP (processo RI).
+    </p>
+</div>
+
+<div class="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm">
+    <div class="flex items-center gap-3 text-gray-400">
+        <i data-lucide="construction" class="w-5 h-5"></i>
+        <p class="text-sm font-semibold">
+            O grid de INEPs e as demais telas do processo RI entram nas próximas
+            features do checklist (FEAT-002 em diante).
+        </p>
+    </div>
+</div>
+{% endblock %}

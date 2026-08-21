@@ -1,0 +1,145 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Gerenciador Pós Venda{% endblock %}</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .bg-pv-black { background-color: #0F0F0F; }
+        .bg-pv-yellow { background-color: #FFC107; }
+        .text-pv-yellow { color: #FFC107; }
+
+        .sidebar-link-active {
+            background-color: rgba(255, 193, 7, 0.1);
+            color: #FFC107 !important;
+            border-left: 4px solid #FFC107;
+            border-radius: 0 12px 12px 0 !important;
+        }
+
+        #sidebar::-webkit-scrollbar { width: 4px; }
+        #sidebar::-webkit-scrollbar-thumb { background: #2d2d2d; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-[#F8F9FA] text-gray-900 antialiased overflow-x-hidden">
+
+    <div class="messages-container fixed top-6 right-6 z-[100] flex flex-col gap-3">
+        {% if messages %}
+            {% for message in messages %}
+                <div class="px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 min-w-[300px]
+                    {% if message.tags == 'success' %} bg-green-50 border-green-100 text-green-800 {% else %} bg-red-50 border-red-100 text-red-800 {% endif %}">
+                    <i data-lucide="{% if message.tags == 'success' %}check-circle{% else %}alert-circle{% endif %}" class="w-5 h-5"></i>
+                    <span class="text-xs font-bold uppercase tracking-tight">{{ message }}</span>
+                </div>
+            {% endfor %}
+        {% endif %}
+    </div>
+
+    {% if user.is_authenticated %}
+    <div id="sidebarOverlay" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 hidden md:hidden transition-opacity" onclick="toggleSidebar()"></div>
+
+    <aside id="sidebar" class="fixed top-0 left-0 h-full w-64 bg-pv-black text-white z-50 transform transition-transform duration-300 ease-in-out md:translate-x-0 -translate-x-full border-r border-white/5 shadow-2xl flex flex-col overflow-y-auto">
+        <div class="p-6 mb-2">
+            <div class="flex flex-col ml-1">
+                <span class="text-2xl font-black italic uppercase tracking-tighter leading-none text-white">Gerenciador</span>
+                <span class="text-2xl font-black italic uppercase tracking-tighter leading-none text-pv-yellow">Pós Venda</span>
+                <p class="text-[10px] text-gray-500 font-bold tracking-[0.2em] mt-2 uppercase">Faturamento EACE · RI</p>
+            </div>
+        </div>
+
+        <nav class="px-4 space-y-1 flex-grow">
+            <p class="text-[10px] uppercase text-gray-600 font-extrabold px-4 py-3 tracking-widest">Menu Principal</p>
+            <a href="{% url 'home' %}" class="flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 {% if request.resolver_match.url_name == 'home' %} sidebar-link-active {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %} group">
+                <i data-lucide="layout-dashboard" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
+                <span class="text-sm font-semibold">Dashboard</span>
+            </a>
+        </nav>
+
+        <div class="mt-auto mb-8 px-6">
+            <div class="bg-white/5 rounded-3xl p-5 border border-white/5">
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-pv-yellow to-orange-500 flex items-center justify-center text-black font-black shadow-lg text-lg">
+                        {{ user.username|slice:":1"|upper }}
+                    </div>
+                    <div class="overflow-hidden">
+                        <p class="text-[11px] font-bold truncate text-white leading-tight">{{ user.username }}</p>
+                        <span class="text-[8px] bg-white/10 text-gray-400 px-2 py-0.5 rounded-full font-bold uppercase tracking-widest border border-white/5">
+                            {% if user.is_administrador %}Administrador{% else %}Analista{% endif %}
+                        </span>
+                    </div>
+                </div>
+                <form action="{% url 'logout' %}" method="post">
+                    {% csrf_token %}
+                    <button type="submit" class="w-full flex items-center justify-center gap-2 py-3 text-[10px] font-black text-red-400 bg-red-400/10 hover:bg-red-500 hover:text-white rounded-2xl transition-all uppercase tracking-widest">
+                        <i data-lucide="power" class="w-3.5 h-3.5"></i> Sair do Sistema
+                    </button>
+                </form>
+            </div>
+            <div class="mt-4 text-center pb-2">
+                <p class="text-[9px] font-black text-gray-600 uppercase tracking-widest select-none">Gerenciador Pós Venda • v1.0.0</p>
+            </div>
+        </div>
+    </aside>
+    {% endif %}
+
+    <div id="main-wrapper" class="{% if user.is_authenticated %}md:ml-64{% endif %} min-h-screen flex flex-col transition-all duration-300 ease-in-out">
+        {% if user.is_authenticated %}
+        <header class="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+            <button onclick="toggleSidebar()" class="p-2 text-gray-600 md:hidden hover:bg-gray-100 rounded-lg transition">
+                <i data-lucide="menu"></i>
+            </button>
+            <h2 class="text-xs font-bold text-gray-400 uppercase tracking-widest italic hidden md:block">Gerenciador <span class="text-gray-900">Pós Venda</span></h2>
+        </header>
+        {% endif %}
+
+        <main class="flex-grow {% if not user.is_authenticated %}flex items-center justify-center bg-pv-black p-4{% else %}p-6 md:p-10{% endif %}">
+            <div class="{% if user.is_authenticated %}max-w-7xl mx-auto w-full{% endif %}">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+
+        {% if user.is_authenticated %}
+        <footer class="p-6 text-center border-t border-gray-200 bg-white/50">
+            <p class="text-[10px] text-gray-400 font-bold uppercase tracking-widest">&copy; 2026 MEGA · Gerenciador Pós Venda</p>
+        </footer>
+        {% endif %}
+    </div>
+
+    <script>
+        lucide.createIcons();
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            if (sidebar && overlay) {
+                if (sidebar.classList.contains('-translate-x-full')) {
+                    sidebar.classList.remove('-translate-x-full');
+                    overlay.classList.remove('hidden');
+                } else {
+                    sidebar.classList.add('-translate-x-full');
+                    overlay.classList.add('hidden');
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            const alerts = document.querySelectorAll('.messages-container > div');
+            alerts.forEach(function (alert) {
+                setTimeout(function () {
+                    alert.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+                    alert.style.opacity = '0';
+                    alert.style.transform = 'translateY(-20px)';
+                    setTimeout(function () { alert.remove(); }, 600);
+                }, 5000);
+            });
+        });
+    </script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
