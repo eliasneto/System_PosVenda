@@ -137,6 +137,11 @@ o banco ao vivo: resultado idêntico ao já registrado (2.622 escolas, 0
 divergência). `openpyxl` adicionado ao `requirements.txt`; a planilha de
 origem foi incluída no `.gitignore` do `Sistema_posvenda` (dado de negócio,
 não deve ser versionado).
+**Reexecutada em 2026-08-22 (Dev, a pedido do usuário):** `importar_escolas_planilha`
+rodado de novo contra o `CONSOLIDADO EACE.xlsx` que o usuário colocou na raiz
+do repositório — banco já tinha as 2.622 escolas; resultado: `0 criada(s),
+2622 já existente(s), 0 linha(s) inválida(s)`. Confirma que a planilha atual
+não traz INEP novo nem diverge do que já está migrado.
 
 ---
 
@@ -247,6 +252,15 @@ Responsável) com filtro por status e detalhe dos itens por INEP.
 **Dependências:** FEAT-004, FEAT-006.
 **Tipo de validação:** QA (QA-007).
 **Entrega do Dev:** nenhuma ainda.
+**Referência visual (não é reaproveitamento de código):** a tela "Endereços"
+do `modulo-posVenda` (menu Projeto → LastMile — `apps/leads/templates/leads/
+enderecos_lastmile.html` e partials em `apps/leads/templates/leads/
+partials/`) serve só de referência de UX para este grid: badge de status
+colorido, filtro por Status/Responsável e drill-down em modal de histórico.
+Confirmado com o usuário em 2026-08-22 — não é reaproveitamento de código;
+`ADR-001` continua descontinuando Leads/cadastro de Parceiro (base daquela
+tela). O Dev implementa a FEAT-007 do zero, adaptando o padrão visual ao
+domínio de INEP.
 **Pendência atual:** nenhuma.
 
 ---
@@ -425,6 +439,7 @@ rodada) e o `docker-compose.hml.yml` correspondente.
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-08-22 | FEAT-007 recebe nota de referência visual (tela "Endereços" do `modulo-posVenda`) | Usuário confirmou: é só inspiração de UX (badge de status, filtro, drill-down em modal), sem reaproveitar código — `ADR-001` continua descontinuando Leads/cadastro de Parceiro |
 | 2026-08-22 | FEAT-001 (logos) e FEAT-012 (Docker/CI) refeitos de verdade e commitados no `Sistema_posvenda` (`9cbdbba`, `9b0046e`, `53ca9f0`) — `docker compose up -d --build` validado com screenshot real, dado das 2.622 escolas preservado. `.env` daquele repositório também foi limpo (tinha credencial de AD/IXC/Graph copiada do `modulo-posVenda` por engano) |
 | 2026-08-22 | FEAT-002 reaberta (`🔍 → 🔄`) e FEAT-012 corrigida: o checkout local do `Sistema_posvenda` desapareceu do disco sem nunca ter sido commitado além de FEAT-001; ao re-clonar do GitHub, confirmou-se que a migração de dados (2.622 escolas) sobrevive no banco, mas os scripts/testes do FEAT-002 e toda a infraestrutura Docker/CI do FEAT-012 não existem no repositório — precisam ser refeitos e commitados. Ver também `ADR-001` |
 | 2026-08-21 | Criação do checklist (FEAT-001 a FEAT-011, v1/RI), a partir de `requisitos.md`, `architecture.md`, `business_rules.md` e `modelo-dados.md` |
