@@ -378,23 +378,41 @@ documentada em `.claude/agents/devops.md` para a confusão de nomes com
 cancelou um pedido de reversão nisso em 2026-08-22. Sem decisão tomada
 sobre deixar a porta `8095` indisponível.
 
-**Pendência atual:** repositório `Sistema_posvenda` re-clonado em
-`C:\Projetos\Sistema_posvenda` (2026-08-22) — recupera só o que estava de
-fato commitado (FEAT-001). O dado do FEAT-002 (2.622 escolas) sobreviveu
-porque mora num volume de banco separado, que não foi apagado junto com a
-pasta.
-**Nova tarefa (registrada em 2026-08-22, para o DevOps):** usuário
-confirmou levar `Dockerfile`, `docker-compose.yml` e `.gitignore` do
-`modulo-posVenda` como ponto de partida — adaptar para a stack do
-`Sistema_posvenda` (Django puro, sem os apps de Parceiro/Leads/IXC, banco
-MySQL conforme `architecture.md`) e commitar no repositório novo. Isso é
-cópia única adaptada, não integração em tempo de execução (`ADR-001`).
-Ainda falta também o pipeline `.github/workflows/homolog.yml` e
-`scripts/deploy_homolog.sh`, no mesmo espírito.
+**Resolvida em 2026-08-22 (DevOps):** repositório `Sistema_posvenda`
+re-clonado em `C:\Projetos\Sistema_posvenda`. `Dockerfile` e
+`docker-compose.yml` recriados do zero (não copiados do `modulo-posVenda`
+como estavam — adaptados: sem as libs de AD auth, sem o script
+`ops/setup_speed.py` que não existe aqui); `requirements.txt` ganhou
+`gunicorn` e `mysqlclient`; `.env` reescrito só com as variáveis que o
+`settings.py` deste repositório usa (o anterior tinha sido copiado do
+`modulo-posVenda` e trazia credencial de AD/IXC/Graph que não pertence
+aqui — removida; `SECRET_KEY` gerada nova, `DB_PASSWORD` é a senha real já
+em uso pelo MySQL deste projeto, não a de outro sistema).
+
+**Validado de ponta a ponta:** `docker compose up -d --build` builda e
+sobe os dois serviços (`db` MySQL 8.0 porta `3315`, `web` porta `8000`),
+reaproveitando o volume que já tinha as 2.622 escolas (confirmado: dado
+intacto depois do rebuild). Ajuste feito na validação: o comando do
+serviço `web` usa `runserver` em vez de `gunicorn` no ambiente local,
+porque Gunicorn sozinho não serve arquivo estático (exigiria WhiteNoise no
+`settings.py`, fora do escopo do DevOps) — `runserver` já serve, é o mesmo
+comportamento que já estava rodando antes. Login testado com screenshot
+real, logos aparecendo corretamente. Commitado e enviado ao GitHub
+(`9b0046e`, `53ca9f0`).
+
+Também copiada a pasta `docs_gerenciador_pos_venda/` (brief, arquitetura,
+regras, checklist, `ADR-001`) para dentro do `Sistema_posvenda` — a
+documentação de planejamento passa a viver junto do repositório que ela
+descreve.
+
+**Pendência atual:** ainda falta o pipeline `.github/workflows/homolog.yml`
+e `scripts/deploy_homolog.sh` (escopo de homologação, não pedido nesta
+rodada) e o `docker-compose.hml.yml` correspondente.
 
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-08-22 | FEAT-001 (logos) e FEAT-012 (Docker/CI) refeitos de verdade e commitados no `Sistema_posvenda` (`9cbdbba`, `9b0046e`, `53ca9f0`) — `docker compose up -d --build` validado com screenshot real, dado das 2.622 escolas preservado. `.env` daquele repositório também foi limpo (tinha credencial de AD/IXC/Graph copiada do `modulo-posVenda` por engano) |
 | 2026-08-22 | FEAT-002 reaberta (`🔍 → 🔄`) e FEAT-012 corrigida: o checkout local do `Sistema_posvenda` desapareceu do disco sem nunca ter sido commitado além de FEAT-001; ao re-clonar do GitHub, confirmou-se que a migração de dados (2.622 escolas) sobrevive no banco, mas os scripts/testes do FEAT-002 e toda a infraestrutura Docker/CI do FEAT-012 não existem no repositório — precisam ser refeitos e commitados. Ver também `ADR-001` |
 | 2026-08-21 | Criação do checklist (FEAT-001 a FEAT-011, v1/RI), a partir de `requisitos.md`, `architecture.md`, `business_rules.md` e `modelo-dados.md` |
 | 2026-08-21 | Criação de FEAT-012 (infraestrutura do repositório novo, tipo devops) — usuário pediu que o DevOps veja, em paralelo ao Dev, o que muda do lado dele e o que é descartado |
