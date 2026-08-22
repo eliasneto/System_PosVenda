@@ -1,0 +1,233 @@
+# Modelagem de Banco de Dados — Gerenciador Pós-Venda
+_Última atualização: 2026-08-20_
+
+> Escopo: banco de dados próprio deste sistema (separado do `modulo-posVenda`
+> original, ver `architecture.md`). Cobre o processo **RI** da v1
+> (`requisitos.md`, `business_rules.md` RN-001/RN-002). O processo **RE**
+> fica fora desta modelagem — entra quando a v3 for planejada.
+>
+> Convenções: tabelas no singular, `snake_case`; toda tabela tem `id`
+> (chave primária) e, quando aplicável, `criado_em`/`atualizado_em`; chave
+> estrangeira nomeada `<tabela>_id`. Tipos em sintaxe MySQL (banco do
+> `modulo-posVenda` original, reaproveitado como ponto de partida).
+>
+> Pontos ainda **pendentes de confirmação do cliente** (ver seção final)
+> foram assumidos aqui como proposta técnica, não como definição fechada.
+
+## Diagrama de relacionamento (resumo)
+
+| De | Para | Tipo |
+|---|---|---|
+| `escola` | `ri` | 1 escola → N RI |
+| `usuario` | `ri` | 1 usuário → N RI (responsável) |
+| `ri` | `ri_item_eace` | 1 RI → N itens (lado EACE) |
+| `ri` | `ri_item_ixc` | 1 RI → N itens (lado IXC) |
+| `ri` | `ri_divergencia` | 1 RI → N divergências |
+| `ri` | `documento` | 1 RI → N documentos (NF/XML) |
+| `ri` | `email_financeiro_log` | 1 RI → N e-mails (enviados/recebidos) |
+| `usuario` | `auditoria` | 1 usuário → N registros de auditoria |
+
+## Tabelas
+
+### `escola`
+Reaproveitada do `modulo-posVenda` (model `Escola`). Migração inicial dos
+2.622 registros é obrigatória antes da v1 entrar em uso (já confirmado).
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `inep` | `VARCHAR(8)` | não | Único. Texto, não numérico — preserva zero à esquerda |
+| `nome` | `VARCHAR(255)` | não | Nome da escola (coluna do grid, ITEM 5) |
+| `endereco` | `VARCHAR(255)` | sim | Coluna do grid (ITEM 5) |
+| `lote` | `INT` | sim | Lote de escolas informado pela EACE (requisitos.md, ITEM 11) |
+| `estado` | `CHAR(2)` | sim | UF (requisitos.md, ITEM 11) |
+| `municipio` | `VARCHAR(150)` | sim | Município (requisitos.md, ITEM 11) |
+| `kit_inicial` | `VARCHAR(100)` | sim | KIT declarado pela EACE (reaproveitado, RN-057 original) |
+| `velocidade_dl_minima` | `VARCHAR(50)` | sim | Reaproveitado (RN-057 original) |
+| `status_conexao` | `ENUM('desconectado','parcialmente_conectado','conectado')` | não | Default `desconectado`. Ver RN-007 |
+| `data_instalacao_re` | `DATE` | sim | Preenchimento manual (vem do chamado); RE fora do frontend da v1 (só guarda o dado) |
+| `data_instalacao_ri` | `DATE` | sim | Preenchimento manual (vem do chamado) |
+| `criado_em` / `atualizado_em` | `DATETIME` | não | — |
+
+**Exemplo:**
+| id | inep | nome | endereco | lote | estado | municipio | status_conexao |
+|---|---|---|---|---|---|---|---|
+| 1 | `53008430` | EM José da Silva | Rua das Flores, 123 — Centro | 9 | SP | Nova Aliança | parcialmente_conectado |
+
+### `usuario`
+Reaproveitado (permissão). Dois perfis fixos (ITEM 13).
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `nome` | `VARCHAR(150)` | não | — |
+| `email` | `VARCHAR(255)` | não | Único |
+| `perfil` | `ENUM('administrador','analista')` | não | Administrador: tudo. Analista: tudo exceto excluir |
+| `ativo` | `BOOLEAN` | não | Default `true` |
+| `criado_em` / `atualizado_em` | `DATETIME` | não | — |
+
+**Exemplo:**
+| id | nome | email | perfil | ativo |
+|---|---|---|---|---|
+| 2 | Maria Souza | maria.souza@megainfraestrutura.com.br | analista | true |
+
+### `ri`
+Tabela central do processo — cabeçalho do INEP ("Faturamento INEP", ITEM 2).
+Um RI nasce com status `implantacao_eace` e percorre os 8 status do RN-001
+(7 na linha principal + o desvio manual `correcao_mega`).
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `escola_id` | `BIGINT` (FK `escola.id`) | não | — |
+| `responsavel_id` | `BIGINT` (FK `usuario.id`) | sim | Coluna "Responsável" do grid (ITEM 5) |
+| `status` | `ENUM(...)` | não | Os 8 valores do RN-001 (ver abaixo). Default `implantacao_eace` |
+| `kit_informado_ixc` | `VARCHAR(100)` | sim | KIT do chamado IXC, para o alerta do RN-002 |
+| `divergencia_kit` | `BOOLEAN` | não | Alerta amarelo (RN-002) — `kit_informado_ixc` ≠ `escola.kit_inicial`. Não bloqueia |
+| `concluido_em` | `DATETIME` | sim | Preenchido ao chegar em `faturamento_concluido` |
+| `criado_em` / `atualizado_em` | `DATETIME` | não | — |
+
+Valores de `status`: `implantacao_eace`, `andamento`, `envio_email_faturamento`,
+`aguardando_financeiro`, `aguardando_anexo_portal_eace`,
+`aguardando_validacao_eace`, `faturamento_concluido`, `correcao_mega`.
+
+`correcao_mega` (RN-001, 2026-08-21) só é alcançado a partir de `andamento`,
+manualmente, quando há divergência de quantidade/valor (RF-04) aberta contra
+o relatório EACE; retorna também manualmente para `andamento` — sem gatilho
+automático em nenhum dos dois sentidos, e sem transição direta para nenhum
+outro valor.
+
+**Exemplo:**
+| id | escola_id (inep) | status | responsavel_id | kit_informado_ixc | divergencia_kit |
+|---|---|---|---|---|---|
+| 1 | 1 (`53008430`) | `andamento` | 2 | Kit Padrão 10Mb | false |
+| 2 | 3 (`53012345`) | `correcao_mega` | 2 | Kit Padrão 20Mb | false |
+
+### `ri_item_eace`
+Itens do relatório da EACE, um por linha (RF-02, relação 1:N).
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `ri_id` | `BIGINT` (FK `ri.id`) | não | — |
+| `descricao_item` | `VARCHAR(255)` | não | Não entra no confronto (RF-04); usada aqui como chave de casamento com `ri_item_ixc` — **ver pendência ao final** |
+| `quantidade` | `INT` | não | Entra no confronto (RF-04) |
+| `valor_unitario` | `DECIMAL(10,2)` | não | Entra no confronto (RF-04) |
+| `criado_em` | `DATETIME` | não | — |
+
+**Exemplo:**
+| id | ri_id | descricao_item | quantidade | valor_unitario |
+|---|---|---|---|---|
+| 1 | 1 | Roteador Wi-Fi 6 | 2 | 350.00 |
+
+### `ri_item_ixc`
+Mesma estrutura de `ri_item_eace`, para o lado IXC (RF-03).
+
+**Exemplo (com divergência de quantidade em relação ao item acima):**
+| id | ri_id | descricao_item | quantidade | valor_unitario |
+|---|---|---|---|---|
+| 1 | 1 | Roteador Wi-Fi 6 | 1 | 350.00 |
+
+### `ri_divergencia`
+Catálogo de divergências formais (bloqueiam) e alertas informais. **O `tipo`
+abaixo foi confirmado pelo cliente em 2026-08-21 (P-03,
+`requisitos.md`/"PROCESSO do Projeto") — pode ser ajustado ao longo do
+projeto se necessário, mas vale para a v1 a partir de agora.**
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `ri_id` | `BIGINT` (FK `ri.id`) | não | — |
+| `tipo` | `ENUM('valor','quantidade','kit_relatorio','nf_financeiro')` | não | Confirmado (P-03, 2026-08-21) |
+| `bloqueia` | `BOOLEAN` | não | `true` para os 4 tipos acima (RF-04/RF-09) |
+| `descricao` | `TEXT` | sim | Detalhe legível da divergência |
+| `resolvida_em` | `DATETIME` | sim | — |
+| `criado_em` | `DATETIME` | não | — |
+
+**Exemplo:**
+| id | ri_id | tipo | bloqueia | descricao |
+|---|---|---|---|---|
+| 1 | 5 | quantidade | true | Item "Roteador Wi-Fi 6": EACE = 2, IXC = 1 |
+
+### `documento`
+Nota Fiscal (PDF) e XML recebidos do financeiro (RF-08, ITEM 5/7).
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `ri_id` | `BIGINT` (FK `ri.id`) | não | — |
+| `tipo` | `ENUM('nota_fiscal_pdf','xml')` | não | — |
+| `caminho_arquivo` | `VARCHAR(500)` | não | Armazenamento interno (decisão do Dev) |
+| `versao` | `INT` | não | Default `1`; incrementa se a NF for substituída (ITEM 5) |
+| `ativo` | `BOOLEAN` | não | `true` só na versão vigente |
+| `recebido_em` | `DATETIME` | não | — |
+| `criado_em` | `DATETIME` | não | — |
+
+**Exemplo:**
+| id | ri_id | tipo | caminho_arquivo | versao | ativo |
+|---|---|---|---|---|---|
+| 1 | 1 | nota_fiscal_pdf | /documentos/ri_1/nf_v1.pdf | 1 | true |
+
+### `email_financeiro_log`
+Histórico de envio/recebimento com o financeiro (RF-07/RF-08).
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `ri_id` | `BIGINT` (FK `ri.id`) | não | — |
+| `direcao` | `ENUM('enviado','recebido')` | não | — |
+| `remetente` | `VARCHAR(255)` | não | `posvendas@megainfraestrutura.com.br` no envio |
+| `destinatarios` | `TEXT` | sim | Para/Cc (RF-07); nulo quando `direcao='recebido'` |
+| `assunto` | `VARCHAR(255)` | sim | — |
+| `anexo_pdf` | `VARCHAR(500)` | sim | Caminho do PDF gerado (RF-17) |
+| `status_leitura` | `ENUM('ok','fora_do_padrao')` | sim | Só para `direcao='recebido'` (RF-08) |
+| `data_hora` | `DATETIME` | não | — |
+
+**Exemplo:**
+| id | ri_id | direcao | remetente | destinatarios | data_hora |
+|---|---|---|---|---|---|
+| 1 | 1 | enviado | posvendas@megainfraestrutura.com.br | Para: hilber.lustosa@speedcsc.com.br, financeiro@speedcsc.com.br; Cc: logistica-l@speedcsc.com.br, posvendas@megainfraestrutura.com.br, david.alves@speedcsc.com.br | 2026-08-29 14:05:00 |
+
+### `auditoria`
+Reaproveitada do `modulo-posVenda`; hoje só cobre login. A estrutura abaixo
+já assume a extensão para alteração de campo/status (gap — decisão do Dev,
+ver `architecture.md`).
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `usuario_id` | `BIGINT` (FK `usuario.id`) | sim | Nulo em ações automáticas do sistema |
+| `acao` | `VARCHAR(50)` | não | `login`, `alteracao_campo`, `transicao_status`, `envio_email`, `recebimento_email`, `erro` |
+| `entidade` | `VARCHAR(50)` | sim | Ex.: `ri` |
+| `entidade_id` | `BIGINT` | sim | — |
+| `campo` | `VARCHAR(100)` | sim | Nome do campo alterado |
+| `valor_anterior` / `valor_novo` | `TEXT` | sim | — |
+| `ip_origem` | `VARCHAR(45)` | sim | — |
+| `criado_em` | `DATETIME` | não | — |
+
+**Exemplo:**
+| id | usuario_id | acao | entidade | entidade_id | campo | valor_anterior | valor_novo |
+|---|---|---|---|---|---|---|---|
+| 1 | 2 | transicao_status | ri | 1 | status | andamento | envio_email_faturamento |
+
+## Pendências desta modelagem
+
+- **Critério de casamento entre `ri_item_eace` e `ri_item_ixc`:** assumido
+  aqui como `descricao_item` igual. O próprio `requisitos.md` (ITEM 4)
+  registra isso como não confirmado — a descrição pode variar de texto sem
+  ser tratado como erro, então o casamento por texto exato pode não ser
+  ideal. Decisão técnica a confirmar antes de implementar o confronto.
+- **Extensão da auditoria** para `alteracao_campo`/`transicao_status`: gap
+  já registrado em `architecture.md`, decisão de implementação do Dev.
+- **RE (instalação de link):** fora desta modelagem. Quando a v3 entrar em
+  planejamento, provavelmente espelha `ri`/`ri_item_*` em tabelas próprias
+  (`re`, `re_item_*`), reaproveitando a mesma separação que já existe hoje
+  no `modulo-posVenda` original entre subatividades RE/RI.
+
+## Histórico de Alterações
+| Data | Alteração | Motivo |
+|---|---|---|
+| 2026-08-20 | Criação do documento | Usuário pediu a modelagem de banco de dados do sistema |
+| 2026-08-21 | `ri.status` ganha o 8º valor `correcao_mega` | Acompanha a ampliação do RN-001 em `business_rules.md` (novo status "Correção MEGA") |
+| 2026-08-21 | `escola` ganha `lote`, `estado`, `municipio`, `status_conexao`, `data_instalacao_re`, `data_instalacao_ri` | Usuário respondeu a pendência de campos adicionais de Escola (requisitos.md, ITEM 11); nova regra RN-007 em `business_rules.md` |
+| 2026-08-21 | `ri_divergencia.tipo` confirmado (deixa de ser proposta) | Cliente validou o catálogo P-03 (`valor`, `quantidade`, `kit_relatorio`, `nf_financeiro`); pendência removida desta modelagem |

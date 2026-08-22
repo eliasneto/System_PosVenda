@@ -1,0 +1,56 @@
+# Ambiente local do Gerenciador Pós-Venda. Repositório independente do
+# modulo-posVenda (ver ADR-001) - nenhum serviço aqui depende de nada
+# daquele projeto em tempo de execução.
+name: sistema_posvenda
+
+services:
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+    ports:
+      - "3315:3306"
+    volumes:
+      - posvenda_db_data:/var/lib/mysql
+
+  web:
+    build: .
+    restart: always
+    environment:
+      - DEBUG=${DEBUG}
+      - SECRET_KEY=${SECRET_KEY}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+      - DB_ENGINE=mysql
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=3306
+      - EMAIL_BACKEND=${EMAIL_BACKEND}
+      - EMAIL_HOST=${EMAIL_HOST}
+      - EMAIL_PORT=${EMAIL_PORT}
+      - EMAIL_HOST_USER=${EMAIL_HOST_USER}
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
+      - EMAIL_USE_TLS=${EMAIL_USE_TLS}
+      - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             gunicorn --bind 0.0.0.0:8000 --timeout 120 config.wsgi:application"
+    depends_on:
+      - db
+
+volumes:
+  # Mesmo nome já usado pelo checkout anterior (sistema_posvenda_posvenda_db_data) -
+  # sobe reaproveitando o dado que já existe, sem recriar do zero.
+  posvenda_db_data:

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "02 · Arquitetura dos modulos",
+    "subtitle": "Leitura 2 de 3 · Como o sistema se organiza por dentro - modulos reaproveitados, modulos novos da v1 e o gap do Hub de Integracoes (v2/v3) - Gerenciador Pos-Venda",
+    "output": "docs_gerenciador_pos_venda/diagrams/02 - arquitetura-modulos.html",
+    "quality_profile": "standard"
+  },
+  "layout": { "mode": "grid", "cols": 6, "origin": [40, 110], "gapX": 24, "gapY": 60, "cellW": 130, "cellH": 62 },
+  "components": [
+    { "id": "escolas", "type": "backend", "label": "Escolas", "sublabel": "INEP, kit_inicial, velocidade_dl_minima", "tag": "migracao inicial obrigatoria", "row": 0, "col": 0 },
+    { "id": "usuarios", "type": "security", "label": "Usuarios", "sublabel": "Permissoes: Analista - Administrador", "row": 0, "col": 1 },
+    { "id": "auditoria", "type": "database", "label": "Auditoria", "sublabel": "login hoje + campo/status", "tag": "gap: extensao a decidir", "row": 0, "col": 2 },
+
+    { "id": "grid_inep", "type": "frontend", "label": "Grid de INEPs", "sublabel": "linha por INEP + drill-down de itens", "row": 1, "col": 0 },
+    { "id": "faturamento_inep", "type": "backend", "label": "Faturamento INEP", "sublabel": "cabecalho + itens 1:N - so RI", "row": 1, "col": 1 },
+    { "id": "confronto", "type": "backend", "label": "Confronto", "sublabel": "lado EACE x lado IXC + KIT", "tag": "RN item 4", "row": 1, "col": 2 },
+    { "id": "ciclo_vida", "type": "database", "label": "Ciclo de Vida", "sublabel": "catalogo de 7 status (RN-001)", "row": 1, "col": 3 },
+    { "id": "documentos", "type": "database", "label": "Documentos", "sublabel": "Nota Fiscal (PDF) + XML por INEP", "row": 1, "col": 4 },
+
+    { "id": "email_financeiro", "type": "messagebus", "label": "E-mail Financeiro", "sublabel": "envio 1:1 por INEP + leitura IMAP ~5min", "row": 2, "col": 1 },
+    { "id": "financeiro_ext", "type": "external", "label": "Financeiro", "sublabel": "setor interno (emite NF)", "row": 2, "col": 2 },
+    { "id": "portal_eace_ext", "type": "external", "label": "Portal EACE", "sublabel": "login manual (v1)", "row": 2, "col": 3 },
+
+    { "id": "hub_v2", "type": "cloud", "label": "Hub de Integracoes", "sublabel": "v2: download+anexo EACE - v3: API IXC", "tag": "gap - fora do escopo v1", "row": 3, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Reaproveitado como codigo (modulo-posVenda)", "wraps": ["escolas", "usuarios", "auditoria"] },
+    { "kind": "region", "label": "Novo nesta versao (v1)", "wraps": ["grid_inep", "faturamento_inep", "confronto", "ciclo_vida", "documentos"] }
+  ],
+  "connections": [
+    { "id": "grid-faturamento", "from": "grid_inep", "to": "faturamento_inep", "label": "cadastra/edita item", "variant": "emphasis", "labelAt": [230, 306] },
+    { "id": "faturamento-confronto", "from": "faturamento_inep", "to": "confronto", "label": "lado EACE + lado IXC", "variant": "emphasis", "labelAt": [331, 306] },
+    { "id": "confronto-escolas", "from": "confronto", "to": "escolas", "label": "kit declarado (RN-057)", "variant": "default", "route": "orthogonal-v" },
+    { "id": "confronto-ciclovida", "from": "confronto", "to": "ciclo_vida", "label": "atualiza status", "variant": "emphasis", "labelAt": [485, 306] },
+
+    { "id": "grid-email", "from": "grid_inep", "to": "email_financeiro", "label": "botao de envio por INEP", "variant": "default", "route": "orthogonal-v" },
+    { "id": "email-financeiroext", "from": "email_financeiro", "to": "financeiro_ext", "label": "SMTP", "variant": "default" },
+    { "id": "financeiroext-email", "from": "financeiro_ext", "to": "email_financeiro", "label": "resposta (IMAP ~5min)", "variant": "dashed", "labelAt": [331, 428] },
+    { "id": "email-documentos", "from": "email_financeiro", "to": "documentos", "label": "grava NF + XML", "variant": "emphasis", "route": "orthogonal-v" },
+    { "id": "documentos-ciclovida", "from": "documentos", "to": "ciclo_vida", "label": "2a validacao", "variant": "emphasis", "labelAt": [580, 306] },
+
+    { "id": "ciclovida-portal", "from": "ciclo_vida", "to": "portal_eace_ext", "label": "anexo manual (v1)", "variant": "dashed", "route": "orthogonal-v" },
+    { "id": "portal-ciclovida", "from": "portal_eace_ext", "to": "ciclo_vida", "label": "marca 'anexo feito'", "variant": "dashed", "route": "orthogonal-v", "labelDy": 16 },
+
+    { "id": "hub-confronto", "from": "hub_v2", "to": "confronto", "label": "RPA download (v2) + API IXC (v3)", "variant": "dashed", "fromSide": "left", "toSide": "top", "via": [[5, 506], [5, 195], [408, 195]] },
+    { "id": "hub-portal", "from": "hub_v2", "to": "portal_eace_ext", "label": "v2: RPA de anexo", "variant": "dashed", "route": "orthogonal-h" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Sequencia de leitura - voce esta em 02", "items": ["01 · Processo de faturamento RI - versao tecnica, com regras e status de erro", "02 · Arquitetura dos modulos (este diagrama) - como o sistema se organiza por dentro", "03 · Jornada do processo - o percurso em linguagem simples, para quem opera o dia a dia"] },
+    { "dot": "amber", "title": "Sistema separado do modulo-posVenda", "items": ["Repositorio e banco de dados proprios - nao e modulo nem microservico do modulo-posVenda original", "Nasce copiando codigo do modulo-posVenda; frontend, e-mail e permissao sao reaproveitados", "Os dois sistemas nao se comunicam em tempo de execucao depois de prontos"] },
+    { "dot": "violet", "title": "Camadas (mesmo padrao ADR-005)", "items": ["Entrada: Grid de INEPs e formularios de confronto/cadastro", "Servicos/Dominio: Faturamento INEP, Confronto, Ciclo de Vida, Documentos, Escolas, Usuarios, Auditoria", "Integracao: E-mail Financeiro (ativo na v1); Hub de Integracoes (gap, v2/v3)", "Transversal (sem seta no diagrama, para nao poluir): Usuarios controla a permissao de toda tela; toda alteracao de campo/status e escrita de e-mail e registrada em Auditoria"] },
+    { "dot": "rose", "title": "Gaps conhecidos", "items": ["Migracao inicial das 2.622 escolas para o banco novo - confirmada como obrigatoria, execucao ainda a agendar", "Auditoria hoje so cobre login - extensao para campo/status e decisao do Dev", "Hub de Integracoes dividido em v2 (04/09/2026: RPA download + RPA anexo) e v3 (10/09/2026: API IXC) - client do IXC ja existe em apps/integracoes/ixc no modulo-posVenda original"] }
+  ]
+}

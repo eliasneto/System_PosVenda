@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Diagrama ER — Gerenciador Pós-Venda</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  @page { size: 1000mm 450mm; margin: 10mm; }
+  * { box-sizing: border-box; }
+  :root {
+    --ink: #0f2438;
+    --ink-soft: #46586b;
+    --paper: #ffffff;
+    --tint: #f4f7fb;
+    --line: #c9d3dd;
+    --accent: #2563a8;
+  }
+  body {
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    font-size: 11pt;
+    margin: 0;
+  }
+  .masthead {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: .4em;
+    margin-bottom: .5em;
+  }
+  .masthead .eyebrow {
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    font-size: 9.5pt;
+  }
+  h1 { font-size: 19pt; margin: .1em 0 0 0; color: var(--ink); }
+  .subtitle { font-size: 10.5pt; color: var(--ink-soft); margin: .15em 0 0 0; }
+  .meta-box { text-align: right; font-size: 8.5pt; color: var(--ink-soft); white-space: nowrap; }
+  .meta-box strong { color: var(--ink); }
+
+  .note {
+    font-size: 9pt;
+    color: var(--ink-soft);
+    background: var(--tint);
+    border-left: 3px solid var(--accent);
+    padding: .5em .9em;
+    margin-bottom: .6em;
+  }
+  .note b { color: var(--ink); }
+
+  .diagram-wrap { width: 100%; text-align: center; }
+  .mermaid { display: inline-block; }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <div>
+    <div class="eyebrow">Modelo de dados · Diagrama ER</div>
+    <h1>Gerenciador Pós-Venda</h1>
+    <p class="subtitle">Entidades, campos e relacionamentos do banco de dados (v1 — processo RI)</p>
+  </div>
+  <div class="meta-box">
+    Atualizado em <strong>21/08/2026</strong><br>
+    Detalhe de cada campo em <strong>modelo-dados.md</strong>
+  </div>
+</div>
+
+<p class="note">
+  <b>ri</b> é a tabela central do processo (nasce com o RN-001 e percorre os 8 status, sendo 1 deles o desvio manual "correcao_mega").
+  <b>ri_divergencia.tipo</b> foi confirmado pelo cliente em 21/08/2026 (P-03) — ver detalhe em <b>modelo-dados.md</b>.
+  <b>escola.status_conexao</b> é derivado de <b>data_instalacao_re</b> e <b>data_instalacao_ri</b> (RN-007) — preenchimento manual, sem cálculo por RPA nesta versão.
+</p>
+
+<div class="diagram-wrap">
+<pre class="mermaid">
+erDiagram
+    usuario {
+        bigint id PK
+        varchar nome
+        varchar email
+        enum perfil
+        boolean ativo
+        datetime criado_em
+        datetime atualizado_em
+    }
+    auditoria {
+        bigint id PK
+        bigint usuario_id FK
+        varchar acao
+        varchar entidade
+        bigint entidade_id
+        varchar campo
+        text valor_anterior
+        text valor_novo
+        varchar ip_origem
+        datetime criado_em
+    }
+    escola {
+        bigint id PK
+        varchar inep
+        varchar nome
+        varchar endereco
+        int lote
+        char estado
+        varchar municipio
+        varchar kit_inicial
+        varchar velocidade_dl_minima
+        enum status_conexao
+        date data_instalacao_re
+        date data_instalacao_ri
+        datetime criado_em
+        datetime atualizado_em
+    }
+    ri {
+        bigint id PK
+        bigint escola_id FK
+        bigint responsavel_id FK
+        enum status
+        varchar kit_informado_ixc
+        boolean divergencia_kit
+        datetime concluido_em
+        datetime criado_em
+        datetime atualizado_em
+    }
+    ri_item_eace {
+        bigint id PK
+        bigint ri_id FK
+        varchar descricao_item
+        int quantidade
+        decimal valor_unitario
+        datetime criado_em
+    }
+    ri_item_ixc {
+        bigint id PK
+        bigint ri_id FK
+        varchar descricao_item
+        int quantidade
+        decimal valor_unitario
+        datetime criado_em
+    }
+    ri_divergencia {
+        bigint id PK
+        bigint ri_id FK
+        enum tipo
+        boolean bloqueia
+        text descricao
+        datetime resolvida_em
+        datetime criado_em
+    }
+    documento {
+        bigint id PK
+        bigint ri_id FK
+        enum tipo
+        varchar caminho_arquivo
+        int versao
+        boolean ativo
+        datetime recebido_em
+        datetime criado_em
+    }
+    email_financeiro_log {
+        bigint id PK
+        bigint ri_id FK
+        enum direcao
+        varchar remetente
+        text destinatarios
+        varchar assunto
+        varchar anexo_pdf
+        enum status_leitura
+        datetime data_hora
+    }
+
+    escola ||--o{ ri : possui
+    usuario ||--o{ ri : responsavel
+    ri ||--o{ ri_item_eace : eace
+    ri ||--o{ ri_item_ixc : ixc
+    ri ||--o{ ri_divergencia : gera
+    ri ||--o{ documento : recebe
+    ri ||--o{ email_financeiro_log : troca
+    usuario ||--o{ auditoria : registra
+</pre>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    er: { useMaxWidth: false, entityPadding: 15, fontSize: 15 },
+    themeVariables: {
+      primaryColor: '#eaf1f9',
+      primaryBorderColor: '#2563a8',
+      primaryTextColor: '#0f2438',
+      lineColor: '#46586b',
+      tertiaryColor: '#f4f7fb',
+      fontFamily: 'Consolas, "Courier New", monospace',
+      fontSize: '13px'
+    }
+  });
+</script>
+
+</body>
+</html>

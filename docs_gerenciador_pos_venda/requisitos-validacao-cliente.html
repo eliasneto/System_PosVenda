@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Documento de Requisitos — Gerenciador Pós-Venda</title>
+<style>
+  @page { size: A4; margin: 2.2cm 1.8cm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: #1c2430;
+    font-size: 11.5pt;
+    line-height: 1.5;
+    margin: 0;
+  }
+  .cover {
+    height: 24.5cm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    page-break-after: always;
+  }
+  .cover .tag {
+    color: #2563a8;
+    font-weight: 700;
+    letter-spacing: .08em;
+    font-size: 10.5pt;
+    text-transform: uppercase;
+    margin-bottom: .6em;
+  }
+  .cover h1 {
+    font-size: 27pt;
+    margin: 0 0 .3em 0;
+    color: #0f2438;
+  }
+  .cover h2 {
+    font-size: 14pt;
+    font-weight: 400;
+    color: #46586b;
+    margin: 0 0 2.4em 0;
+  }
+  .cover table.meta { border-collapse: collapse; font-size: 10.5pt; }
+  .cover table.meta td { padding: 3px 0; }
+  .cover table.meta td:first-child { color: #64748b; padding-right: 1.2em; white-space: nowrap; }
+  .cover .footer-note {
+    margin-top: 3em;
+    font-size: 9.5pt;
+    color: #64748b;
+    border-top: 1px solid #d7dde4;
+    padding-top: .8em;
+  }
+
+  h1.section {
+    font-size: 16.5pt;
+    color: #0f2438;
+    border-bottom: 2px solid #2563a8;
+    padding-bottom: .25em;
+    margin: 0 0 .6em 0;
+    page-break-before: always;
+  }
+  h1.section .num { color: #2563a8; margin-right: .3em; }
+  h2 {
+    font-size: 12.5pt;
+    color: #17324a;
+    margin: 1.6em 0 .5em 0;
+  }
+  p { margin: .5em 0; }
+  ul, ol { margin: .4em 0 .9em 0; padding-left: 1.4em; }
+  li { margin: .3em 0; }
+
+  table.req { width: 100%; border-collapse: collapse; margin: .8em 0 1.4em 0; font-size: 10pt; }
+  table.req th {
+    background: #eef3f8; color: #17324a; text-align: left;
+    padding: 6px 8px; border: 1px solid #d7dde4; font-size: 9.5pt;
+  }
+  table.req td { padding: 6px 8px; border: 1px solid #e3e8ee; vertical-align: top; }
+  table.req td.id { white-space: nowrap; font-weight: 600; color: #2563a8; }
+
+  .badge {
+    display: inline-block; font-size: 8.5pt; font-weight: 600;
+    padding: 1px 7px; border-radius: 10px; color: #fff;
+  }
+  .badge.v1 { background: #2f8f5b; }
+  .badge.v2 { background: #b98900; }
+  .badge.v3 { background: #6d4aa8; }
+
+  .callout {
+    border-left: 4px solid #2563a8; background: #f2f6fa;
+    padding: .7em 1em; margin: .9em 0; font-size: 10.5pt;
+  }
+  .callout.open { border-left-color: #c2410c; background: #fdf3ec; }
+  .callout.open strong { color: #9a3412; }
+
+  table.pending { width: 100%; border-collapse: collapse; font-size: 10pt; }
+  table.pending th {
+    background: #fdf3ec; color: #7c2d12; text-align: left;
+    padding: 6px 8px; border: 1px solid #f2ddc7; font-size: 9.5pt;
+  }
+  table.pending td { padding: 7px 8px; border: 1px solid #f2ddc7; vertical-align: top; }
+  table.pending td.id { white-space: nowrap; font-weight: 600; color: #c2410c; }
+
+  dl.gloss dt { font-weight: 700; color: #17324a; margin-top: .7em; }
+  dl.gloss dd { margin: .15em 0 0 0; }
+
+  .steps { counter-reset: step; list-style: none; padding-left: 0; }
+  .steps li {
+    counter-increment: step;
+    position: relative;
+    padding-left: 2.1em;
+    margin: .55em 0;
+  }
+  .steps li::before {
+    content: counter(step);
+    position: absolute; left: 0; top: 0;
+    width: 1.5em; height: 1.5em; line-height: 1.5em;
+    text-align: center; border-radius: 50%;
+    background: #2563a8; color: #fff; font-size: 9pt; font-weight: 700;
+  }
+
+  code {
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 9.5pt;
+    background: #eef3f8;
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: #17324a;
+  }
+
+  .footer-page {
+    font-size: 8.5pt; color: #94a3b8; text-align: right; margin-top: 2em;
+  }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="tag">Documento para validação do cliente</div>
+  <h1>Gerenciador Pós-Venda</h1>
+  <h2>Faturamento EACE por INEP — Requisitos Funcionais, Não Funcionais e de Segurança (v1)</h2>
+  <table class="meta">
+    <tr><td>Cliente / processo</td><td>EACE — faturamento de kits (RI)</td></tr>
+    <tr><td>Versão do documento</td><td>1.7</td></tr>
+    <tr><td>Data</td><td>21/08/2026</td></tr>
+    <tr><td>Nome exibido no sistema</td><td>"Gerenciador Pós Venda" (sem hífen)</td></tr>
+    <tr><td>Versão do sistema (release)</td><td>1.0.0</td></tr>
+    <tr><td>Escopo desta versão</td><td>v1 — RI (kits); RE fora do frontend</td></tr>
+    <tr><td>Prazo da v1</td><td>28/08/2026</td></tr>
+    <tr><td>Prazo da v2</td><td>04/09/2026 — os 2 RPA (download EACE + anexo EACE)</td></tr>
+    <tr><td>Prazo da v3</td><td>10/09/2026 — API IXC + processo RE</td></tr>
+  </table>
+  <div class="footer-note">
+    Este documento resume, para validação, as regras de negócio e o processo já
+    levantados com a equipe. A seção 9 lista os pontos que ainda dependem de
+    confirmação do cliente antes do fechamento da versão 1.
+    <br><br>
+    <strong>Este é o levantamento inicial de requisitos.</strong> Ele pode sofrer
+    alterações ao longo do processo de criação do sistema, conforme novas
+    definições, ajustes ou decisões forem necessários.
+  </div>
+</section>
+
+<h1 class="section"><span class="num">1.</span>Visão Geral</h1>
+<div class="callout">
+  <strong>Versão inicial.</strong> Este documento reúne o levantamento inicial
+  de requisitos, para validação do cliente. Ele pode ser ajustado ao longo do
+  processo de criação do sistema, conforme novas definições ou necessidades
+  surgirem.
+</div>
+<p>
+O <strong>Gerenciador Pós-Venda</strong> é o sistema responsável pela etapa de
+faturamento que começa depois que um kit (RI) é instalado em uma escola do
+projeto EACE. Ele confronta os dados declarados pela EACE com os dados do
+atendimento da implantação, coordena o envio e recebimento de documentos com o
+financeiro, e acompanha o processo até a emissão da Nota Fiscal e a validação
+final do cliente EACE.
+</p>
+<p>
+Esta primeira versão (v1) cobre apenas o processo <strong>RI (kits)</strong>.
+O processo <strong>RE (instalação de link)</strong> fica fora da tela nesta
+versão — a estrutura de dados pode ficar preparada para uso futuro, mas não há
+fluxo operável para RE agora.
+</p>
+
+<h1 class="section"><span class="num">2.</span>Descrição do Processo</h1>
+<p>Percurso completo, em linguagem simples, do início ao fim:</p>
+<ol class="steps">
+  <li>Os dados da implantação (feita pela MEGA através de um parceiro) chegam ao sistema pelo atendimento registrado no IXC.</li>
+  <li>O pós-venda confere esses dados contra o relatório baixado no portal da EACE.</li>
+  <li>Se houver divergência, o atendimento volta para ser corrigido e o confronto se repete.</li>
+  <li>Se não houver divergência, o pós-venda monta uma planilha com os dados e envia por e-mail ao financeiro.</li>
+  <li>O financeiro responde o e-mail com a Nota Fiscal (PDF) e o XML.</li>
+  <li>O pós-venda confere se a Nota Fiscal está correta, valida as informações no portal da EACE e anexa o PDF e o XML lá.</li>
+  <li>O processo espera a validação do cliente EACE, que responde por e-mail.</li>
+  <li>Quando isso acontece, o INEP é considerado concluído (status "Faturamento Concluído").</li>
+</ol>
+<div class="callout">
+  Regra central: o lado <strong>EACE</strong> (o relatório) nunca é corrigido
+  diretamente pelo pós-venda. Se o relatório estiver errado, a correção só pode
+  vir de um relatório novo emitido pela própria EACE.
+</div>
+
+<h1 class="section"><span class="num">3.</span>Escopo</h1>
+<h2>Nesta versão (v1)</h2>
+<ul>
+  <li>Processo RI (kits) completo, do confronto ao "Faturamento Concluído".</li>
+  <li>Confronto e envio/recebimento de e-mail com o financeiro totalmente manuais quanto à entrada de dados (usuário digita), mas com leitura automática da resposta do financeiro.</li>
+  <li>Anexo dos documentos no portal da EACE feito manualmente por login direto no site (fora do sistema); o sistema apenas guarda os documentos e registra a marcação.</li>
+</ul>
+<h2>Fora desta versão (planejado — "Hub de Integrações")</h2>
+<p><strong>Versão 2 — entrega 04/09/2026:</strong></p>
+<ul>
+  <li><span class="badge v2">v2</span> RPA de download automático do relatório da EACE (hoje: digitação manual).</li>
+  <li><span class="badge v2">v2</span> RPA de anexo automático dos documentos no portal da EACE (hoje: ação manual).</li>
+</ul>
+<p><strong>Versão 3 — entrega 10/09/2026:</strong></p>
+<ul>
+  <li><span class="badge v3">v3</span> Integração automática com o IXC via API (hoje: digitação manual do atendimento).</li>
+  <li><span class="badge v3">v3</span> Processo RE (instalação de link) com tela própria.</li>
+</ul>
+
+<h1 class="section"><span class="num">4.</span>Perfis de Usuário e Permissões</h1>
+<table class="req">
+  <tr><th>Perfil</th><th>Pode fazer</th></tr>
+  <tr><td><strong>Administrador</strong></td><td>Tudo: criar, ler, editar e excluir INEP/item, documentos e usuários.</td></tr>
+  <tr><td><strong>Analista</strong></td><td>Tudo, exceto excluir (INEP/item, documentos e usuários).</td></tr>
+</table>
+<p>Ambos os perfis podem marcar manualmente "anexo feito no EACE" e concluir um RI como "Faturamento Concluído". A consulta de auditoria, nesta versão, é feita apenas por acesso direto ao banco de dados, sem tela própria.</p>
+
+<h1 class="section"><span class="num">5.</span>Ciclo de Vida do RI (Status)</h1>
+<p>Todo RI (kit) percorre uma sequência fixa de status, do início ao fim do faturamento — 7 status na linha principal, mais 1 desvio manual de correção:</p>
+<table class="req">
+  <tr><th style="width:6%">#</th><th style="width:27%">Status</th><th style="width:15%">Quem troca</th><th>Gatilho</th></tr>
+  <tr><td class="id">1</td><td>Implantação EACE</td><td>—</td><td>Status inicial de todo RI.</td></tr>
+  <tr><td class="id">2</td><td>Andamento</td><td>Usuário</td><td>Chamado do IXC chega; usuário digita no sistema os dados do chamado (lado IXC).</td></tr>
+  <tr><td class="id">3</td><td>Envio de Email para faturamento</td><td>Usuário</td><td>Usuário confirma que todos os dados do chamado estão no sistema.</td></tr>
+  <tr><td class="id">4</td><td>Aguardando financeiro</td><td>Sistema</td><td>E-mail ao financeiro é efetivamente enviado.</td></tr>
+  <tr><td class="id">5</td><td>Aguardando Anexo portal EACE</td><td>Sistema</td><td>Resposta do financeiro (Nota Fiscal + XML) entra na caixa de entrada.</td></tr>
+  <tr><td class="id">6</td><td>Aguardando validação EACE</td><td>Usuário</td><td>Usuário concluiu o anexo do PDF/XML no portal da EACE.</td></tr>
+  <tr><td class="id">7</td><td>Faturamento Concluído</td><td>Usuário</td><td>Cliente EACE validou a instalação.</td></tr>
+  <tr><td class="id">8</td><td>Correção MEGA</td><td>Usuário (Analista ou Administrador)</td><td>Usuário identifica, ainda em "Andamento", divergência de quantidade/valor entre o lado IXC e o relatório da EACE (RF-04), e marca que os dados voltaram para a MEGA corrigir.</td></tr>
+</table>
+<div class="callout">
+  A troca do status 2 (Andamento) para o 3 (Envio de Email para faturamento)
+  só é permitida se não houver divergência de quantidade/valor em aberto
+  entre o lado IXC e o relatório da EACE (RF-04). A divergência de KIT
+  (amarelo, abaixo) é só um alerta e não bloqueia essa troca.
+</div>
+<div class="callout">
+  <strong>Status 8 — Correção MEGA (incluído na v1.5).</strong> É um desvio
+  manual, não sequencial, ligado só ao status 2: só é alcançado a partir de
+  "Andamento", quando há divergência RF-04 em aberto, e só retorna
+  manualmente para "Andamento" — não existe transição automática em nenhum
+  sentido, nem transição direta para qualquer outro status. Ao voltar para
+  "Andamento" (depois de corrigidos os dados do lado IXC), o confronto RF-04
+  é refeito do zero. Disponível para os dois perfis (Analista e
+  Administrador), pela mesma regra de permissão do CRUD comum de INEP.
+</div>
+<h2>O que acontece no status "Envio de Email para faturamento"</h2>
+<ul>
+  <li>O sistema destaca em amarelo os campos digitados do chamado IXC que divergem do KIT declarado pela EACE.</li>
+  <li>Libera um botão que abre um formulário para o usuário informar os dados a enviar ao financeiro.</li>
+  <li>Ao salvar o formulário, habilita o botão "Enviar e-mail".</li>
+  <li>Ao clicar em enviar, abre a tela de e-mail com um PDF (gerado com os dados) já anexado e os mesmos dados também no corpo do e-mail.</li>
+</ul>
+
+<h1 class="section"><span class="num">6.</span>Requisitos Funcionais</h1>
+<table class="req">
+  <tr><th style="width:9%">ID</th><th>Descrição</th></tr>
+  <tr><td class="id">RF-01</td><td>Todas as escolas (INEP) já devem existir no sistema desde o início — é requisito obrigatório, exigindo uma migração/importação inicial dos dados de Escola (incluindo lote, estado e município) para o banco deste sistema; não há cadastro manual de escola nesta versão e um INEP não cadastrado é rejeitado.</td></tr>
+  <tr><td class="id">RF-02</td><td>Permitir o registro manual, por INEP, dos dados do relatório da EACE (descrição do item, quantidade, valor unitário). Um INEP pode ter vários itens (relação 1:N).</td></tr>
+  <tr><td class="id">RF-03</td><td>Permitir o registro manual, por INEP, dos dados do atendimento (lado IXC), na mesma granularidade de itens do relatório da EACE.</td></tr>
+  <tr><td class="id">RF-04</td><td>Confrontar item a item (quantidade e valor unitário) o lado EACE contra o lado IXC, com comparação estrita (sem tolerância de texto, espaço ou caixa), durante o status "Andamento". Enquanto houver divergência de quantidade/valor, a troca para "Envio de Email para faturamento" fica bloqueada. Confrontar também o KIT contra o relatório (divergência formal, mesma regra) e o KIT declarado contra o KIT informado no chamado IXC (alerta informal, ver RF-15 — não bloqueia).</td></tr>
+  <tr><td class="id">RF-05</td><td>Disponibilizar um grid com uma linha por INEP sem divergência (colunas: INEP, Nome da escola, Endereço, Status, Responsável), com detalhe (drill-down) dos itens por INEP: um único grid de itens, com filtro por status (não um grid separado por tipo de validação).</td></tr>
+  <tr><td class="id">RF-06</td><td>Sinalizar visualmente (fundo vermelho) o INEP que estiver com divergência de quantidade/valor ou de KIT contra o relatório, sem enviar notificação adicional.</td></tr>
+  <tr><td class="id">RF-07</td><td>Permitir o envio de e-mail ao financeiro por INEP (um e-mail por INEP, um botão por linha do grid), com as informações da escola e os valores, a partir da caixa dedicada do sistema (<code>posvendas@megainfraestrutura.com.br</code>). Destinatários (Para): <code>hilber.lustosa@speedcsc.com.br</code>, <code>financeiro@speedcsc.com.br</code>. Cópia (Cc): <code>logistica-l@speedcsc.com.br</code>, <code>posvendas@megainfraestrutura.com.br</code>, <code>david.alves@speedcsc.com.br</code>.</td></tr>
+  <tr><td class="id">RF-08</td><td>Ler automaticamente a caixa de e-mail dedicada do sistema (<code>posvendas@megainfraestrutura.com.br</code>), identificar a qual INEP a resposta do financeiro se refere e anexar a Nota Fiscal (PDF) e o XML recebidos a esse INEP.</td></tr>
+  <tr><td class="id">RF-09</td><td>Conferir (segunda validação) se a Nota Fiscal recebida do financeiro corresponde ao que foi solicitado, durante o status "Aguardando Anexo portal EACE", antes de o usuário anexar os documentos no portal.</td></tr>
+  <tr><td class="id">RF-10</td><td>Permitir que o usuário marque manualmente que os documentos (PDF e XML) já foram anexados no portal da EACE, avançando o status para "Aguardando validação EACE".</td></tr>
+  <tr><td class="id">RF-11</td><td>Permitir a conclusão manual do INEP como "Faturamento Concluído", disponível após a marcação de anexo no EACE.</td></tr>
+  <tr><td class="id">RF-12</td><td>Registrar em auditoria: alteração de campo, transição de status, execução de ação manual, envio/recebimento de e-mail, login no sistema e erros.</td></tr>
+  <tr><td class="id">RF-13</td><td>Controlar o acesso por dois perfis de usuário (Administrador e Analista), conforme a seção 4.</td></tr>
+  <tr><td class="id">RF-14</td><td>Controlar o status do RI conforme o catálogo fechado de 8 status da seção 5 (7 na linha principal + o desvio manual "Correção MEGA"), incluindo as transições manuais (pelo usuário) e automáticas (pelo sistema).</td></tr>
+  <tr><td class="id">RF-15</td><td>Ao entrar no status "Envio de Email para faturamento", destacar em amarelo os campos digitados do chamado IXC que divergem do KIT declarado pela EACE (alerta, não bloqueia nenhuma transição).</td></tr>
+  <tr><td class="id">RF-16</td><td>No status "Envio de Email para faturamento", liberar um formulário para o usuário informar os dados a enviar ao financeiro; ao salvar, habilitar o botão "Enviar e-mail".</td></tr>
+  <tr><td class="id">RF-17</td><td>Ao clicar em "Enviar e-mail", abrir a tela de e-mail com um PDF (gerado com os dados do formulário) já anexado e os mesmos dados também no corpo do e-mail.</td></tr>
+  <tr><td class="id">RF-18</td><td>Ao confirmar o envio do e-mail, alterar automaticamente o status do RI para "Aguardando financeiro".</td></tr>
+  <tr><td class="id">RF-19</td><td>Ao identificar a resposta do financeiro na caixa de entrada (RF-08), alterar automaticamente o status do RI para "Aguardando Anexo portal EACE".</td></tr>
+  <tr><td class="id">RF-20</td><td>Manter, por Escola, um status de conexão com três valores fixos — desconectado, parcialmente conectado, conectado — derivado do preenchimento das datas de instalação dos processos RE e RI: nasce desconectado; passa a parcialmente conectado quando um dos dois processos tem data de instalação preenchida; passa a conectado só quando os dois têm data preenchida. As datas são digitadas manualmente pelo usuário, a partir da informação do chamado (IXC).</td></tr>
+</table>
+
+<h1 class="section"><span class="num">7.</span>Requisitos Não Funcionais</h1>
+<table class="req">
+  <tr><th style="width:9%">ID</th><th>Descrição</th></tr>
+  <tr><td class="id">RNF-01</td><td>A leitura da caixa de e-mail dedicada do sistema ocorre por consulta periódica (a cada ~5 minutos); um atraso de alguns minutos é aceitável e não compromete o faturamento.</td></tr>
+  <tr><td class="id">RNF-02</td><td>O sistema deve suportar o volume inicial de 2.622 escolas (INEPs) sem degradação perceptível de uso.</td></tr>
+  <tr><td class="id">RNF-03</td><td>Prazo para a primeira versão (v1): 28/08/2026.</td></tr>
+  <tr><td class="id">RNF-04</td><td>Os registros de auditoria são retidos por tempo indeterminado nesta versão (sem expiração automática).</td></tr>
+  <tr><td class="id">RNF-05</td><td>O sistema é construído reaproveitando código já existente e testado (cadastro de escolas, auditoria, envio/recebimento de e-mail e controle de permissão), como ponto de partida de um repositório e banco de dados próprios.</td></tr>
+  <tr><td class="id">RNF-06</td><td>Falha no envio ou leitura de e-mail fora do padrão esperado não deve interromper o uso do sistema — deve apenas gerar um alerta em log.</td></tr>
+</table>
+
+<h1 class="section"><span class="num">8.</span>Segurança</h1>
+<table class="req">
+  <tr><th style="width:9%">ID</th><th>Descrição</th></tr>
+  <tr><td class="id">SEG-01</td><td>Controle de acesso por perfil: apenas o perfil Administrador pode excluir INEP/item, documentos ou usuários.</td></tr>
+  <tr><td class="id">SEG-02</td><td>Nenhuma credencial (e-mail, portal da EACE) fica exposta em código-fonte ou em logs; uso de variáveis de ambiente e armazenamento seguro.</td></tr>
+  <tr><td class="id">SEG-03</td><td>Os dados do lado EACE (relatório) não podem ser alterados diretamente pelo usuário do sistema — qualquer correção exige um novo relatório vindo da própria EACE, preservando a integridade da fonte de faturamento.</td></tr>
+  <tr><td class="id">SEG-04</td><td>Login no sistema e todas as ações relevantes (alteração de campo, status, envio/recebimento de e-mail) ficam registradas em auditoria, com rastreabilidade por usuário.</td></tr>
+  <tr><td class="id">SEG-05</td><td>O acesso aos registros de auditoria, nesta versão, é restrito a quem tem acesso direto ao banco de dados (sem tela dedicada no sistema).</td></tr>
+</table>
+
+<h1 class="section"><span class="num">9.</span>Pontos a Confirmar</h1>
+<p>Nenhum ponto em aberto nesta revisão — todos os itens já levantados com o
+cliente foram confirmados (ver histórico de resoluções abaixo). Novos
+pontos, se surgirem, serão adicionados aqui.</p>
+<div class="callout">
+  <strong>Resolvido nesta revisão (v1.7) — P-03:</strong> catálogo de status
+  de divergência confirmado pelo cliente em 21/08/2026 — <em>divergência de
+  valor</em>, <em>divergência de quantidade</em>, <em>divergência de KIT</em>
+  (contra o relatório) e <em>divergência da Nota Fiscal</em> (contra o que
+  foi solicitado ao financeiro) bloqueiam o próximo passo; o alerta <em>KIT
+  declarado ≠ implantado</em> não bloqueia nada. Pode ser ajustado ao longo
+  do projeto se necessário, mas vale para a v1 a partir de agora.
+</div>
+<div class="callout">
+  <strong>Resolvidos nesta revisão (v1.3):</strong> migração/importação inicial
+  dos dados de Escola — confirmada como obrigatória; estrutura do grid de
+  detalhe — confirmado grid único com filtro por status; caixa própria de
+  e-mail do sistema — confirmada (<code>posvendas@megainfraestrutura.com.br</code>);
+  endereços do e-mail ao financeiro — Para: <code>hilber.lustosa@speedcsc.com.br</code>,
+  <code>financeiro@speedcsc.com.br</code>; Cc: <code>logistica-l@speedcsc.com.br</code>,
+  <code>posvendas@megainfraestrutura.com.br</code>, <code>david.alves@speedcsc.com.br</code>.
+</div>
+<div class="callout">
+  <strong>Resolvido nesta revisão (v1.5):</strong> incluído o status 8
+  "Correção MEGA" (seção 5) para o RI com divergência EACE×IXC devolvido à
+  MEGA para correção — entrada e retorno manuais, disponível para Analista e
+  Administrador.
+</div>
+<div class="callout">
+  <strong>Resolvido nesta revisão (v1.6) — P-04:</strong> campos adicionais de
+  Escola definidos — <code>lote</code>, <code>estado</code>, <code>município</code>
+  (identificação) e o status de conexão <em>desconectado / parcialmente
+  conectado / conectado</em>, derivado das datas de instalação dos processos
+  RE e RI (ver RF-20). Nome exibido no sistema e versão de release também
+  definidos nesta revisão (ver capa).
+</div>
+
+<h1 class="section"><span class="num">10.</span>Glossário</h1>
+<dl class="gloss">
+  <dt>INEP</dt><dd>Código de 8 dígitos que identifica cada escola; é o dado central usado para relacionar todas as informações do processo.</dd>
+  <dt>RI</dt><dd>Processo de instalação e faturamento de kits — é o que esta versão do sistema cobre.</dd>
+  <dt>RE</dt><dd>Processo de instalação do link de internet — fora da tela nesta versão.</dd>
+  <dt>IXC</dt><dd>Sistema (CRM) usado para registrar os dados do atendimento da implantação.</dd>
+  <dt>EACE</dt><dd>Cliente do projeto; também o nome do portal onde a EACE disponibiliza o relatório de instalação e valida a Nota Fiscal.</dd>
+  <dt>MEGA</dt><dd>Empresa responsável pela operação; contrata parceiros para executar a instalação em campo.</dd>
+  <dt>NF / Nota Fiscal</dt><dd>Documento emitido pelo financeiro após a validação dos dados; acompanhado do arquivo XML correspondente.</dd>
+  <dt>Faturamento Concluído</dt><dd>Status final do RI, marcado manualmente pelo usuário depois que o cliente EACE valida a instalação (ver seção 5).</dd>
+  <dt>Correção MEGA</dt><dd>Status de desvio do RI, usado quando há divergência de quantidade/valor entre o lado IXC e o relatório da EACE: sinaliza que os dados do atendimento voltaram para a MEGA corrigir antes de seguir para o envio ao financeiro (ver seção 5).</dd>
+</dl>
+
+</body>
+</html>

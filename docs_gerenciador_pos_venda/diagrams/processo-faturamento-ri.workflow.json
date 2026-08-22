@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "01 · Processo de faturamento RI",
+    "subtitle": "Leitura 1 de 3 · Como o processo flui do kit instalado ate o status Faturamento Concluido, e o que e manual na v1 x automatico na v2/v3 - Gerenciador Pos-Venda",
+    "output": "docs_gerenciador_pos_venda/diagrams/01 - processo-faturamento-ri.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "contexto", "label": "Contexto comercial (fora do sistema)" },
+    { "id": "lado_ixc", "label": "Lado IXC (atendimento)" },
+    { "id": "lado_eace", "label": "Lado EACE (relatorio)" },
+    { "id": "sistema", "label": "Confronto, Grid e Anexo EACE" },
+    { "id": "financeiro", "label": "Fluxo com o Financeiro (e-mail)" },
+    { "id": "conclusao", "label": "Conclusao" },
+    { "id": "exceptions", "label": "Divergencias (RN item 4 e segunda validacao)", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "declaracao", "label": "Contexto", "fromCol": 0, "toCol": 1 },
+    { "id": "validacao", "label": "Confronto", "fromCol": 2, "toCol": 3 },
+    { "id": "financeiro_fase", "label": "Financeiro", "fromCol": 3, "toCol": 5 },
+    { "id": "fechamento", "label": "Fechamento", "fromCol": 5, "toCol": 5 }
+  ],
+  "mainPath": ["relatorio_eace", "confronto", "grid_ok", "envio_email", "resposta_nf", "segunda_validacao", "anexo_eace", "faturado"],
+  "nodes": [
+    { "id": "kit_declarado", "lane": "contexto", "col": 0, "type": "external", "label": "EACE declara", "sublabel": "Kit/Valor por escola (RI)" },
+    { "id": "kit_instalado", "lane": "contexto", "col": 1, "type": "external", "label": "Instalacao", "sublabel": "parceiro instala o kit (MEGA)", "tag": "alerta se kit != declarado" },
+
+    { "id": "atendimento_ixc", "lane": "lado_ixc", "col": 0, "type": "frontend", "label": "Atendimento", "sublabel": "IXC - formulario manual (v1)", "tag": "v3 (gap): API IXC" },
+    { "id": "relatorio_eace", "lane": "lado_eace", "col": 1, "type": "frontend", "label": "Relatorio EACE", "sublabel": "digitacao manual (v1) - item, qtde, valor", "tag": "v2 (gap): RPA download" },
+
+    { "id": "confronto", "lane": "sistema", "col": 2, "type": "backend", "label": "Confronto", "sublabel": "Qtde/Valor sem tolerancia + KIT x relatorio", "tag": "RN item 4" },
+    { "id": "grid_ok", "lane": "sistema", "col": 3, "type": "backend", "label": "Grid OK", "sublabel": "INEPs sem divergencia" },
+    { "id": "anexo_eace", "lane": "sistema", "col": 5, "type": "frontend", "label": "Anexo EACE", "sublabel": "manual (v1) - avanca status", "tag": "v2 (gap): RPA anexo" },
+
+    { "id": "envio_email", "lane": "financeiro", "col": 3, "width": 40, "type": "frontend", "label": "Envio", "sublabel": "e-mail ao financeiro, 1 por INEP" },
+    { "id": "resposta_nf", "lane": "financeiro", "col": 4, "width": 40, "type": "external", "label": "NF+XML", "sublabel": "resposta - leitura IMAP ~5 min" },
+    { "id": "segunda_validacao", "lane": "financeiro", "col": 5, "type": "backend", "label": "2a validacao", "sublabel": "NF recebida x solicitado" },
+
+    { "id": "faturado", "lane": "conclusao", "col": 5, "type": "backend", "label": "Concluido", "sublabel": "manual (Analista/Administrador)", "tag": "status: Faturamento Concluido" },
+
+    { "id": "divergencia", "lane": "exceptions", "col": 2, "type": "security", "label": "Erro", "sublabel": "divergencia no confronto - fundo vermelho", "tag": "so corrige via novo relatorio EACE" },
+    { "id": "divergencia_nf", "lane": "exceptions", "col": 5, "type": "security", "label": "Erro NF", "sublabel": "divergencia na 2a validacao - bloqueia" }
+  ],
+  "edges": [
+    { "id": "declarado-instalado", "from": "kit_declarado", "to": "kit_instalado", "variant": "default" },
+
+    { "id": "eace-confronto", "from": "relatorio_eace", "to": "confronto", "label": "lado EACE", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top", "bias": 0.85, "labelAt": [270, 442] },
+    { "id": "ixc-confronto", "from": "atendimento_ixc", "to": "confronto", "label": "lado IXC", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "via": [[134, 420], [300, 420]], "labelAt": [160, 424] },
+
+    { "id": "confronto-grid", "from": "confronto", "to": "grid_ok", "variant": "emphasis" },
+    { "id": "confronto-divergencia", "from": "confronto", "to": "divergencia", "label": "com divergencia", "variant": "security", "role": "error", "route": "drop", "fromSide": "bottom", "toSide": "top" },
+
+    { "id": "grid-envio", "from": "grid_ok", "to": "envio_email", "label": "INEP selecionado", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top" },
+    { "id": "envio-resposta", "from": "envio_email", "to": "resposta_nf", "variant": "emphasis" },
+    { "id": "resposta-segunda", "from": "resposta_nf", "to": "segunda_validacao", "variant": "emphasis" },
+
+    { "id": "segunda-anexo", "from": "segunda_validacao", "to": "anexo_eace", "variant": "emphasis", "route": "drop", "fromSide": "top", "toSide": "bottom" },
+    { "id": "segunda-divergencianf", "from": "segunda_validacao", "to": "divergencia_nf", "label": "NF nao confere", "variant": "security", "role": "error", "route": "outside-right", "fromSide": "right", "toSide": "right", "labelAt": [692, 787] },
+
+    { "id": "anexo-faturado", "from": "anexo_eace", "to": "faturado", "label": "cliente EACE valida", "variant": "emphasis", "fromSide": "right", "toSide": "right", "via": [[760, 491], [760, 739]], "labelAt": [770, 615] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Sequencia de leitura - voce esta em 01", "items": ["01 · Processo de faturamento RI (este diagrama) - versao tecnica, com regras e status de erro", "02 · Arquitetura dos modulos - como o sistema se organiza por dentro", "03 · Jornada do processo - o percurso em linguagem simples, para quem opera o dia a dia"] },
+    { "dot": "amber", "title": "Regra de ouro do confronto", "items": ["Comparacao estrita, sem tolerancia: acentuacao, espaco e maiuscula/minuscula contam como divergencia", "O lado EACE nunca e corrigido pelo pos-venda - so um relatorio novo da propria EACE corrige", "KIT tem dois niveis: declarado x relatorio e erro formal (bloqueia); declarado x implantado em campo e so alerta (nao bloqueia, ver tag de Instalacao)"] },
+    { "dot": "violet", "title": "Escopo desta versao", "items": ["Sistema cobre so RI (kits); RE fica de fora do frontend nesta versao", "Prazo: primeira versao ate 28/08/2026", "Perfis: Administrador (tudo) e Analista (tudo, exceto excluir)", "Status final 'Faturamento Concluido' e manual, nao dispara notificacao nem fechamento automatico"] },
+    { "dot": "slate", "title": "Status do RI (RN-001) - mapeamento para este diagrama", "items": ["Implantacao EACE / Andamento: digitacao do Relatorio EACE e do Atendimento ate o Confronto", "Envio de Email para faturamento: do Grid OK ate o Envio (inclui formulario ao financeiro e PDF anexado, ver diagrama 02)", "Aguardando financeiro: apos o envio do e-mail", "Aguardando Anexo portal EACE: NF+XML recebidos ate o Anexo EACE (inclui a 2a validacao)", "Aguardando validacao EACE / Faturamento Concluido: apos o anexo, ate a conclusao manual"] },
+    { "dot": "rose", "title": "Gap - Hub de Integracoes (v2 e v3)", "items": ["Versao 2 (04/09/2026): RPA de download do relatorio EACE e RPA de anexo no portal EACE (tags 'v2 (gap)' em Relatorio EACE e Anexo EACE)", "Versao 3 (10/09/2026): integracao automatica via API do IXC substitui a digitacao manual do lado IXC (tag 'v3 (gap)' em Atendimento)", "Nenhum dos tres esta implementado na v1 - detalhamento dos modulos no diagrama 02 (Arquitetura)"] }
+  ]
+}

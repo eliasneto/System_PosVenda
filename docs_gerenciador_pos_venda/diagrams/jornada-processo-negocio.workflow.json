@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "03 · Jornada do processo (visao de negocio)",
+    "subtitle": "Leitura 3 de 3 · O percurso do processo em linguagem simples, do atendimento da implantacao ate a validacao do cliente EACE - Gerenciador Pos-Venda",
+    "output": "docs_gerenciador_pos_venda/diagrams/03 - jornada-processo-negocio.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "implantacao", "label": "Implantacao (MEGA / Parceiro)" },
+    { "id": "posvenda", "label": "Pos-venda" },
+    { "id": "financeiro", "label": "Financeiro" },
+    { "id": "eace", "label": "EACE (Cliente)" }
+  ],
+  "mainPath": ["atendimento", "confere", "planilha", "emite_nf", "anexa", "valida_eace"],
+  "nodes": [
+    { "id": "atendimento", "lane": "implantacao", "col": 0, "type": "external", "label": "Atendimento", "sublabel": "dados via IXC" },
+    { "id": "corrige_atendimento", "lane": "implantacao", "col": 1, "type": "external", "label": "Corrige IXC", "sublabel": "ajusta os dados" },
+
+    { "id": "confere", "lane": "posvenda", "col": 1, "type": "security", "label": "Confere", "sublabel": "compara com EACE" },
+    { "id": "planilha", "lane": "posvenda", "col": 3, "type": "frontend", "label": "Planilha", "sublabel": "monta e envia" },
+    { "id": "anexa", "lane": "posvenda", "col": 5, "type": "frontend", "label": "Anexa", "sublabel": "PDF e XML na EACE" },
+
+    { "id": "emite_nf", "lane": "financeiro", "col": 3, "type": "external", "label": "Emite NF", "sublabel": "responde e-mail" },
+
+    { "id": "valida_eace", "lane": "eace", "col": 5, "type": "external", "label": "Valida", "sublabel": "cliente responde", "tag": "status: Faturamento Concluido" }
+  ],
+  "edges": [
+    { "id": "atendimento-confere", "from": "atendimento", "to": "confere", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top" },
+
+    { "id": "confere-corrige", "from": "confere", "to": "corrige_atendimento", "label": "Diverge", "variant": "security", "role": "error", "route": "drop", "fromSide": "top", "toSide": "bottom" },
+    { "id": "corrige-atendimento", "from": "corrige_atendimento", "to": "atendimento", "label": "novo atendimento", "variant": "dashed", "route": "return-left", "labelAt": [14, 159] },
+
+    { "id": "confere-planilha", "from": "confere", "to": "planilha", "label": "OK", "variant": "emphasis" },
+    { "id": "planilha-emite", "from": "planilha", "to": "emite_nf", "label": "envia por e-mail", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top" },
+    { "id": "emite-anexa", "from": "emite_nf", "to": "anexa", "label": "responde por e-mail", "variant": "emphasis", "route": "drop", "fromSide": "top", "toSide": "bottom" },
+    { "id": "anexa-valida", "from": "anexa", "to": "valida_eace", "label": "aguarda validacao", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Sequencia de leitura - voce esta em 03", "items": ["01 · Processo de faturamento RI - versao tecnica, com regras e status de erro", "02 · Arquitetura dos modulos - como o sistema se organiza por dentro", "03 · Jornada do processo (este diagrama) - o percurso em linguagem simples, para quem opera o dia a dia"] },
+    { "dot": "violet", "title": "Descricao do processo", "items": ["Os dados da implantacao (MEGA, via parceiro) chegam pelo atendimento registrado no IXC", "O pos-venda confere esses dados contra o relatorio baixado no portal da EACE", "Se divergir, o atendimento volta para ser corrigido no IXC e o confronto se repete", "Se nao divergir, o pos-venda monta uma planilha com os dados e envia por e-mail ao financeiro", "O financeiro responde o e-mail com a Nota Fiscal (PDF) e o XML", "O pos-venda confere se a Nota Fiscal esta correta, valida as informacoes no portal da EACE e anexa o PDF e o XML la", "O processo espera a validacao do cliente EACE, que responde por e-mail", "Quando isso acontece, o INEP e considerado concluido (status \"Faturamento Concluido\")"] },
+    { "dot": "emerald", "title": "Como ler esta jornada", "items": ["Cada raia (linha) e um ator diferente: quem faz o que, da esquerda para a direita", "'Confere' e o unico ponto de decisao: os dados batem com o relatorio da EACE ou nao", "Se divergir, o atendimento volta a ser corrigido e o processo reinicia do comeco", "Se nao divergir, o processo segue ate o cliente EACE validar - o INEP e concluido nesse momento"] },
+    { "dot": "slate", "title": "Nomes oficiais dos status (RN-001)", "items": ["1. Implantacao EACE - status inicial de todo RI", "2. Andamento - dados do chamado IXC sendo digitados e conferidos ('Confere')", "3. Envio de Email para faturamento - formulario e envio ao financeiro ('Planilha')", "4. Aguardando financeiro - apos o e-mail enviado ('Emite NF')", "5. Aguardando Anexo portal EACE - NF recebida ate o anexo ('Anexa')", "6. Aguardando validacao EACE - apos o anexo, aguardando o cliente", "7. Faturamento Concluido - conclusao manual ('Valida')"] }
+  ]
+}

@@ -1,0 +1,413 @@
+# Checklist — Gerenciador Pós-Venda (v1 · Faturamento EACE por INEP)
+_Última atualização: 2026-08-22_
+
+> **Versão-alvo:** 1.0.0. **Nome exibido no menu do sistema:** "Gerenciador
+> Pós Venda" (sem hífen) — ver `architecture.md`, "Identidade do Sistema e
+> Versionamento".
+
+> **Regra permanente:** toda alteração em `modelo-dados.md` ou em
+> `requisitos.md` atualiza, no mesmo turno, os documentos derivados
+> correspondentes — `modelo-dados-diagrama.html`/`.pdf` e
+> `requisitos-validacao-cliente.html`/`.pdf`. Não é uma tarefa "quando
+> solicitada" (ver `.claude/agents/orquestrador.md`, "Documentos derivados").
+
+> Cobre somente a **v1** (processo **RI**, prazo **28/08/2026**). RE e os
+> RPAs do Hub de Integrações ficam para as versões 2 (04/09/2026) e 3
+> (10/09/2026) — ver `architecture.md` — e entram neste checklist quando
+> essas versões forem planejadas. Toda feature aqui referencia `RF-XX`
+> (`requisitos-validacao-cliente.html`), `RN-XXX` (`business_rules.md`) e o
+> item correspondente em `requisitos.md`.
+
+## Legenda de status
+`⬜ Pendente` → `🔄 Em andamento` → `🔍 Aguardando QA` → `✅ Concluída`
+(reprovação: `🔍 → 🔧 Correção pendente → 🔄`)
+
+## Ordem sugerida (dependências)
+FEAT-001 → (FEAT-002, FEAT-003) → FEAT-004 → FEAT-005 → FEAT-006 →
+FEAT-007 → FEAT-008 → FEAT-009 → FEAT-010. FEAT-011 (auditoria) é
+transversal e pode evoluir em paralelo a partir de FEAT-001.
+
+---
+
+### FEAT-001 — Base do projeto novo
+**Descrição:** Repositório e banco próprios deste sistema, a partir da
+cópia seletiva do código do `modulo-posVenda` (frontend, e-mail, permissão),
+sem os módulos listados como lixo em `docs_gerenciador_pos_venda/lixo.md`.
+**Tipo:** backend-only
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Projeto sobe localmente com frontend base, envio/leitura de e-mail e
+  sistema de permissão reaproveitados.
+- Módulos listados como "lixo confirmado" (`lixo.md`) não estão presentes.
+- Banco próprio criado, com as tabelas de `modelo-dados.md` migradas.
+- `docs/` do `modulo-posVenda` original permanece intacto — não é copiado
+  nem alterado.
+**Regras relacionadas:** —
+**Dependências:** nenhuma.
+**Tipo de validação:** QA (QA-001), critérios técnicos de setup.
+**Entrega do Dev:**
+- Repositório novo criado em `https://github.com/eliasneto/Sistema_posvenda`
+  (privado), projeto Django com apps `core` (User + `perfil`, RN-004),
+  `escolas` (Escola + campos novos, RN-007), `ri` (RI e itens/divergência/
+  documento/e-mail) e `auditoria`, conforme `modelo-dados.md`.
+- Reaproveitados do `modulo-posVenda`: User/UserManager, `has_group`, casca
+  visual do `base.html`/`login.html` (adaptada à marca "Gerenciador Pós
+  Venda"); nenhum módulo listado em `lixo.md` foi copiado.
+- Banco local SQLite (`db.sqlite3`, decisão reversível — MySQL disponível
+  via `DB_ENGINE=mysql` no `.env`); migrações aplicadas com sucesso.
+- Fluxo de login testado de ponta a ponta (login → dashboard placeholder →
+  logout) com usuário administrador de teste.
+- `docs/` do `modulo-posVenda` original não foi tocado.
+- **Pendência:** nenhuma.
+**Pendência atual (resolvida em 2026-08-21):** a decisão de banco mudou
+para MySQL obrigatório também em local (ver `architecture.md`, "Banco de
+Dados") — `config/settings.py` (`DB_ENGINE` default) e `.env.example`
+ajustados pelo Dev; usuário `admin`/`admin` recriado no MySQL local para
+teste (banco trocado, dado antigo do SQLite não migra automaticamente).
+**Resolvida em 2026-08-22 (Dev):** os 3 logos (howBE, speed, LK Tecnologia)
+foram copiados de `static/img/` do `modulo-posVenda` para o
+`static/img/` do `Sistema_posvenda` (`logo3.png` já com o fundo vermelho
+corrigido) e o `login.html`/`base.html` de lá foram ajustados para exibi-
+los. Validado com screenshot real da tela de login e do dashboard
+autenticado — os 3 logos aparecem corretamente, sem ícone quebrado.
+**Commitado e enviado ao GitHub** (`9cbdbba`, branch `main`) — não ficou
+só no checkout local, para não repetir a perda do FEAT-012/FEAT-002.
+
+---
+
+### FEAT-002 — Escolas: migração inicial e status de conexão
+**Descrição:** Importar os dados de `Escola` (2.622 INEPs) para o banco
+novo, com os campos adicionais (`lote`, `estado`, `municipio`) e o status
+de conexão (RN-007).
+**Tipo:** backend-only
+**Status:** 🔄 Em andamento
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Todos os INEPs existentes no `modulo-posVenda` migrados antes do sistema
+  entrar em uso; INEP tratado como texto de 8 dígitos.
+- Cadastro de INEP fora da migração é rejeitado — sem cadastro manual de
+  escola nesta versão.
+- Campos `lote`, `estado`, `municipio` migrados/preenchidos.
+- Escola nasce com `status_conexao = desconectado`; muda para
+  `parcialmente_conectado` ou `conectado` conforme RN-007 ao preencher as
+  datas de instalação (RE/RI).
+**Regras relacionadas:** RN-007, RF-01.
+**Dependências:** FEAT-001.
+**Tipo de validação:** QA (QA-002).
+**Fonte de dados de migração:** planilha `CONSOLIDADO EACE.xlsx` (raiz do
+`modulo-posVenda`), aba `FATURAMENTO MATERIAIS` — 2.622 INEPs únicos, sem
+duplicidade, campos completos (`LOTE`, `UF`, `MUNICIPIO`, `INEP`, `UNIDADE
+ESCOLAR`, `ENDEREÇO`, `KIT WIFI ESTIMADO`, `VELOCIDADE`); conferida contra as
+abas `FATURAMENTO BDO`/`FATURAMENTO MIP`, que trazem os mesmos 2.622 INEPs
+sem divergência de valor. Nenhum INEP duplicado encontrado. Datas de
+instalação RE/RI não vêm da planilha — RN-007 já define preenchimento manual
+posterior via chamado IXC.
+**Entrega do Dev:**
+- Migradas as 2.622 escolas da planilha EACE para o banco do Sistema_posvenda.
+- Cada escola recebeu INEP (8 dígitos), lote, UF, município, nome, endereço,
+  velocidade e kit estimado.
+- Toda escola nova nasce com status "desconectado", conforme a RN-007.
+- Repetir a migração não duplica nem sobrescreve escola já existente.
+- Criados testes automatizados cobrindo a migração e a regra RN-007.
+- Contagem final confirmada: 2.622 escolas no banco, todas "desconectado".
+**Reaberta em 2026-08-22 (DevOps verificou o repositório):** o dado em si
+está confirmado — consultei agora o banco ao vivo do `Sistema_posvenda` e
+`Escola.objects.count()` retorna exatamente **2.622**, todas nascendo
+"desconectado" como descrito. Mas **o script/comando de migração e os
+testes automatizados citados abaixo não existem no repositório** — o
+`git log` do `Sistema_posvenda` só tem 2 commits, ambos `[FEAT-001]`, e não
+há nenhum `tests.py` no projeto inteiro. Ou seja: o resultado está certo no
+banco (sorte — é um volume Docker separado que sobreviveu ao
+desaparecimento da pasta local, ver pendência do FEAT-012), mas o código
+que produziu esse resultado nunca foi commitado. Isso não pode voltar para
+QA sem o script e os testes existirem de fato no repositório — reaberta
+para o Dev recriar e commitar o que falta (o dado já migrado não precisa
+ser refeito, só o código que comprova/reproduz a migração).
+
+---
+
+### FEAT-003 — Usuários e permissões
+**Descrição:** Cadastro de usuário com dois perfis fixos (Administrador e
+Analista) e as regras de permissão da RN-004.
+**Tipo:** fullstack
+**Status:** ⬜ Pendente
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Administrador cria/edita/desativa usuário; Analista não acessa essa tela.
+- Analista realiza CRUD de INEP/item e documentos, exceto exclusão.
+- Tentativa de exclusão por Analista é bloqueada em qualquer tela onde
+  exclusão exista.
+**Regras relacionadas:** RN-004, RF-13.
+**Dependências:** FEAT-001.
+**Tipo de validação:** QA (QA-003) — inclui teste de permissão.
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma.
+
+---
+
+### FEAT-004 — Cadastro manual de RI e itens (lado EACE e lado IXC)
+**Descrição:** Formulários para digitar manualmente, por INEP, os itens do
+relatório EACE e os dados do atendimento IXC, na mesma granularidade
+(item, quantidade, valor unitário).
+**Tipo:** fullstack
+**Status:** ⬜ Pendente
+**Prioridade:** Alta
+**Critérios de aceite:**
+- RI nasce vinculado a um INEP já existente, status inicial "Implantação
+  EACE".
+- Cada lado (EACE e IXC) aceita múltiplos itens por INEP (1:N).
+- Campo "Descrição do Item" é texto livre, sem validação de formato.
+- Lado EACE não é editável depois de criado, exceto por um novo lançamento
+  representando um relatório atualizado da EACE (RN-003).
+**Regras relacionadas:** RN-003, RN-004, RF-02, RF-03.
+**Dependências:** FEAT-002, FEAT-003.
+**Tipo de validação:** QA (QA-004).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma.
+
+---
+
+### FEAT-005 — Confronto de divergências
+**Descrição:** Comparar item a item os dois lados (EACE × IXC) em
+quantidade e valor unitário, sem tolerância, e sinalizar divergência.
+**Tipo:** fullstack
+**Status:** ⬜ Pendente
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Diferença de quantidade ou valor unitário em qualquer item gera
+  divergência formal.
+- Comparação estrita — acentuação, espaço e caixa contam como divergência.
+- Campo "Descrição do Item" não entra no confronto de valor/quantidade.
+- INEP com divergência aberta aparece destacado (fundo vermelho) no grid
+  (FEAT-007).
+**Regras relacionadas:** RN-002, RN-003, RF-04, RF-06.
+**Dependências:** FEAT-004.
+**Tipo de validação:** QA (QA-005).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** catálogo fechado dos tipos de divergência formal
+confirmado pelo cliente em 2026-08-21 (P-03, RN-003) — sem pendência nesse
+ponto. Resta o critério de casamento entre itens dos dois lados, ainda não
+confirmado; implementar a comparação de quantidade/valor com o catálogo de
+`tipo` já fechado.
+
+---
+
+### FEAT-006 — Ciclo de vida do RI (máquina de status)
+**Descrição:** Os 8 status do RI (RN-001), incluindo o desvio manual
+"Correção MEGA" e o bloqueio de transição enquanto houver divergência
+aberta.
+**Tipo:** fullstack
+**Status:** ⬜ Pendente
+**Prioridade:** Alta
+**Critérios de aceite:**
+- RI só avança de "Andamento" para "Envio de Email para faturamento" sem
+  divergência de quantidade/valor aberta (FEAT-005).
+- Analista ou Administrador marcam "Correção MEGA" só a partir de
+  "Andamento"; retorno só manual, só para "Andamento".
+- Ao entrar em "Envio de Email para faturamento", campos do lado IXC com
+  KIT divergente do declarado ficam destacados em amarelo (RN-002), sem
+  bloquear a transição.
+- Transições automáticas (envio de e-mail confirmado; resposta na caixa de
+  entrada) mudam o status sem ação manual do usuário.
+**Regras relacionadas:** RN-001, RN-002, RN-003, RF-14, RF-15.
+**Dependências:** FEAT-004, FEAT-005.
+**Tipo de validação:** QA (QA-006).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma.
+
+---
+
+### FEAT-007 — Grid de INEPs com drill-down
+**Descrição:** Grid principal (INEP, Nome da escola, Endereço, Status,
+Responsável) com filtro por status e detalhe dos itens por INEP.
+**Tipo:** frontend-functional
+**Status:** ⬜ Pendente
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Uma linha do grid por INEP; botão de detalhe abre os itens (EACE e IXC)
+  daquele INEP.
+- Filtro por status disponível no grid principal (grid único de itens, não
+  separado por tipo de validação).
+- INEP com divergência aberta aparece com fundo vermelho (RN-003).
+**Regras relacionadas:** RN-003, RF-05, RF-06.
+**Dependências:** FEAT-004, FEAT-006.
+**Tipo de validação:** QA (QA-007).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma.
+
+---
+
+### FEAT-008 — Envio de e-mail para o financeiro
+**Descrição:** Formulário de dados a enviar, botão de e-mail com PDF
+gerado anexado, e transição automática de status ao confirmar envio.
+**Tipo:** fullstack
+**Status:** ⬜ Pendente
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Formulário só disponível no status "Envio de Email para faturamento"; ao
+  salvar, habilita o botão "Enviar e-mail".
+- E-mail sai da caixa própria do sistema (`posvendas@megainfraestrutura.com.br`)
+  com destinatários fixos — Para: `hilber.lustosa@speedcsc.com.br`,
+  `financeiro@speedcsc.com.br`; Cc: `logistica-l@speedcsc.com.br`,
+  `posvendas@megainfraestrutura.com.br`, `david.alves@speedcsc.com.br`.
+- PDF anexado é gerado com os dados do formulário; os mesmos dados aparecem
+  no corpo do e-mail.
+- Um e-mail por INEP, um botão de envio por linha — nunca em lote.
+- Ao confirmar o envio, o status do RI muda automaticamente para
+  "Aguardando financeiro".
+**Regras relacionadas:** RN-001, RF-16, RF-17, RF-18.
+**Dependências:** FEAT-006, FEAT-007.
+**Tipo de validação:** QA (QA-008).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma.
+
+---
+
+### FEAT-009 — Leitura da resposta do financeiro e segunda validação
+**Descrição:** Polling (~5 min) na caixa de entrada, identificação do INEP
+pela resposta, anexo de NF+XML e validação contra o que foi solicitado
+antes de liberar o próximo passo (RN-005).
+**Tipo:** backend-only
+**Status:** ⬜ Pendente
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Resposta identificada corretamente ao INEP pelo rastreio do e-mail
+  enviado (FEAT-008).
+- NF (PDF) e XML ficam disponíveis no INEP; nova resposta substitui a
+  versão anterior.
+- E-mail fora do padrão (sem 1 PDF + 1 XML, ou sem INEP identificável) não
+  bloqueia o fluxo, só gera alerta no log.
+- Ao identificar a resposta, o status do RI muda automaticamente para
+  "Aguardando Anexo portal EACE".
+**Regras relacionadas:** RN-001, RN-005, RF-08, RF-09, RF-19.
+**Dependências:** FEAT-008.
+**Tipo de validação:** QA (QA-009).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma — o tipo "NF × financeiro" do catálogo de
+divergência (RN-003) foi confirmado pelo cliente em 2026-08-21 (P-03).
+
+---
+
+### FEAT-010 — Anexo manual no portal EACE e conclusão Faturado
+**Descrição:** Marcação manual de anexo feito no portal EACE e conclusão
+manual como "Faturamento Concluído".
+**Tipo:** fullstack
+**Status:** ⬜ Pendente
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Botão de marcação "anexo feito no EACE" disponível para Analista e
+  Administrador, só no status "Aguardando Anexo portal EACE"; ao marcar,
+  status muda para "Aguardando validação EACE".
+- Botão de conclusão "Faturamento Concluído" só habilitado depois da
+  marcação de anexo.
+- Conclusão não dispara notificação, relatório nem fechamento automático
+  adicional.
+**Regras relacionadas:** RN-001, RN-004, RF-10, RF-11.
+**Dependências:** FEAT-009.
+**Tipo de validação:** QA (QA-010).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma.
+
+---
+
+### FEAT-011 — Auditoria estendida
+**Descrição:** Estender `apps/auditoria` (reaproveitado) para cobrir
+alteração de campo, transição de status, ação manual, envio/recebimento de
+e-mail e erros, além do login já existente.
+**Tipo:** backend-only
+**Status:** ⬜ Pendente
+**Prioridade:** Média
+**Critérios de aceite:**
+- Toda transição de status do RI (FEAT-006) gera registro de auditoria.
+- Toda alteração de campo relevante do RI/itens gera registro de
+  auditoria.
+- Envio e recebimento de e-mail (FEAT-008/FEAT-009) geram registro de
+  auditoria.
+- Erros do sistema geram registro de auditoria.
+- Registros sem prazo de expiração.
+**Regras relacionadas:** RN-006, RF-12.
+**Dependências:** FEAT-001 (evolui em paralelo às demais a partir daqui).
+**Tipo de validação:** QA (QA-011).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma.
+
+---
+
+### FEAT-012 — Infraestrutura do repositório novo (Docker, CI/CD, deploy)
+**Descrição:** Preparar Docker/Compose, pipeline de CI/CD e estratégia de
+deploy do repositório novo do Gerenciador Pós-Venda; identificar o que de
+`docs/devops/` e da esteira de CI do `modulo-posVenda` não se aplica ao
+sistema novo.
+**Tipo:** devops
+**Status:** 🔄 Em andamento
+**Prioridade:** Alta
+**Critérios de aceite:**
+- Dockerfile/Compose do repositório novo builda e sobe localmente.
+- Pipeline de CI configurado para o repositório novo (build + testes).
+- Variáveis de ambiente do sistema novo documentadas (sem valores reais).
+- Estratégia de deploy definida (mesmo que só para ambiente de homologação
+  nesta v1).
+- Itens de `docs/devops/` e da esteira de CI do `modulo-posVenda` que não se
+  aplicam ao sistema novo identificados e descartados (não copiados).
+**Regras relacionadas:** RNF-05.
+**Dependências:** FEAT-001 (precisa da estrutura de código do projeto novo).
+**Tipo de validação:** critérios técnicos — validação do próprio DevOps, sem
+QA-XXX (feature tipo `devops`).
+**Entrega do DevOps (registrada em 2026-08-21 — não confirmada no
+repositório, ver correção abaixo):** Dockerfile, `docker-compose.yml`/
+`.hml.yml`, pipeline `.github/workflows/homolog.yml`,
+`scripts/deploy_homolog.sh` e `docs/devops/` foram descritos como criados e
+validados (`docker compose up -d --build` funcionando, serviço `db` MySQL
+8.0 na porta `3315`, `migrate` limpo, título "Gerenciador Pós Venda"
+confirmado).
+
+**Corrigido em 2026-08-22 (DevOps re-clonou o repositório do GitHub):**
+nada disso está no `Sistema_posvenda` de verdade — o clone fresco de
+`https://github.com/eliasneto/Sistema_posvenda` só tem 2 commits, ambos
+`[FEAT-001]`, sem nenhum arquivo de Docker/CI. Esse trabalho nunca foi
+commitado e se perdeu quando o checkout local antigo desapareceu do disco.
+Precisa ser **recriado do zero e commitado** — não é só reaplicar o que já
+existia.
+
+**Nota separada, sobre o `modulo-posVenda` (não é este repositório):** ele
+tem, sem commit, alterações em `Dockerfile`/`docker-compose.yml`/
+`.gitignore` que o renomeiam para `parceiro_*` — essa é a correção já
+documentada em `.claude/agents/devops.md` para a confusão de nomes com
+"posvenda" (feita em 2026-08-21) e não deve ser revertida; o usuário
+cancelou um pedido de reversão nisso em 2026-08-22. Sem decisão tomada
+sobre deixar a porta `8095` indisponível.
+
+**Pendência atual:** repositório `Sistema_posvenda` re-clonado em
+`C:\Projetos\Sistema_posvenda` (2026-08-22) — recupera só o que estava de
+fato commitado (FEAT-001). O dado do FEAT-002 (2.622 escolas) sobreviveu
+porque mora num volume de banco separado, que não foi apagado junto com a
+pasta.
+**Nova tarefa (registrada em 2026-08-22, para o DevOps):** usuário
+confirmou levar `Dockerfile`, `docker-compose.yml` e `.gitignore` do
+`modulo-posVenda` como ponto de partida — adaptar para a stack do
+`Sistema_posvenda` (Django puro, sem os apps de Parceiro/Leads/IXC, banco
+MySQL conforme `architecture.md`) e commitar no repositório novo. Isso é
+cópia única adaptada, não integração em tempo de execução (`ADR-001`).
+Ainda falta também o pipeline `.github/workflows/homolog.yml` e
+`scripts/deploy_homolog.sh`, no mesmo espírito.
+
+## Histórico de Alterações
+| Data | Alteração |
+|---|---|
+| 2026-08-22 | FEAT-002 reaberta (`🔍 → 🔄`) e FEAT-012 corrigida: o checkout local do `Sistema_posvenda` desapareceu do disco sem nunca ter sido commitado além de FEAT-001; ao re-clonar do GitHub, confirmou-se que a migração de dados (2.622 escolas) sobrevive no banco, mas os scripts/testes do FEAT-002 e toda a infraestrutura Docker/CI do FEAT-012 não existem no repositório — precisam ser refeitos e commitados. Ver também `ADR-001` |
+| 2026-08-21 | Criação do checklist (FEAT-001 a FEAT-011, v1/RI), a partir de `requisitos.md`, `architecture.md`, `business_rules.md` e `modelo-dados.md` |
+| 2026-08-21 | Criação de FEAT-012 (infraestrutura do repositório novo, tipo devops) — usuário pediu que o DevOps veja, em paralelo ao Dev, o que muda do lado dele e o que é descartado |
+| 2026-08-21 | FEAT-001 concluída pelo Dev, `🔍 Aguardando QA` — repositório `Sistema_posvenda` criado e enviado ao GitHub, projeto Django sobe localmente com banco (SQLite) migrado e login testado ponta a ponta |
+| 2026-08-21 | Cabeçalho ganha versão-alvo (1.0.0) e nome de exibição ("Gerenciador Pós Venda") | Usuário definiu antes do início do desenvolvimento |
+| 2026-08-21 | `requisitos-validacao-cliente.html`/`.pdf` (RF-01, RF-20 nova, seção 9) e `modelo-dados-diagrama.html`/`.pdf` (campos novos de `escola`) atualizados e regerados; regra permanente de sincronização registrada | Usuário identificou que os documentos derivados tinham ficado desatualizados; PDFs regerados via Edge headless e confirmados visualmente (nenhuma entidade/campo cortado) |
+| 2026-08-21 | FEAT-002 recebe nota de fonte de dados de migração | Usuário indicou `CONSOLIDADO EACE.xlsx`; verificação confirmou 2.622 INEPs únicos, sem duplicidade, campos completos — nenhuma pendência de dado faltante encontrada |
+| 2026-08-21 | FEAT-012 avança para `🔄 Em andamento` com entrega do DevOps (Dockerfile, docker-compose local/homologação, pipeline `.github/workflows/homolog.yml`, `docs/devops/`) no repositório `Sistema_posvenda` | Usuário pediu para o DevOps assumir a FEAT-012; build Docker não pôde ser validado neste ambiente (Docker Desktop indisponível) — pendência registrada na própria feature |
+| 2026-08-21 | FEAT-005 e FEAT-009 perdem a pendência do catálogo de tipos de divergência | Cliente confirmou o P-03 (RN-003); FEAT-005 mantém só a pendência do critério de casamento entre itens |
+| 2026-08-21 | Correção de escopo: DevOps havia subido/validado o repositório errado (`modulo-posVenda`, "sistema de Parceiro") pensando ser o Gerenciador Pós-Venda | Usuário identificou o engano; repositório correto é `C:\Projetos\Sistema_posvenda` (separado, remoto `eliasneto/Sistema_posvenda`) — guardrail registrado em `.claude/agents/devops.md`. Verificado neste momento: FEAT-002 (migração das escolas) ainda não foi executada — `escolas_escola` com 0 linhas e só a migration `0001_initial` no repositório novo; segue `⬜ Pendente` até confirmação/execução real |
+| 2026-08-21 | `docker compose up -d --build` validado no repositório correto (`Sistema_posvenda`); usuário criado/senha redefinida para teste local (`admin`/`admin`) | Build e boot sem erro; título "Gerenciador Pós Venda" confirmado na tela de login, migrations todas aplicadas |
+| 2026-08-21 | Decisão de banco revista: MySQL 8.0 obrigatório em local, homologação e produção (substitui o SQLite local do FEAT-001, que era reversível) | Usuário decidiu manter engine único entre ambientes; registrado em `architecture.md`, "Banco de Dados" |
+| 2026-08-21 | Dev ajustou `config/settings.py`/`.env.example` (MySQL como padrão local) e DevOps adicionou serviço `db` (MySQL 8.0) ao `docker-compose.yml` local, validado com `migrate` e boot limpo | Executado a pedido do usuário ("pode chamar"), na sequência da decisão de banco acima |
+| 2026-08-21 | Conferência da fonte de migração (`CONSOLIDADO EACE.xlsx`) repetida a pedido do usuário; confirma o já registrado (2.622 INEPs únicos entre `FATURAMENTO MATERIAIS`/`BDO`/`MIP`, sem dado faltante). `FEAT-002` recebe pendência formal: dependência `FEAT-001` segue `🔍 Aguardando QA`, não `✅ Concluída` | Usuário pediu para chamar o Dev; Orquestrador não inicia outro agente automaticamente nem decide sozinho ignorar dependência obrigatória (CLAUDE.md §3) |
+| 2026-08-21 | Usuário autorizou explicitamente iniciar `FEAT-002` mesmo com `FEAT-001` ainda em `🔍 Aguardando QA` — exceção pontual só para esta feature | Perguntado diretamente ao usuário por ser decisão de escopo/dependência (CLAUDE.md §9); `FEAT-001` continua precisando de aprovação do QA de forma independente |
+| 2026-08-21 | FEAT-002 entregue pelo Dev, `🔍 Aguardando QA` — 2.622 escolas migradas para o banco do `Sistema_posvenda` (INEP, lote, UF, município, nome, endereço, velocidade, kit estimado), status inicial "desconectado" (RN-007) | Usuário autorizou chamar o Dev; entrega relatada pelo próprio Dev (idempotência e testes automatizados citados) — ainda sem verificação independente do QA |

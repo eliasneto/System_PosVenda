@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Roadmap — Gerenciador Pós-Venda</title>
+<style>
+  @page { size: A4; margin: 1.9cm 1.7cm; }
+  * { box-sizing: border-box; }
+  :root {
+    --ink: #0f2438;
+    --ink-soft: #46586b;
+    --paper: #ffffff;
+    --tint: #f4f7fb;
+    --line: #d7dde4;
+    --accent: #2563a8;
+    --v1: #2f8f5b;
+    --v2: #b98900;
+    --v3: #6d4aa8;
+    --now: #64748b;
+  }
+  body {
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    font-size: 11pt;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  /* ---- header ---- */
+  .masthead {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: .5em;
+    margin-bottom: .3em;
+  }
+  .masthead .eyebrow {
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    font-size: 9.5pt;
+  }
+  h1 {
+    font-size: 24pt;
+    margin: .15em 0 0 0;
+    color: var(--ink);
+    text-wrap: balance;
+  }
+  .subtitle {
+    font-size: 11.5pt;
+    color: var(--ink-soft);
+    margin: .2em 0 0 0;
+  }
+  .meta-box {
+    text-align: right;
+    font-size: 9pt;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .meta-box strong { color: var(--ink); }
+
+  /* ---- stat row ---- */
+  .stats {
+    display: flex;
+    gap: 0;
+    margin: .9em 0 1.2em 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .stat {
+    flex: 1;
+    padding: .7em 1em;
+    border-right: 1px solid var(--line);
+    background: var(--tint);
+  }
+  .stat:last-child { border-right: none; }
+  .stat .num {
+    font-size: 17pt;
+    font-weight: 700;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .label {
+    font-size: 8.5pt;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-top: .1em;
+  }
+
+  /* ---- timeline ---- */
+  .timeline { margin: 0 0 1.6em 0; }
+  .milestone {
+    display: flex;
+    align-items: stretch;
+    gap: 22px;
+    padding: 0 0 1em 0;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .milestone:last-child { padding-bottom: 0; }
+  .node-col {
+    flex: 0 0 56px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .node {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    border: 3px solid var(--paper);
+    box-shadow: 0 0 0 2px currentColor;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff;
+    font-size: 8.5pt;
+    font-weight: 700;
+    z-index: 1;
+    flex-shrink: 0;
+  }
+  .node.now { background: var(--now); color: var(--now); }
+  .node.v1 { background: var(--v1); color: var(--v1); }
+  .node.v2 { background: var(--v2); color: var(--v2); }
+  .node.v3 { background: var(--v3); color: var(--v3); }
+  .node span { color: #fff; }
+  .gap-label {
+    margin-top: .35em;
+    font-size: 7.5pt;
+    color: var(--ink-soft);
+    text-align: center;
+    line-height: 1.25;
+  }
+  .stem {
+    flex: 1;
+    width: 3px;
+    min-height: 10px;
+    background: var(--line);
+    margin-top: .5em;
+    border-radius: 2px;
+  }
+
+  .card {
+    flex: 1;
+    padding: .85em 1.1em;
+    border: 1px solid var(--line);
+    border-left-width: 4px;
+    border-radius: 6px;
+    background: var(--paper);
+  }
+  .card.now { border-left-color: var(--now); }
+  .card.v1 { border-left-color: var(--v1); }
+  .card.v2 { border-left-color: var(--v2); }
+  .card.v3 { border-left-color: var(--v3); }
+
+  .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1em;
+  }
+  .card-head h2 { font-size: 13.5pt; margin: 0; color: var(--ink); }
+  .card-date {
+    font-size: 9.5pt;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .card.now .card-date { color: var(--now); }
+  .card.v1 .card-date { color: var(--v1); }
+  .card.v2 .card-date { color: var(--v2); }
+  .card.v3 .card-date { color: var(--v3); }
+
+  .card p.tag {
+    margin: .15em 0 .6em 0;
+    font-size: 9pt;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .status-pill {
+    display: inline-block;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: .04em;
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: #fff;
+    background: #b98900;
+    text-transform: uppercase;
+    margin-right: .5em;
+    vertical-align: middle;
+  }
+  .card ul { margin: 0; padding-left: 1.2em; }
+  .card li { margin: .25em 0; font-size: 10pt; }
+  .card .note {
+    margin-top: .5em;
+    font-size: 9pt;
+    color: var(--ink-soft);
+    font-style: italic;
+  }
+
+  /* ---- risk panel ---- */
+  .risks {
+    background: var(--tint);
+    border-radius: 8px;
+    padding: .9em 1.2em;
+    margin-top: .4em;
+  }
+  .risks h2 {
+    font-size: 12pt;
+    margin: 0 0 .5em 0;
+    color: var(--ink);
+  }
+  .risks ul { margin: 0; padding-left: 1.2em; }
+  .risks li { font-size: 10pt; margin: .3em 0; }
+  .risks code {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 9pt;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    padding: 0 4px;
+    border-radius: 3px;
+  }
+
+  .legend {
+    display: flex;
+    gap: 1.4em;
+    margin-top: 1.1em;
+    font-size: 8.5pt;
+    color: var(--ink-soft);
+  }
+  .legend .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: .35em;
+    vertical-align: middle;
+  }
+
+  .cadence-note {
+    font-size: 9pt;
+    color: var(--ink-soft);
+    margin: -.5em 0 1.1em 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <div>
+    <div class="eyebrow">Roadmap do projeto</div>
+    <h1>Gerenciador Pós-Venda</h1>
+    <p class="subtitle">Faturamento EACE por INEP — cronograma até a implantação completa, em 3 sprints semanais (v1 → v3)</p>
+  </div>
+  <div class="meta-box">
+    Atualizado em <strong>21/08/2026</strong><br>
+    Documento de referência interna
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="num">21 dias</div>
+    <div class="label">do início ao Hub completo</div>
+  </div>
+  <div class="stat">
+    <div class="num">3 sprints</div>
+    <div class="label">1 semana cada, 1 versão por sprint</div>
+  </div>
+  <div class="stat">
+    <div class="num">8 dias</div>
+    <div class="label">até a v1 (28/08)</div>
+  </div>
+  <div class="stat">
+    <div class="num">10/09</div>
+    <div class="label">Hub de Integrações completo</div>
+  </div>
+</div>
+<p class="cadence-note">Cada sprint começa na segunda e termina na sexta — exceto o Sprint 3, que termina um dia antes (quinta, 10/09).</p>
+
+<div class="timeline">
+  <div class="milestone">
+    <div class="node-col">
+      <div class="node now"><span>•</span></div>
+      <div class="gap-label">hoje</div>
+      <div class="stem"></div>
+    </div>
+    <div class="card now">
+      <div class="card-head">
+        <h2><span class="status-pill">Em andamento</span>Requisitos e validação do cliente</h2>
+        <div class="card-date">prazo 21/08/2026</div>
+      </div>
+      <p class="tag">Quase concluído — resta 1 ponto em aberto</p>
+      <ul>
+        <li>Processo, regras de negócio e arquitetura da v1 documentados.</li>
+        <li>Catálogo de status de divergência (P-03) e campos adicionais de Escola (P-04) confirmados pelo cliente (21/08/2026).</li>
+        <li>Resta o critério exato de casamento entre os itens dos dois lados (EACE × IXC), ainda sem confirmação.</li>
+        <li>Ciclo de status do RI definido (8 status, incluindo o desvio manual "Correção MEGA", até o Faturamento Concluído).</li>
+      </ul>
+      <p class="note">Precisa fechar até amanhã (21/08) para não atrasar o início do Sprint 1 (24/08).</p>
+    </div>
+  </div>
+
+  <div class="milestone">
+    <div class="node-col">
+      <div class="node v1"><span>1</span></div>
+      <div class="gap-label">+8 dias</div>
+      <div class="stem"></div>
+    </div>
+    <div class="card v1">
+      <div class="card-head">
+        <h2>Versão 1 — RI completo</h2>
+        <div class="card-date">28/08/2026</div>
+      </div>
+      <p class="tag">Sprint 1 · seg 24/08 a sex 28/08</p>
+      <ul>
+        <li>Confronto do lado EACE x lado IXC, com bloqueio por divergência de quantidade/valor.</li>
+        <li>Grid de INEPs, com o ciclo completo de status até "Faturamento Concluído".</li>
+        <li>Envio e leitura automática de e-mail com o financeiro (Nota Fiscal + XML).</li>
+        <li>Anexo no portal da EACE feito manualmente pelo usuário.</li>
+      </ul>
+      <p class="note">Prazo mais apertado do cronograma — 8 dias a partir do levantamento.</p>
+    </div>
+  </div>
+
+  <div class="milestone">
+    <div class="node-col">
+      <div class="node v2"><span>2</span></div>
+      <div class="gap-label">+7 dias</div>
+      <div class="stem"></div>
+    </div>
+    <div class="card v2">
+      <div class="card-head">
+        <h2>Versão 2 — Hub de Integrações (parte 1)</h2>
+        <div class="card-date">04/09/2026</div>
+      </div>
+      <p class="tag">Sprint 2 · seg 31/08 a sex 04/09 · Automação · RPA</p>
+      <ul>
+        <li>RPA de download automático do relatório da EACE (hoje: digitação manual).</li>
+        <li>RPA de anexo automático dos documentos no portal da EACE (hoje: ação manual).</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="milestone">
+    <div class="node-col">
+      <div class="node v3"><span>3</span></div>
+      <div class="gap-label">+6 dias</div>
+    </div>
+    <div class="card v3">
+      <div class="card-head">
+        <h2>Versão 3 — Hub de Integrações (parte 2)</h2>
+        <div class="card-date">10/09/2026</div>
+      </div>
+      <p class="tag">Sprint 3 · seg 07/09 a qui 10/09 · Integração + novo processo</p>
+      <ul>
+        <li>Integração automática com o IXC via API (hoje: digitação manual do atendimento).</li>
+        <li>Processo RE (instalação de link) ganha tela própria no sistema.</li>
+      </ul>
+      <p class="note">Exceção ao padrão: este sprint termina na quinta (10/09), um dia antes de sexta. Marca o Hub de Integrações completo e a cobertura dos dois processos, RI e RE.</p>
+    </div>
+  </div>
+</div>
+
+<div class="risks">
+  <h2>Riscos e pendências que podem afetar o prazo</h2>
+  <ul>
+    <li>As duas perguntas que aguardavam resposta do cliente antes do fechamento da v1 — catálogo de status de divergência (<code>P-03</code>) e campos adicionais do cadastro de Escola (<code>P-04</code>) — já foram confirmadas (21/08/2026).</li>
+    <li>Resta em aberto o critério exato de casamento entre os itens dos dois lados (EACE × IXC), ainda sem confirmação do cliente.</li>
+    <li>A migração inicial dos dados de Escola (2.622 registros) para o novo banco é obrigatória antes da v1 entrar em uso — execução única, ainda sem data marcada.</li>
+    <li>Prazo da v1 é apertado; qualquer atraso na pendência restante pressiona essa data primeiro.</li>
+  </ul>
+</div>
+
+<div class="legend">
+  <span><span class="dot" style="background:var(--now)"></span>Marco atual (hoje)</span>
+  <span><span class="dot" style="background:var(--v1)"></span>Versão 1</span>
+  <span><span class="dot" style="background:var(--v2)"></span>Versão 2</span>
+  <span><span class="dot" style="background:var(--v3)"></span>Versão 3</span>
+</div>
+
+</body>
+</html>
