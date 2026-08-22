@@ -95,6 +95,13 @@ INEP é considerado concluído (Faturado).
 - **Infra de e-mail** — reaproveita o padrão de polling IMAP já usado em
   `apps/integracoes/email` (sincronização de resposta), adaptado para a
   caixa dedicada do financeiro.
+- **Frontend da tela "Endereços"** (`apps/leads/templates/leads/
+  enderecos_lastmile.html` e partials) — exceção pontual à descontinuação
+  de Leads, ver `ADR-001` (emenda 2026-08-22): reaproveita o template e as
+  regras de frontend do grid (badge de status, filtros, cascata
+  Setor→Responsável) para a `FEAT-007`. Trechos dependentes de
+  Parceiro/cotação/Setor ainda precisam ser removidos ou adaptados pelo Dev
+  na implementação.
 
 ### Novos nesta versão (v1)
 
@@ -186,6 +193,7 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-08-22 | Módulo "Frontend da tela Endereços" adicionado aos reaproveitados; ADR-001 recebe emenda | Usuário confirmou reaproveitamento de código (não só referência visual) do frontend da tela Endereços do `modulo-posVenda` para a FEAT-007, mantendo descontinuados Provedores/Parceiro e o restante de Leads |
 | 2026-08-22 | ADR-001 e seção "Relação com o `modulo-posVenda`" | Usuário definiu o destino final: um único sistema (este); `modulo-posVenda` é fonte de reaproveitamento até ser eliminado |
 | 2026-08-20 | Criação do documento e do conjunto de diagramas 01/02 | Primeiro registro de arquitetura do Gerenciador Pós-Venda, a partir de `requisitos.md` |
 | 2026-08-20 | Diagrama 03 (jornada de negócio) e seção "Processo (visão de negócio)" | Usuário pediu uma versão do percurso do processo sem regras técnicas, para leitura por qualquer pessoa |

@@ -91,6 +91,38 @@ repositório doador, e esse destino é o desaparecimento completo dele.
   FEAT-012, Docker/CI próprios). Não recriar esse app dentro do
   `modulo-posVenda` sem uma nova decisão explícita.
 
+## Emenda (2026-08-22) — Reaproveitamento pontual do frontend da tela "Endereços"
+
+**Contexto:** mais tarde no mesmo dia, o usuário pediu para levar ao
+`Sistema_posvenda` o frontend da tela "Endereços" do `modulo-posVenda`
+(menu Projeto → LastMile — grid de Escola + RE/RI/Mapa Calor). Perguntado,
+confirmou duas coisas: (1) o escopo é só essa tela, não a tela Provedores
+(cadastro de Parceiro); (2) não é mais só referência visual (como havia
+sido registrado antes, no mesmo dia, em `checklist.md`/`FEAT-007`) — é
+reaproveitamento de código de fato.
+
+**Decisão:** abre-se uma exceção pontual dentro da descontinuação de Leads
+já decidida acima. Podem ser copiados/adaptados para o `Sistema_posvenda`:
+- o **frontend** (templates) da tela "Endereços" —
+  `apps/leads/templates/leads/enderecos_lastmile.html` e os partials
+  associados a ela em `apps/leads/templates/leads/partials/` (histórico,
+  linha de RE/RI/Mapa Calor, opções de status/responsável);
+- as **regras de frontend** que essa tela aplica — exibição/cor do
+  indicador de status (RN-067), rótulo do badge (RN-043), filtros do grid
+  (RN-035/066) e a cascata Setor→Responsável (RN-060).
+
+Isso **não** muda o restante já decidido: Provedores/cadastro de Parceiro,
+a integração IXC de uso geral e as demais telas de Leads continuam
+descontinuados, sem reaproveitamento.
+
+**Risco técnico identificado (não resolvido nesta emenda):** o frontend
+dessa tela, na versão atual, também referencia recursos que esta ADR
+descontinua — vínculo de Parceiro (RN-030), cotação de Parceiro (RN-044) e
+permissão por Setor. Cabe ao Dev, ao implementar, decidir se remove esses
+trechos do template copiado ou os adapta ao modelo de dados do
+`Sistema_posvenda` (Escola/INEP, sem Parceiro/Setor) — ver pendência
+abaixo.
+
 ## Pendências
 - Definir o que efetivamente precisa ser reaproveitado do
   `modulo-posVenda` (lista ou critério), e em qual ordem.
@@ -103,3 +135,6 @@ repositório doador, e esse destino é o desaparecimento completo dele.
 - Nenhuma exclusão de código ou dado do `modulo-posVenda` deve ocorrer sem
   pedido explícito do usuário, mesmo depois desta decisão — isto não é
   autorização para o Dev ou o DevOps apagarem algo por conta própria.
+- (2026-08-22) Ao copiar o template de "Endereços" para o `Sistema_posvenda`
+  (FEAT-007), remover ou adaptar as partes dependentes de Parceiro/cotação/
+  Setor (ver Emenda acima) — decisão de implementação ainda não tomada.

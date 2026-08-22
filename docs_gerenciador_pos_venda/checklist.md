@@ -252,16 +252,18 @@ Responsável) com filtro por status e detalhe dos itens por INEP.
 **Dependências:** FEAT-004, FEAT-006.
 **Tipo de validação:** QA (QA-007).
 **Entrega do Dev:** nenhuma ainda.
-**Referência visual (não é reaproveitamento de código):** a tela "Endereços"
-do `modulo-posVenda` (menu Projeto → LastMile — `apps/leads/templates/leads/
-enderecos_lastmile.html` e partials em `apps/leads/templates/leads/
-partials/`) serve só de referência de UX para este grid: badge de status
-colorido, filtro por Status/Responsável e drill-down em modal de histórico.
-Confirmado com o usuário em 2026-08-22 — não é reaproveitamento de código;
-`ADR-001` continua descontinuando Leads/cadastro de Parceiro (base daquela
-tela). O Dev implementa a FEAT-007 do zero, adaptando o padrão visual ao
-domínio de INEP.
-**Pendência atual:** nenhuma.
+**Reaproveitamento de frontend (atualizado em 2026-08-22, ver `ADR-001`
+emenda):** o template da tela "Endereços" do `modulo-posVenda`
+(`apps/leads/templates/leads/enderecos_lastmile.html` e partials em
+`apps/leads/templates/leads/partials/`) e as regras de frontend dela (badge
+de status RN-043/067, filtros RN-035/066, cascata Setor→Responsável RN-060)
+podem ser copiados/adaptados para esta feature — não é mais só referência
+visual. Escopo limitado a essa tela; Provedores/cadastro de Parceiro
+continuam descontinuados. **Pendência de implementação:** remover ou
+adaptar, no template copiado, os trechos dependentes de Parceiro/cotação
+(RN-030/044) e de permissão por Setor, que não existem no
+`Sistema_posvenda`.
+**Pendência atual:** nenhuma além da pendência de implementação acima.
 
 ---
 
@@ -439,6 +441,7 @@ rodada) e o `docker-compose.hml.yml` correspondente.
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-08-22 | FEAT-007: nota atualizada de "referência visual" para reaproveitamento de código de fato (tela "Endereços" do `modulo-posVenda`) | Usuário confirmou, no mesmo dia, que quer copiar/adaptar o template e as regras de frontend dessa tela — não só usá-la como inspiração; `ADR-001` recebeu emenda registrando a exceção (escopo limitado a essa tela, Provedores/Parceiro continuam descontinuados) |
 | 2026-08-22 | FEAT-007 recebe nota de referência visual (tela "Endereços" do `modulo-posVenda`) | Usuário confirmou: é só inspiração de UX (badge de status, filtro, drill-down em modal), sem reaproveitar código — `ADR-001` continua descontinuando Leads/cadastro de Parceiro |
 | 2026-08-22 | FEAT-001 (logos) e FEAT-012 (Docker/CI) refeitos de verdade e commitados no `Sistema_posvenda` (`9cbdbba`, `9b0046e`, `53ca9f0`) — `docker compose up -d --build` validado com screenshot real, dado das 2.622 escolas preservado. `.env` daquele repositório também foi limpo (tinha credencial de AD/IXC/Graph copiada do `modulo-posVenda` por engano) |
 | 2026-08-22 | FEAT-002 reaberta (`🔍 → 🔄`) e FEAT-012 corrigida: o checkout local do `Sistema_posvenda` desapareceu do disco sem nunca ter sido commitado além de FEAT-001; ao re-clonar do GitHub, confirmou-se que a migração de dados (2.622 escolas) sobrevive no banco, mas os scripts/testes do FEAT-002 e toda a infraestrutura Docker/CI do FEAT-012 não existem no repositório — precisam ser refeitos e commitados. Ver também `ADR-001` |
