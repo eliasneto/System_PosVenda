@@ -73,6 +73,20 @@ los. Validado com screenshot real da tela de login e do dashboard
 autenticado — os 3 logos aparecem corretamente, sem ícone quebrado.
 **Commitado e enviado ao GitHub** (`9cbdbba`, branch `main`) — não ficou
 só no checkout local, para não repetir a perda do FEAT-012/FEAT-002.
+**Reaberta em 2026-08-22:** usuário confirmou com print que o autofill
+persistia mesmo com `autocomplete="off"` (Chrome/Edge ignoram esse valor
+de propósito em formulário de login).
+**Resolvida em 2026-08-22 (Dev, 2ª tentativa):** adicionados campos-isca
+escondidos (`fake_username`/`fake_password`, fora da tela) antes dos
+campos reais, para o navegador "gastar" o autofill de credencial salva
+neles; campo Senha real passou a usar `autocomplete="new-password"`
+(token que o Chrome respeita de fato). Validado com screenshot real
+(Edge headless, desktop 1366px): campos abrem vazios, sem quebra de
+layout; HTML servido conferido via `curl`. **Ressalva:** o ambiente de
+teste (Edge headless) não tem a senha salva do usuário, então não
+reproduz o autofill original — pedido ao usuário confirmar no navegador
+real (com recarregamento forçado, Ctrl+F5) se o preenchimento
+automático parou.
 
 ---
 
@@ -81,7 +95,7 @@ só no checkout local, para não repetir a perda do FEAT-012/FEAT-002.
 novo, com os campos adicionais (`lote`, `estado`, `municipio`) e o status
 de conexão (RN-007).
 **Tipo:** backend-only
-**Status:** 🔄 Em andamento
+**Status:** 🔍 Aguardando QA
 **Prioridade:** Alta
 **Critérios de aceite:**
 - Todos os INEPs existentes no `modulo-posVenda` migrados antes do sistema
@@ -104,26 +118,25 @@ sem divergência de valor. Nenhum INEP duplicado encontrado. Datas de
 instalação RE/RI não vêm da planilha — RN-007 já define preenchimento manual
 posterior via chamado IXC.
 **Entrega do Dev:**
-- Migradas as 2.622 escolas da planilha EACE para o banco do Sistema_posvenda.
-- Cada escola recebeu INEP (8 dígitos), lote, UF, município, nome, endereço,
-  velocidade e kit estimado.
-- Toda escola nova nasce com status "desconectado", conforme a RN-007.
-- Repetir a migração não duplica nem sobrescreve escola já existente.
-- Criados testes automatizados cobrindo a migração e a regra RN-007.
-- Contagem final confirmada: 2.622 escolas no banco, todas "desconectado".
-**Reaberta em 2026-08-22 (DevOps verificou o repositório):** o dado em si
-está confirmado — consultei agora o banco ao vivo do `Sistema_posvenda` e
-`Escola.objects.count()` retorna exatamente **2.622**, todas nascendo
-"desconectado" como descrito. Mas **o script/comando de migração e os
-testes automatizados citados abaixo não existem no repositório** — o
-`git log` do `Sistema_posvenda` só tem 2 commits, ambos `[FEAT-001]`, e não
-há nenhum `tests.py` no projeto inteiro. Ou seja: o resultado está certo no
-banco (sorte — é um volume Docker separado que sobreviveu ao
-desaparecimento da pasta local, ver pendência do FEAT-012), mas o código
-que produziu esse resultado nunca foi commitado. Isso não pode voltar para
-QA sem o script e os testes existirem de fato no repositório — reaberta
-para o Dev recriar e commitar o que falta (o dado já migrado não precisa
-ser refeito, só o código que comprova/reproduz a migração).
+- Recriado o comando `importar_escolas_planilha` (lê `CONSOLIDADO EACE.xlsx`,
+  aba `FATURAMENTO MATERIAIS`).
+- Mapeia LOTE/UF/MUNICIPIO/INEP/UNIDADE ESCOLAR/ENDEREÇO/VELOCIDADE/KIT WIFI
+  ESTIMADO para os campos de `Escola`.
+- INEP tratado como texto de 8 dígitos; reimportação não duplica nem
+  sobrescreve escola já existente (testado).
+- Criados 10 testes automatizados cobrindo a importação e a RN-007; todos
+  passando.
+- Rodado contra o banco real: 0 criada(s), 2.622 já existente(s) — reproduz
+  exatamente a migração já feita.
+- **Pendência:** nenhuma.
+**Resolvida em 2026-08-22 (Dev):** reaberta pelo DevOps porque o script e os
+testes da migração original não existiam no repositório (só o dado no
+banco). Comando e testes recriados a partir da mesma fonte
+(`CONSOLIDADO EACE.xlsx`, aba `FATURAMENTO MATERIAIS`) e confirmados contra
+o banco ao vivo: resultado idêntico ao já registrado (2.622 escolas, 0
+divergência). `openpyxl` adicionado ao `requirements.txt`; a planilha de
+origem foi incluída no `.gitignore` do `Sistema_posvenda` (dado de negócio,
+não deve ser versionado).
 
 ---
 
@@ -429,3 +442,4 @@ rodada) e o `docker-compose.hml.yml` correspondente.
 | 2026-08-21 | Conferência da fonte de migração (`CONSOLIDADO EACE.xlsx`) repetida a pedido do usuário; confirma o já registrado (2.622 INEPs únicos entre `FATURAMENTO MATERIAIS`/`BDO`/`MIP`, sem dado faltante). `FEAT-002` recebe pendência formal: dependência `FEAT-001` segue `🔍 Aguardando QA`, não `✅ Concluída` | Usuário pediu para chamar o Dev; Orquestrador não inicia outro agente automaticamente nem decide sozinho ignorar dependência obrigatória (CLAUDE.md §3) |
 | 2026-08-21 | Usuário autorizou explicitamente iniciar `FEAT-002` mesmo com `FEAT-001` ainda em `🔍 Aguardando QA` — exceção pontual só para esta feature | Perguntado diretamente ao usuário por ser decisão de escopo/dependência (CLAUDE.md §9); `FEAT-001` continua precisando de aprovação do QA de forma independente |
 | 2026-08-21 | FEAT-002 entregue pelo Dev, `🔍 Aguardando QA` — 2.622 escolas migradas para o banco do `Sistema_posvenda` (INEP, lote, UF, município, nome, endereço, velocidade, kit estimado), status inicial "desconectado" (RN-007) | Usuário autorizou chamar o Dev; entrega relatada pelo próprio Dev (idempotência e testes automatizados citados) — ainda sem verificação independente do QA |
+| 2026-08-22 | FEAT-001 recebe pendência: campos Usuário/Senha do `login.html` aparecem preenchidos ao carregar, por autofill do navegador (não há `value` fixo no template) | Usuário reportou; ajuste (`autocomplete="off"`) fica dentro da própria FEAT-001, sem gerar nova feature; implementação é do Dev, fora do escopo do Orquestrador |

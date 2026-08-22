@@ -6,3 +6,8 @@ __pycache__/
 db.sqlite3
 media/
 staticfiles/
+
+# Planilha de origem da migracao de Escola (FEAT-002) - dado de negocio,
+# nunca versionado; o comando importar_escolas_planilha aceita o caminho
+# como argumento.
+CONSOLIDADO EACE.xlsx
