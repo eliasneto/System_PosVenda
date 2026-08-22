@@ -1,5 +1,5 @@
 # Arquitetura Técnica — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-08-21_
+_Última atualização: 2026-08-22_
 
 > Esta pasta documenta um **sistema novo e separado** do `modulo-posVenda`
 > (repositório e banco de dados próprios, ver `requisitos.md`, bloco 0 e
@@ -144,6 +144,18 @@ INEP é considerado concluído (Faturado).
   forma visível desse bloqueio, não um jeito de contorná-lo; a divergência
   de KIT (RN-002) é só alerta visual (amarelo), não bloqueia.
 
+### Estrutura de navegação (menu lateral)
+
+- Menu lateral organizado em nível hierárquico: aba **"Projeto"** agrupando,
+  por enquanto, só o subitem **"EACE"**; dentro de "EACE" fica o grid
+  existente da FEAT-007 (hoje item de menu plano "Grid de INEPs" em
+  `core/base.html`).
+- Reorganização só de navegação/UI — não altera view, URL, template ou
+  lógica do grid da FEAT-007 (`apps/ri/views.py`, `grid_inep.html`), que
+  segue `🔍 Aguardando QA`.
+- Outros itens dentro de "Projeto" ficam em aberto para quando existirem
+  (usuário confirmou que, por ora, é só o agrupamento para EACE).
+
 ### Fora do escopo da v1 (gap — Hub de Integrações, dividido em v2 e v3)
 
 **Versão 2 — entrega 04/09/2026:**
@@ -156,7 +168,15 @@ INEP é considerado concluído (Faturado).
   (substitui a digitação manual do "lado IXC"); client já existe em
   `apps/integracoes/ixc` no `modulo-posVenda` original, reaproveitável
   quando isso for retomado.
-- Processo RE (instalação de link) com tela própria.
+- Processo RE (instalação de link) com tela própria. **Nota de
+  prontidão (2026-08-22):** o usuário confirmou que a v1 continua só RI —
+  RE não entra agora, nem como requisito, nem como tela. O pedido é só
+  arquitetural: quando a v3 for planejada, RE deve seguir o mesmo padrão
+  já usado pela RI — uma subatividade própria por Escola (hoje o model
+  `Ri`), não misturada dentro dela. Isso não antecipa modelo de dados,
+  status ou regra de RE — nada disso está decidido; é só a orientação de
+  que RE ganha seu próprio model/tela quando chegar a hora, no mesmo
+  formato da RI, em vez de ser encaixada dentro do que já existe.
 
 ## Decisões Pendentes
 
@@ -193,6 +213,7 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-08-22 | Nota de prontidão para RE na seção "Fora do escopo da v1" (Versão 3) | Usuário pediu para deixar a arquitetura pronta para RE, mas confirmou que a v1 continua só RI e que os requisitos não devem ser alterados agora — registrado só como orientação de padrão (RE ganha model/tela próprios, não entra dentro da RI), sem antecipar modelo, status ou regra de RE |
 | 2026-08-22 | Módulo "Frontend da tela Endereços" adicionado aos reaproveitados; ADR-001 recebe emenda | Usuário confirmou reaproveitamento de código (não só referência visual) do frontend da tela Endereços do `modulo-posVenda` para a FEAT-007, mantendo descontinuados Provedores/Parceiro e o restante de Leads |
 | 2026-08-22 | ADR-001 e seção "Relação com o `modulo-posVenda`" | Usuário definiu o destino final: um único sistema (este); `modulo-posVenda` é fonte de reaproveitamento até ser eliminado |
 | 2026-08-20 | Criação do documento e do conjunto de diagramas 01/02 | Primeiro registro de arquitetura do Gerenciador Pós-Venda, a partir de `requisitos.md` |
@@ -213,3 +234,4 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 | 2026-08-21 | Nome de exibição ("Gerenciador Pós Venda", sem hífen) e versionamento (1.0.0 para a v1) definidos | Usuário definiu o nome exibido no menu e a primeira versão do sistema antes do início do desenvolvimento |
 | 2026-08-21 | Repositório do sistema novo registrado (`Sistema_posvenda`, privado); FEAT-001 entregue pelo Dev | Usuário criou o repositório no GitHub; Dev montou a base do projeto (config, apps core/escolas/ri/auditoria) sobre ele |
 | 2026-08-21 | Catálogo de tipos de divergência (P-03) sai de "Decisões Pendentes" — confirmado pelo cliente | Pendência restante do confronto EACE×IXC passa a ser só o critério de casamento entre itens (ainda em aberto) |
+| 2026-08-22 | Estrutura de navegação do menu lateral definida: aba "Projeto" > "EACE" > grid da FEAT-007 | Usuário pediu reorganização do menu (hoje item plano "Grid de INEPs"); confirmado que é o mesmo grid da FEAT-007, sem lógica nova, e que "Projeto" por ora só agrupa "EACE" |

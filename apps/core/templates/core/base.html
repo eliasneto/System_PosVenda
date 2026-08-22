@@ -66,10 +66,21 @@
                 <i data-lucide="layout-dashboard" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
                 <span class="text-sm font-semibold">Dashboard</span>
             </a>
-            <a href="{% url 'grid_inep' %}" class="flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 {% if request.resolver_match.url_name == 'grid_inep' %} sidebar-link-active {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %} group">
-                <i data-lucide="table-2" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
-                <span class="text-sm font-semibold">Grid de INEPs</span>
-            </a>
+
+            <div class="mb-1 relative">
+                <button onclick="toggleSubmenu('submenu-projeto', 'seta-projeto')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'grid_inep' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="folder-kanban" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
+                        <span class="text-sm font-semibold">Projeto</span>
+                    </div>
+                    <i data-lucide="chevron-down" id="seta-projeto" class="w-4 h-4 transition-transform duration-300 {% if request.resolver_match.url_name == 'grid_inep' %} rotate-180 {% endif %}"></i>
+                </button>
+                <div id="submenu-projeto" class="{% if request.resolver_match.url_name != 'grid_inep' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
+                    <a href="{% url 'grid_inep' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'grid_inep' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'grid_inep' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> EACE
+                    </a>
+                </div>
+            </div>
         </nav>
 
         <div class="mt-auto mb-8 px-6">
@@ -124,6 +135,18 @@
 
     <script>
         lucide.createIcons();
+
+        function toggleSubmenu(menuId, arrowId) {
+            const menu = document.getElementById(menuId);
+            const arrow = document.getElementById(arrowId);
+            if (menu.classList.contains('hidden')) {
+                menu.classList.remove('hidden');
+                arrow.classList.add('rotate-180');
+            } else {
+                menu.classList.add('hidden');
+                arrow.classList.remove('rotate-180');
+            }
+        }
 
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');

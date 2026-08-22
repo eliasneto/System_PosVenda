@@ -248,6 +248,10 @@ Responsável) com filtro por status e detalhe dos itens por INEP.
 - Filtro por status disponível no grid principal (grid único de itens, não
   separado por tipo de validação).
 - INEP com divergência aberta aparece com fundo vermelho (RN-003).
+- Item de menu reorganizado em hierarquia: aba "Projeto" > "EACE" > grid
+  (hoje item plano "Grid de INEPs" em `core/base.html`); ver
+  `architecture.md`, "Estrutura de navegação (menu lateral)". Só
+  navegação/UI — sem mudança de view, URL, template ou lógica do grid.
 **Regras relacionadas:** RN-003, RF-05, RF-06.
 **Dependências:** FEAT-004, FEAT-006 — **exceção autorizada explicitamente
 pelo usuário em 2026-08-22** para iniciar fora de ordem (mesmo precedente
@@ -280,6 +284,21 @@ essa feature existir — comportamento esperado, não é bug.
 verdade em vez de "Sem RI" — nenhuma mudança de código esperada, só dado.
 **Pendência atual:** nenhuma — isto não iniciou a FEAT-007 (depende de
 FEAT-004/FEAT-006, ainda `⬜ Pendente`); é só a referência de frontend.
+
+**Entrega do Dev (2026-08-22) — reorganização do menu (frontend-layout):**
+- Menu lateral reorganizado em `core/base.html`: item plano "Grid de INEPs"
+  virou grupo recolhível "Projeto" (padrão trazido do `modulo-posVenda`,
+  mesma função `toggleSubmenu`) com o subitem "EACE", que leva ao mesmo
+  grid da FEAT-007. Nenhuma view, URL, template ou lógica do grid mudou.
+- Suíte `apps/ri`/`apps/core` (8 testes) executada dentro do container
+  Docker: passou sem alteração de resultado.
+- Validação visual em navegador (Playwright) contra o app real em Docker,
+  autenticado: grupo "Projeto" fechado e aberto, navegação até o grid via
+  "EACE", em 1366px e 390px — sem quebra de layout, sem erro de console.
+- Só alteração visual/navegação, sem lógica nova — segue direto para
+  validação visual do usuário, sem novo ciclo de QA (CLAUDE.md §3).
+**Status desta reorganização:** 👤 Aguardando validação visual do usuário.
+A FEAT-007 em si (grid funcional) continua `🔍 Aguardando QA`, sem mudança.
 
 ---
 
@@ -479,3 +498,4 @@ rodada) e o `docker-compose.hml.yml` correspondente.
 | 2026-08-21 | Usuário autorizou explicitamente iniciar `FEAT-002` mesmo com `FEAT-001` ainda em `🔍 Aguardando QA` — exceção pontual só para esta feature | Perguntado diretamente ao usuário por ser decisão de escopo/dependência (CLAUDE.md §9); `FEAT-001` continua precisando de aprovação do QA de forma independente |
 | 2026-08-21 | FEAT-002 entregue pelo Dev, `🔍 Aguardando QA` — 2.622 escolas migradas para o banco do `Sistema_posvenda` (INEP, lote, UF, município, nome, endereço, velocidade, kit estimado), status inicial "desconectado" (RN-007) | Usuário autorizou chamar o Dev; entrega relatada pelo próprio Dev (idempotência e testes automatizados citados) — ainda sem verificação independente do QA |
 | 2026-08-22 | FEAT-001 recebe pendência: campos Usuário/Senha do `login.html` aparecem preenchidos ao carregar, por autofill do navegador (não há `value` fixo no template) | Usuário reportou; ajuste (`autocomplete="off"`) fica dentro da própria FEAT-001, sem gerar nova feature; implementação é do Dev, fora do escopo do Orquestrador |
+| 2026-08-22 | FEAT-007 recebe critério de aceite adicional: menu lateral reorganizado em aba "Projeto" > "EACE" > grid (hoje item plano "Grid de INEPs") | Usuário pediu a reorganização; confirmado que é o mesmo grid da FEAT-007 (sem lógica nova) e que "Projeto" por ora só agrupa "EACE"; ver `architecture.md`, "Estrutura de navegação (menu lateral)"; implementação é do Dev, fora do escopo do Orquestrador |
