@@ -251,19 +251,23 @@ Responsável) com filtro por status e detalhe dos itens por INEP.
 **Regras relacionadas:** RN-003, RF-05, RF-06.
 **Dependências:** FEAT-004, FEAT-006.
 **Tipo de validação:** QA (QA-007).
-**Entrega do Dev:** nenhuma ainda.
-**Reaproveitamento de frontend (atualizado em 2026-08-22, ver `ADR-001`
-emenda):** o template da tela "Endereços" do `modulo-posVenda`
-(`apps/leads/templates/leads/enderecos_lastmile.html` e partials em
-`apps/leads/templates/leads/partials/`) e as regras de frontend dela (badge
-de status RN-043/067, filtros RN-035/066, cascata Setor→Responsável RN-060)
-podem ser copiados/adaptados para esta feature — não é mais só referência
-visual. Escopo limitado a essa tela; Provedores/cadastro de Parceiro
-continuam descontinuados. **Pendência de implementação:** remover ou
-adaptar, no template copiado, os trechos dependentes de Parceiro/cotação
-(RN-030/044) e de permissão por Setor, que não existem no
-`Sistema_posvenda`.
-**Pendência atual:** nenhuma além da pendência de implementação acima.
+**Entrega do Dev:** trazida a referência de frontend (2026-08-22) em
+`docs_gerenciador_pos_venda/frontend_reference/` (`grid_inep_referencia.html`
++ `README.md`) — HTML estático, dado de exemplo, sem view/URL, adaptado da
+tela "Endereços" do `modulo-posVenda`: cabeçalho com card de total,
+formulário de busca/filtro, grid com badge de status colorido e linha
+expansível de drill-down (RN-043/067 de origem), fundo vermelho para
+divergência aberta, estado vazio, paginação e toast de feedback. Excluídos
+os trechos dependentes de Parceiro/cotação (RN-030/044) e de Setor — não
+foram trazidos. Verificado em 1366px e 390px (Edge headless); o único
+scroll horizontal é o do próprio grid, mesmo comportamento já documentado
+na tela de origem.
+**Pendência de implementação (quando a FEAT-007 for de fato iniciada):**
+portar essa referência para um template Django real em
+`apps/ri/templates/ri/`, ligar a view/URL e ao catálogo real de status
+(RN-001).
+**Pendência atual:** nenhuma — isto não iniciou a FEAT-007 (depende de
+FEAT-004/FEAT-006, ainda `⬜ Pendente`); é só a referência de frontend.
 
 ---
 
@@ -441,6 +445,7 @@ rodada) e o `docker-compose.hml.yml` correspondente.
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-08-22 | Dev entrega referência de frontend da FEAT-007 (`docs_gerenciador_pos_venda/frontend_reference/`) | HTML estático adaptado da tela "Endereços" do `modulo-posVenda`, verificado em 1366px/390px; não inicia a FEAT-007 (dependências FEAT-004/006 continuam pendentes) — é só material de apoio para quando ela for implementada |
 | 2026-08-22 | FEAT-007: nota atualizada de "referência visual" para reaproveitamento de código de fato (tela "Endereços" do `modulo-posVenda`) | Usuário confirmou, no mesmo dia, que quer copiar/adaptar o template e as regras de frontend dessa tela — não só usá-la como inspiração; `ADR-001` recebeu emenda registrando a exceção (escopo limitado a essa tela, Provedores/Parceiro continuam descontinuados) |
 | 2026-08-22 | FEAT-007 recebe nota de referência visual (tela "Endereços" do `modulo-posVenda`) | Usuário confirmou: é só inspiração de UX (badge de status, filtro, drill-down em modal), sem reaproveitar código — `ADR-001` continua descontinuando Leads/cadastro de Parceiro |
 | 2026-08-22 | FEAT-001 (logos) e FEAT-012 (Docker/CI) refeitos de verdade e commitados no `Sistema_posvenda` (`9cbdbba`, `9b0046e`, `53ca9f0`) — `docker compose up -d --build` validado com screenshot real, dado das 2.622 escolas preservado. `.env` daquele repositório também foi limpo (tinha credencial de AD/IXC/Graph copiada do `modulo-posVenda` por engano) |

@@ -1,0 +1,249 @@
+<!--
+  REFERÊNCIA DE FRONTEND — FEAT-007 (Grid de INEPs com drill-down)
+  Não é um template Django. Não está ligado a nenhuma view/URL.
+  Dado de exemplo fictício, só para visualizar o padrão de UI.
+
+  Origem: modulo-posVenda, tela "Endereços" (menu Projeto → LastMile,
+  apps/leads/templates/leads/enderecos_lastmile.html), trazida por decisão
+  registrada em ADR-001 (emenda 2026-08-22) — ver README.md desta pasta
+  para o que foi e o que não foi trazido.
+-->
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Referência — Grid de INEPs (FEAT-007)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .bg-pv-black { background-color: #0F0F0F; }
+    .bg-pv-yellow { background-color: #FFC107; }
+    .text-pv-yellow { color: #FFC107; }
+</style>
+</head>
+<body class="bg-[#F8F9FA] text-gray-900 antialiased">
+
+<div class="messages-container fixed top-6 right-6 z-[100] flex flex-col gap-3"></div>
+
+<div class="max-w-7xl mx-auto p-6 md:p-10">
+    <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+        <div>
+            <nav class="flex mb-2" aria-label="Breadcrumb">
+                <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400">
+                    <li class="text-gray-900">Faturamento EACE</li>
+                </ol>
+            </nav>
+            <h1 class="text-4xl font-black text-gray-900 italic uppercase tracking-tighter leading-none">
+                Grid <span class="text-amber-500">/</span> INEPs
+            </h1>
+            <p class="text-sm text-gray-500 mt-3 font-bold uppercase tracking-wider">Processo RI — implantação até faturamento concluído</p>
+        </div>
+
+        <div class="flex gap-4">
+            <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+                <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Total de INEPs</p>
+                <p class="text-xl font-black italic text-pv-yellow">2.622</p>
+            </div>
+            <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+                <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Com divergência</p>
+                <p class="text-xl font-black italic text-red-400">3</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Formulário de busca/filtro — mesmo padrão da tela de origem (campos genéricos de texto + status) -->
+    <form class="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm mb-8 flex flex-col lg:flex-row lg:flex-wrap gap-3 lg:items-center" onsubmit="return false;">
+        <div class="relative w-full lg:flex-1 lg:min-w-[12rem]">
+            <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300"></i>
+            <input type="text" placeholder="Buscar por INEP, nome da escola, município ou UF..."
+                   class="w-full pl-12 pr-4 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 uppercase">
+        </div>
+
+        <!-- Filtro por status: catálogo real vem da RN-001 quando a FEAT-006 existir; abaixo, só exemplo -->
+        <select data-select-placeholder class="w-full lg:w-56 px-4 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 uppercase">
+            <option value="">Status</option>
+            <option>Implantação EACE</option>
+            <option>Andamento</option>
+            <option>Correção MEGA</option>
+            <option>Envio de Email para faturamento</option>
+            <option>Aguardando financeiro</option>
+            <option>Aguardando Anexo portal EACE</option>
+            <option>Aguardando validação EACE</option>
+            <option>Faturamento Concluído</option>
+        </select>
+
+        <div class="flex gap-2 w-full lg:w-auto">
+            <button type="submit" class="px-6 py-4 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
+                Filtrar
+            </button>
+            <button type="button" class="px-4 py-4 bg-gray-100 text-gray-400 rounded-2xl hover:bg-red-50 hover:text-red-500 transition flex items-center justify-center" title="Limpar filtros">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+    </form>
+
+    <div class="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden flex flex-col">
+        <div class="overflow-x-auto contain-layout">
+            <table class="min-w-full text-left border-collapse">
+                <thead>
+                    <tr class="text-[10px] font-black uppercase text-gray-500 bg-gray-100 border-b border-gray-300 divide-x divide-gray-300">
+                        <th class="px-4 py-2">INEP</th>
+                        <th class="px-4 py-2">Nome da Escola</th>
+                        <th class="px-4 py-2">Endereço</th>
+                        <th class="px-4 py-2">Status</th>
+                        <th class="px-4 py-2">Responsável</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-300">
+                    <!-- Linha normal, sem divergência aberta -->
+                    <tr class="hover:bg-gray-50 transition-all group cursor-pointer divide-x divide-gray-300" data-inep-toggle title="Clique para ver os itens EACE e IXC">
+                        <td class="px-4 py-2">
+                            <div class="flex items-center gap-2">
+                                <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-gray-300 shrink-0 transition-transform" data-inep-chevron></i>
+                                <span class="font-black text-gray-900 italic uppercase text-[12px] leading-none">21050862</span>
+                            </div>
+                        </td>
+                        <td class="px-4 py-2"><span class="font-black text-gray-900 uppercase text-[11px]">EMEF José de Alencar</span></td>
+                        <td class="px-4 py-2"><span class="text-[11px] text-gray-600 font-bold">Rua das Palmeiras, 120 — Fortaleza/CE</span></td>
+                        <td class="px-4 py-2">
+                            <span class="inline-flex items-center gap-2">
+                                <span class="w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0"></span>
+                                <span class="text-[11px] font-bold text-gray-800">Andamento</span>
+                            </span>
+                        </td>
+                        <td class="px-4 py-2"><span class="text-[11px] font-bold text-gray-800">Ana Souza</span></td>
+                    </tr>
+                    <tr class="hidden" data-inep-detalhe>
+                        <td colspan="5" class="px-8 py-6 bg-gray-50/60">
+                            <p class="text-[10px] font-black uppercase text-gray-400 mb-2">Itens (EACE × IXC) — exemplo</p>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-[11px]">
+                                <div class="bg-white border border-gray-200 rounded-xl p-3">
+                                    <p class="font-black uppercase text-gray-500 mb-1">Lado EACE</p>
+                                    <p class="text-gray-700">Kit Wi-Fi — 2 un. — R$ 350,00</p>
+                                </div>
+                                <div class="bg-white border border-gray-200 rounded-xl p-3">
+                                    <p class="font-black uppercase text-gray-500 mb-1">Lado IXC</p>
+                                    <p class="text-gray-700">Kit Wi-Fi — 2 un. — R$ 350,00</p>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <!-- Linha com divergência aberta: fundo vermelho (critério de aceite da FEAT-007) -->
+                    <tr class="hover:bg-red-100 transition-all group cursor-pointer divide-x divide-red-200 bg-red-50" data-inep-toggle title="Clique para ver os itens EACE e IXC">
+                        <td class="px-4 py-2">
+                            <div class="flex items-center gap-2">
+                                <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-red-300 shrink-0 transition-transform" data-inep-chevron></i>
+                                <span class="font-black text-gray-900 italic uppercase text-[12px] leading-none">21050901</span>
+                            </div>
+                        </td>
+                        <td class="px-4 py-2"><span class="font-black text-gray-900 uppercase text-[11px]">EMEF Maria Firmina</span></td>
+                        <td class="px-4 py-2"><span class="text-[11px] text-gray-600 font-bold">Av. Beira Mar, 900 — Fortaleza/CE</span></td>
+                        <td class="px-4 py-2">
+                            <span class="inline-flex items-center gap-2">
+                                <span class="w-2.5 h-2.5 rounded-full bg-orange-500 shrink-0"></span>
+                                <span class="text-[11px] font-bold text-gray-800">Correção MEGA</span>
+                            </span>
+                        </td>
+                        <td class="px-4 py-2"><span class="text-[11px] font-bold text-gray-800">Carlos Lima</span></td>
+                    </tr>
+                    <tr class="hidden" data-inep-detalhe>
+                        <td colspan="5" class="px-8 py-6 bg-red-50/60">
+                            <p class="text-[10px] font-black uppercase text-red-500 mb-2">Divergência aberta — quantidade não bate</p>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-[11px]">
+                                <div class="bg-white border border-red-200 rounded-xl p-3">
+                                    <p class="font-black uppercase text-gray-500 mb-1">Lado EACE</p>
+                                    <p class="text-gray-700">Kit Wi-Fi — 3 un. — R$ 350,00</p>
+                                </div>
+                                <div class="bg-white border border-red-200 rounded-xl p-3">
+                                    <p class="font-black uppercase text-gray-500 mb-1">Lado IXC</p>
+                                    <p class="text-gray-700">Kit Wi-Fi — 2 un. — R$ 350,00</p>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <!-- Estado vazio (não aparece junto com as linhas acima; ilustrado à parte no rodapé) -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="bg-gray-50/50 px-8 py-6 border-t border-gray-100 flex items-center justify-between">
+            <span class="text-[10px] font-black text-gray-400 uppercase italic tracking-widest">Página 1 de 132</span>
+            <div class="flex gap-2">
+                <a href="#" class="p-2.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition shadow-sm text-gray-600">
+                    <i data-lucide="chevron-left" class="w-5 h-5"></i>
+                </a>
+                <a href="#" class="p-2.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition shadow-sm text-gray-600">
+                    <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Estado vazio (referência isolada — não usar junto com o grid preenchido acima) -->
+    <div class="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm mt-8 px-8 py-20 text-center">
+        <div class="flex flex-col items-center gap-4 opacity-40">
+            <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400">
+                <i data-lucide="search-x" class="w-8 h-8"></i>
+            </div>
+            <div>
+                <p class="font-black italic uppercase text-gray-600">Nenhum INEP encontrado</p>
+                <p class="text-xs font-bold text-gray-400 mt-1">Ajuste os filtros de busca, município, UF ou status.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+lucide.createIcons();
+
+// Drill-down: clique na linha do INEP expande/recolhe a linha de detalhe
+// imediatamente abaixo — mesmo padrão da tela de origem (data-escola-toggle).
+document.querySelectorAll('[data-inep-toggle]').forEach(function (linha) {
+    linha.addEventListener('click', function () {
+        var detalhe = linha.nextElementSibling;
+        if (!detalhe || !detalhe.hasAttribute('data-inep-detalhe')) return;
+        var expandido = !detalhe.classList.contains('hidden');
+        detalhe.classList.toggle('hidden', expandido);
+        var chevron = linha.querySelector('[data-inep-chevron]');
+        if (chevron) chevron.classList.toggle('rotate-90', !expandido);
+    });
+});
+
+// Cor do placeholder do select de Status — mesmo padrão da tela de origem.
+document.querySelectorAll('select[data-select-placeholder]').forEach(function (select) {
+    function atualizarCorSelect() {
+        select.classList.toggle('text-gray-400', !select.value);
+        select.classList.toggle('text-gray-800', !!select.value);
+    }
+    select.addEventListener('change', atualizarCorSelect);
+    atualizarCorSelect();
+});
+
+// Toast de feedback (sucesso/erro) — mesmo padrão da tela de origem.
+function exibirToastReferencia(texto, tipo) {
+    var container = document.querySelector('.messages-container');
+    if (!container || !texto) return;
+    var sucesso = tipo === 'success';
+    var toast = document.createElement('div');
+    toast.className = 'px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 min-w-[300px] ' +
+        (sucesso ? 'bg-green-50 border-green-100 text-green-800' : 'bg-red-50 border-red-100 text-red-800');
+    var icone = document.createElement('i');
+    icone.setAttribute('data-lucide', sucesso ? 'check-circle' : 'alert-circle');
+    icone.className = 'w-5 h-5';
+    var texto_el = document.createElement('span');
+    texto_el.className = 'text-xs font-bold uppercase tracking-tight';
+    texto_el.textContent = texto;
+    toast.appendChild(icone);
+    toast.appendChild(texto_el);
+    container.appendChild(toast);
+    lucide.createIcons();
+    setTimeout(function () { toast.remove(); }, 5000);
+}
+</script>
+</body>
+</html>
