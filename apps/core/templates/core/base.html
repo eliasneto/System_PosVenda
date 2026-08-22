@@ -66,6 +66,10 @@
                 <i data-lucide="layout-dashboard" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
                 <span class="text-sm font-semibold">Dashboard</span>
             </a>
+            <a href="{% url 'grid_inep' %}" class="flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 {% if request.resolver_match.url_name == 'grid_inep' %} sidebar-link-active {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %} group">
+                <i data-lucide="table-2" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
+                <span class="text-sm font-semibold">Grid de INEPs</span>
+            </a>
         </nav>
 
         <div class="mt-auto mb-8 px-6">

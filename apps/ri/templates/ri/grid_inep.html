@@ -1,0 +1,190 @@
+{% extends "core/base.html" %}
+
+{% block title %}Gerenciador Pós Venda | Grid de INEPs{% endblock %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400">
+                <li class="text-gray-900">Faturamento EACE</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 italic uppercase tracking-tighter leading-none">
+            Grid <span class="text-pv-yellow">/</span> INEPs
+        </h1>
+        <p class="text-sm text-gray-500 mt-3 font-bold uppercase tracking-wider">Processo RI — implantação até faturamento concluído</p>
+    </div>
+
+    <div class="flex gap-4">
+        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Total de INEPs</p>
+            <p class="text-xl font-black italic text-pv-yellow">{{ total_inep }}</p>
+        </div>
+        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Com divergência</p>
+            <p class="text-xl font-black italic {% if total_divergencia %}text-red-400{% else %}text-pv-yellow{% endif %}">{{ total_divergencia }}</p>
+        </div>
+    </div>
+</div>
+
+<form method="GET" class="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm mb-8 flex flex-col lg:flex-row lg:flex-wrap gap-3 lg:items-center">
+    <div class="relative w-full lg:flex-1 lg:min-w-[12rem]">
+        <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300"></i>
+        <input type="text" name="q" value="{{ q }}" placeholder="Buscar por INEP, nome da escola, município ou UF..."
+               class="w-full pl-12 pr-4 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 uppercase">
+    </div>
+
+    <select name="status" data-select-placeholder class="w-full lg:w-56 px-4 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 uppercase">
+        <option value="">Status</option>
+        {% for valor, rotulo in status_opcoes %}
+        <option value="{{ valor }}" {% if status_filtro == valor %}selected{% endif %}>{{ rotulo }}</option>
+        {% endfor %}
+    </select>
+
+    <div class="flex gap-2 w-full lg:w-auto">
+        <button type="submit" class="px-6 py-4 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
+            Filtrar
+        </button>
+        {% if q or status_filtro %}
+        <a href="{% url 'grid_inep' %}" class="px-4 py-4 bg-gray-100 text-gray-400 rounded-2xl hover:bg-red-50 hover:text-red-500 transition flex items-center justify-center" title="Limpar filtros">
+            <i data-lucide="x" class="w-5 h-5"></i>
+        </a>
+        {% endif %}
+    </div>
+</form>
+
+<div class="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden flex flex-col">
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 bg-gray-100 border-b border-gray-300 divide-x divide-gray-300">
+                    <th class="px-4 py-2">INEP</th>
+                    <th class="px-4 py-2">Nome da Escola</th>
+                    <th class="px-4 py-2">Endereço</th>
+                    <th class="px-4 py-2" title="Vermelho = divergência aberta (RN-003)">Status</th>
+                    <th class="px-4 py-2">Responsável</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-300">
+                {% for linha in page_obj %}
+                <tr class="hover:bg-{% if linha.divergencia_aberta %}red-100{% else %}gray-50{% endif %} transition-all group cursor-pointer divide-x divide-gray-300 {% if linha.divergencia_aberta %}bg-red-50{% endif %}"
+                    data-inep-toggle title="Clique para ver os itens EACE e IXC">
+                    <td class="px-4 py-2">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="chevron-right" class="w-3.5 h-3.5 {% if linha.divergencia_aberta %}text-red-300{% else %}text-gray-300{% endif %} shrink-0 transition-transform" data-inep-chevron></i>
+                            <span class="font-black text-gray-900 italic uppercase text-[12px] leading-none">{{ linha.escola.inep }}</span>
+                        </div>
+                    </td>
+                    <td class="px-4 py-2"><span class="font-black text-gray-900 uppercase text-[11px]">{{ linha.escola.nome }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 font-bold">{{ linha.escola.endereco|default:"Não informado" }}{% if linha.escola.municipio %} — {{ linha.escola.municipio }}/{{ linha.escola.estado }}{% endif %}</span></td>
+                    <td class="px-4 py-2">
+                        <span class="inline-flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full shrink-0 {% if not linha.ri %}bg-gray-300{% elif linha.divergencia_aberta %}bg-orange-500{% elif linha.ri.status == 'faturamento_concluido' %}bg-green-500{% else %}bg-blue-500{% endif %}"></span>
+                            <span class="text-[11px] font-bold text-gray-800">{% if linha.ri %}{{ linha.ri.get_status_display }}{% else %}Sem RI{% endif %}</span>
+                        </span>
+                    </td>
+                    <td class="px-4 py-2">
+                        <span class="text-[11px] font-bold text-gray-800">
+                            {% if linha.ri and linha.ri.responsavel %}{{ linha.ri.responsavel.get_full_name|default:linha.ri.responsavel.username }}{% else %}Não atribuído{% endif %}
+                        </span>
+                    </td>
+                </tr>
+                <tr class="hidden" data-inep-detalhe>
+                    <td colspan="5" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %}">
+                        {% if not linha.ri %}
+                        <p class="text-[11px] font-bold text-gray-500 uppercase">RI ainda não implantado para este INEP (aguardando FEAT-004).</p>
+                        {% else %}
+                        {% if linha.divergencia_aberta %}
+                        <p class="text-[10px] font-black uppercase text-red-500 mb-2">Divergência aberta</p>
+                        {% else %}
+                        <p class="text-[10px] font-black uppercase text-gray-400 mb-2">Itens (EACE × IXC)</p>
+                        {% endif %}
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-[11px]">
+                            <div class="bg-white border border-gray-200 rounded-xl p-3">
+                                <p class="font-black uppercase text-gray-500 mb-1">Lado EACE</p>
+                                {% for item in linha.ri.itens_eace.all %}
+                                <p class="text-gray-700">{{ item.descricao_item }} — {{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</p>
+                                {% empty %}
+                                <p class="text-gray-400 italic">Nenhum item lançado.</p>
+                                {% endfor %}
+                            </div>
+                            <div class="bg-white border border-gray-200 rounded-xl p-3">
+                                <p class="font-black uppercase text-gray-500 mb-1">Lado IXC</p>
+                                {% for item in linha.ri.itens_ixc.all %}
+                                <p class="text-gray-700">{{ item.descricao_item }} — {{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</p>
+                                {% empty %}
+                                <p class="text-gray-400 italic">Nenhum item lançado.</p>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5" class="px-8 py-20 text-center">
+                        <div class="flex flex-col items-center gap-4 opacity-40">
+                            <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400">
+                                <i data-lucide="search-x" class="w-8 h-8"></i>
+                            </div>
+                            <div>
+                                <p class="font-black italic uppercase text-gray-600">Nenhum INEP encontrado</p>
+                                <p class="text-xs font-bold text-gray-400 mt-1">Ajuste os filtros de busca ou status.</p>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if page_obj.has_other_pages %}
+    <div class="bg-gray-50/50 px-8 py-6 border-t border-gray-100 flex items-center justify-between">
+        <span class="text-[10px] font-black text-gray-400 uppercase italic tracking-widest">
+            Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}
+        </span>
+        <div class="flex gap-2">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q }}{% endif %}{% if status_filtro %}&status={{ status_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition shadow-sm text-gray-600">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q }}{% endif %}{% if status_filtro %}&status={{ status_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition shadow-sm text-gray-600">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Drill-down: clique na linha do INEP expande/recolhe a linha de detalhe
+// imediatamente abaixo (mesmo padrão da tela "Endereços" do modulo-posVenda,
+// trazido pela referência de frontend da FEAT-007).
+document.querySelectorAll('[data-inep-toggle]').forEach(function (linha) {
+    linha.addEventListener('click', function () {
+        var detalhe = linha.nextElementSibling;
+        if (!detalhe || !detalhe.hasAttribute('data-inep-detalhe')) return;
+        var expandido = !detalhe.classList.contains('hidden');
+        detalhe.classList.toggle('hidden', expandido);
+        var chevron = linha.querySelector('[data-inep-chevron]');
+        if (chevron) chevron.classList.toggle('rotate-90', !expandido);
+    });
+});
+
+document.querySelectorAll('select[data-select-placeholder]').forEach(function (select) {
+    function atualizarCorSelect() {
+        select.classList.toggle('text-gray-400', !select.value);
+        select.classList.toggle('text-gray-800', !!select.value);
+    }
+    select.addEventListener('change', atualizarCorSelect);
+    atualizarCorSelect();
+});
+</script>
+{% endblock %}

@@ -240,7 +240,7 @@ aberta.
 **Descrição:** Grid principal (INEP, Nome da escola, Endereço, Status,
 Responsável) com filtro por status e detalhe dos itens por INEP.
 **Tipo:** frontend-functional
-**Status:** ⬜ Pendente
+**Status:** 🔍 Aguardando QA
 **Prioridade:** Alta
 **Critérios de aceite:**
 - Uma linha do grid por INEP; botão de detalhe abre os itens (EACE e IXC)
@@ -249,23 +249,35 @@ Responsável) com filtro por status e detalhe dos itens por INEP.
   separado por tipo de validação).
 - INEP com divergência aberta aparece com fundo vermelho (RN-003).
 **Regras relacionadas:** RN-003, RF-05, RF-06.
-**Dependências:** FEAT-004, FEAT-006.
+**Dependências:** FEAT-004, FEAT-006 — **exceção autorizada explicitamente
+pelo usuário em 2026-08-22** para iniciar fora de ordem (mesmo precedente
+da FEAT-002), já que o modelo `Ri`/`RiItemEace`/`RiItemIxc`/`RiDivergencia`
+já existia desde a FEAT-001. Consequência: hoje não há tela de cadastro
+manual de RI (FEAT-004), então o grid real mostra "Sem RI" em todo INEP até
+essa feature existir — comportamento esperado, não é bug.
 **Tipo de validação:** QA (QA-007).
-**Entrega do Dev:** trazida a referência de frontend (2026-08-22) em
-`docs_gerenciador_pos_venda/frontend_reference/` (`grid_inep_referencia.html`
-+ `README.md`) — HTML estático, dado de exemplo, sem view/URL, adaptado da
-tela "Endereços" do `modulo-posVenda`: cabeçalho com card de total,
-formulário de busca/filtro, grid com badge de status colorido e linha
-expansível de drill-down (RN-043/067 de origem), fundo vermelho para
-divergência aberta, estado vazio, paginação e toast de feedback. Excluídos
-os trechos dependentes de Parceiro/cotação (RN-030/044) e de Setor — não
-foram trazidos. Verificado em 1366px e 390px (Edge headless); o único
-scroll horizontal é o do próprio grid, mesmo comportamento já documentado
-na tela de origem.
-**Pendência de implementação (quando a FEAT-007 for de fato iniciada):**
-portar essa referência para um template Django real em
-`apps/ri/templates/ri/`, ligar a view/URL e ao catálogo real de status
-(RN-001).
+**Entrega do Dev (2026-08-22):**
+- Grid real implementado — `apps/ri/views.py` (`grid_inep_view`),
+  `apps/ri/urls.py`, `apps/ri/templates/ri/grid_inep.html` — e item de menu
+  "Grid de INEPs" adicionado em `core/base.html`.
+- Frontend trazido da tela "Endereços" do `modulo-posVenda` (referência
+  registrada antes em `docs_gerenciador_pos_venda/frontend_reference/`):
+  badge de status colorido, linha expansível de drill-down, fundo vermelho
+  para divergência aberta, busca, filtro por status, paginação e estado
+  vazio. Excluídos os trechos de Parceiro/cotação/Setor, como já decidido.
+- Consulta com `prefetch_related` (Escola → RI mais recente → itens/
+  divergências) para não gerar N+1.
+- 8 testes automatizados (`apps/ri/tests.py`): login obrigatório, caminho
+  principal com as 2.622 escolas reais, filtro por status, busca por INEP/
+  nome/município/UF, estado vazio, divergência aberta soma no card e marca
+  a linha, divergência resolvida não conta, drill-down mostra itens
+  EACE/IXC. Suíte completa do repositório (18 testes) passando.
+- Validação visual em navegador: executada contra o app real rodando em
+  Docker (`docker compose`), autenticado, com os dados reais das 2.622
+  escolas — capturada em 1366px e 390px; sidebar, cards e grid consistentes
+  com o restante do sistema; sem quebra de layout.
+**Pendência:** quando a FEAT-004 existir, o grid passa a mostrar RI de
+verdade em vez de "Sem RI" — nenhuma mudança de código esperada, só dado.
 **Pendência atual:** nenhuma — isto não iniciou a FEAT-007 (depende de
 FEAT-004/FEAT-006, ainda `⬜ Pendente`); é só a referência de frontend.
 
@@ -445,6 +457,7 @@ rodada) e o `docker-compose.hml.yml` correspondente.
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-08-22 | FEAT-007 entregue pelo Dev, `🔍 Aguardando QA` — grid real de INEPs (view/URL/template/menu), 8 testes automatizados, 18 testes da suíte passando | Usuário autorizou explicitamente iniciar fora de ordem (FEAT-004/006 ainda pendentes), mesmo precedente da FEAT-002; validado contra o app real (Docker) com as 2.622 escolas |
 | 2026-08-22 | Dev entrega referência de frontend da FEAT-007 (`docs_gerenciador_pos_venda/frontend_reference/`) | HTML estático adaptado da tela "Endereços" do `modulo-posVenda`, verificado em 1366px/390px; não inicia a FEAT-007 (dependências FEAT-004/006 continuam pendentes) — é só material de apoio para quando ela for implementada |
 | 2026-08-22 | FEAT-007: nota atualizada de "referência visual" para reaproveitamento de código de fato (tela "Endereços" do `modulo-posVenda`) | Usuário confirmou, no mesmo dia, que quer copiar/adaptar o template e as regras de frontend dessa tela — não só usá-la como inspiração; `ADR-001` recebeu emenda registrando a exceção (escopo limitado a essa tela, Provedores/Parceiro continuam descontinuados) |
 | 2026-08-22 | FEAT-007 recebe nota de referência visual (tela "Endereços" do `modulo-posVenda`) | Usuário confirmou: é só inspiração de UX (badge de status, filtro, drill-down em modal), sem reaproveitar código — `ADR-001` continua descontinuando Leads/cadastro de Parceiro |
