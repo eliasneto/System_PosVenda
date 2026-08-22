@@ -1,5 +1,5 @@
 # Modelagem de Banco de Dados — Gerenciador Pós-Venda
-_Última atualização: 2026-08-20_
+_Última atualização: 2026-08-22 (tarde)_
 
 > Escopo: banco de dados próprio deste sistema (separado do `modulo-posVenda`
 > original, ver `architecture.md`). Cobre o processo **RI** da v1
@@ -20,11 +20,13 @@ _Última atualização: 2026-08-20_
 |---|---|---|
 | `escola` | `ri` | 1 escola → N RI |
 | `usuario` | `ri` | 1 usuário → N RI (responsável) |
-| `ri` | `ri_item_eace` | 1 RI → N itens (lado EACE) |
-| `ri` | `ri_item_ixc` | 1 RI → N itens (lado IXC) |
+| `ri` | `ri_item_eace` | 1 RI → N itens (1º lado — Kit declarado, EACE antes do projeto) |
+| `ri` | `ri_item_ixc` | 1 RI → N itens (2º lado — IXC) |
+| `ri` | `ri_item_relatorio_eace` | 1 RI → N itens (3º lado — Relatório EACE, novo, pós-instalação) |
 | `ri` | `ri_divergencia` | 1 RI → N divergências |
 | `ri` | `documento` | 1 RI → N documentos (NF/XML) |
 | `ri` | `email_financeiro_log` | 1 RI → N e-mails (enviados/recebidos) |
+| `ri` | `ri_historico` | 1 RI → N registros de histórico (mensagem, anexo, e-mail, log automático) |
 | `usuario` | `auditoria` | 1 usuário → N registros de auditoria |
 
 ## Tabelas
@@ -103,16 +105,21 @@ outro valor.
 | 1 | 1 (`53008430`) | `andamento` | 2 | Kit Padrão 10Mb | false |
 | 2 | 3 (`53012345`) | `correcao_mega` | 2 | Kit Padrão 20Mb | false |
 
-### `ri_item_eace`
-Itens do relatório da EACE, um por linha (RF-02, relação 1:N).
+### `ri_item_eace` (1º lado — Kit declarado)
+**Esclarecido em 2026-08-22:** apesar do nome (mantido por ora — ajuste de
+nome é decisão técnica do Dev), esta tabela guarda os itens do **1º lado**
+do RI: os dados informados pela EACE **antes do início do projeto** ("Kit
+declarado"). Não é "o relatório" — esse é o 3º lado, `ri_item_relatorio_eace`
+(novo, ver abaixo). Confrontado contra `ri_item_ixc` na RN-002 (informal,
+amarelo, não bloqueia).
 
 | Campo | Tipo | Nulo | Descrição |
 |---|---|---|---|
 | `id` | `BIGINT` | não | Chave primária |
 | `ri_id` | `BIGINT` (FK `ri.id`) | não | — |
-| `descricao_item` | `VARCHAR(255)` | não | Não entra no confronto (RF-04); usada aqui como chave de casamento com `ri_item_ixc` — **ver pendência ao final** |
-| `quantidade` | `INT` | não | Entra no confronto (RF-04) |
-| `valor_unitario` | `DECIMAL(10,2)` | não | Entra no confronto (RF-04) |
+| `descricao_item` | `VARCHAR(255)` | não | Não entra no confronto; usada aqui como chave de casamento com `ri_item_ixc` — **ver pendência ao final** |
+| `quantidade` | `INT` | não | Entra no confronto RN-002 |
+| `valor_unitario` | `DECIMAL(10,2)` | não | Entra no confronto RN-002 |
 | `criado_em` | `DATETIME` | não | — |
 
 **Exemplo:**
@@ -120,13 +127,37 @@ Itens do relatório da EACE, um por linha (RF-02, relação 1:N).
 |---|---|---|---|---|
 | 1 | 1 | Roteador Wi-Fi 6 | 2 | 350.00 |
 
-### `ri_item_ixc`
-Mesma estrutura de `ri_item_eace`, para o lado IXC (RF-03).
+### `ri_item_ixc` (2º lado — IXC)
+Mesma estrutura de `ri_item_eace`, para o lado IXC (RF-03). Entra nos dois
+confrontos: contra o 1º lado (RN-002, informal) e contra o 3º lado
+(RN-003, formal — divergência aparece destacada do lado deste, o IXC).
 
 **Exemplo (com divergência de quantidade em relação ao item acima):**
 | id | ri_id | descricao_item | quantidade | valor_unitario |
 |---|---|---|---|---|
 | 1 | 1 | Roteador Wi-Fi 6 | 1 | 350.00 |
+
+### `ri_item_relatorio_eace` (3º lado — Relatório EACE, novo, 2026-08-22)
+Itens do relatório baixado no portal da EACE **depois da instalação**.
+Mesma estrutura de `ri_item_eace`/`ri_item_ixc`. Nunca editado pelo
+pós-venda — correção só via um relatório novo/atualizado da própria EACE
+(RN-003). Confrontado contra `ri_item_ixc` na RN-003 (formal, sem
+tolerância, bloqueia a transição do RI enquanto aberto). Ainda não
+implementado — ver `checklist.md`, FEAT-004/FEAT-005.
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `ri_id` | `BIGINT` (FK `ri.id`) | não | — |
+| `descricao_item` | `VARCHAR(255)` | não | Não entra no confronto; usada como chave de casamento com `ri_item_ixc` — mesma pendência do 1º lado |
+| `quantidade` | `INT` | não | Entra no confronto RN-003 |
+| `valor_unitario` | `DECIMAL(10,2)` | não | Entra no confronto RN-003 |
+| `criado_em` | `DATETIME` | não | — |
+
+**Exemplo (com divergência formal em relação ao item do IXC acima):**
+| id | ri_id | descricao_item | quantidade | valor_unitario |
+|---|---|---|---|---|
+| 1 | 1 | Roteador Wi-Fi 6 | 2 | 350.00 |
 
 ### `ri_divergencia`
 Catálogo de divergências formais (bloqueiam) e alertas informais. **O `tipo`
@@ -144,10 +175,10 @@ projeto se necessário, mas vale para a v1 a partir de agora.**
 | `resolvida_em` | `DATETIME` | sim | — |
 | `criado_em` | `DATETIME` | não | — |
 
-**Exemplo:**
+**Exemplo (confronto RN-003, 3º lado × 2º lado):**
 | id | ri_id | tipo | bloqueia | descricao |
 |---|---|---|---|---|
-| 1 | 5 | quantidade | true | Item "Roteador Wi-Fi 6": EACE = 2, IXC = 1 |
+| 1 | 5 | quantidade | true | Item "Roteador Wi-Fi 6": Relatório EACE = 2, IXC = 1 |
 
 ### `documento`
 Nota Fiscal (PDF) e XML recebidos do financeiro (RF-08, ITEM 5/7).
@@ -188,6 +219,31 @@ Histórico de envio/recebimento com o financeiro (RF-07/RF-08).
 |---|---|---|---|---|---|
 | 1 | 1 | enviado | posvendas@megainfraestrutura.com.br | Para: hilber.lustosa@speedcsc.com.br, financeiro@speedcsc.com.br; Cc: logistica-l@speedcsc.com.br, posvendas@megainfraestrutura.com.br, david.alves@speedcsc.com.br | 2026-08-29 14:05:00 |
 
+### `ri_historico`
+Linha do tempo de comunicação por RI (RN-008) — mensagem, anexo, e-mail e
+log automático de mudança de status/campo. Reaproveita o modelo de
+`RegistroHistorico` do `modulo-posVenda` (lá RN-029/041), adaptado para FK
+direta a `ri` em vez de `GenericForeignKey` — só RI existe hoje; RE ganha
+tabela própria quando a v3 for planejada.
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `ri_id` | `BIGINT` (FK `ri.id`) | não | — |
+| `usuario_id` | `BIGINT` (FK `usuario.id`) | sim | Nulo em log automático do sistema |
+| `tipo` | `ENUM('comentario','anexo','sistema')` | não | Mensagem escrita, anexo isolado ou log automático (status/campo, e-mail enviado/recebido) |
+| `acao` | `TEXT` | sim | Mensagem livre (comentário) ou descrição do log automático |
+| `rotulo` | `VARCHAR(100)` | sim | Nome do campo/status alterado, só em `tipo='sistema'` |
+| `valor_anterior` / `valor_novo` | `TEXT` | sim | Só em `tipo='sistema'` |
+| `arquivo` | `VARCHAR(500)` | sim | Caminho do anexo, quando houver |
+| `criado_em` | `DATETIME` | não | — |
+
+**Exemplo:**
+| id | ri_id | usuario_id | tipo | acao | rotulo | valor_anterior | valor_novo |
+|---|---|---|---|---|---|---|---|
+| 1 | 1 | 2 | sistema | — | status | andamento | envio_email_faturamento |
+| 2 | 1 | 2 | comentario | Aguardando confirmação do parceiro no local. | — | — | — |
+
 ### `auditoria`
 Reaproveitada do `modulo-posVenda`; hoje só cobre login. A estrutura abaixo
 já assume a extensão para alteração de campo/status (gap — decisão do Dev,
@@ -212,22 +268,42 @@ ver `architecture.md`).
 
 ## Pendências desta modelagem
 
-- **Critério de casamento entre `ri_item_eace` e `ri_item_ixc`:** assumido
-  aqui como `descricao_item` igual. O próprio `requisitos.md` (ITEM 4)
-  registra isso como não confirmado — a descrição pode variar de texto sem
-  ser tratado como erro, então o casamento por texto exato pode não ser
-  ideal. Decisão técnica a confirmar antes de implementar o confronto.
+- **Critério de casamento entre os itens dos lados** (`ri_item_eace` ×
+  `ri_item_ixc`, RN-002; `ri_item_relatorio_eace` × `ri_item_ixc`, RN-003):
+  assumido aqui como `descricao_item` igual. O próprio `requisitos.md`
+  (ITEM 4) registra isso como não confirmado — a descrição pode variar de
+  texto sem ser tratado como erro, então o casamento por texto exato pode
+  não ser ideal. Decisão técnica a confirmar antes de implementar os
+  confrontos.
+- **Nome de `ri_item_eace`:** esclarecido em 2026-08-22 que essa tabela é
+  o 1º lado ("Kit declarado"), não "o relatório" (esse é o novo
+  `ri_item_relatorio_eace`, 3º lado). O nome atual ficou desalinhado do
+  significado; renomear ou não é decisão técnica reversível do Dev.
+- **`ri_item_relatorio_eace` (3º lado):** verificado em 2026-08-22 — model,
+  migration e formulário de lançamento já existem no código (`apps/ri`);
+  pendência anterior removida. Fora do escopo desta verificação: se
+  `checklist.md` (FEAT-004/FEAT-006) já foi atualizado com essa entrega é
+  responsabilidade de quem a fez, não deste registro.
+- **Diagrama derivado:** regenerado em 2026-08-22 junto com a criação de
+  `ri_historico` (ver Histórico de Alterações) — inclui agora os 3 lados
+  do RI e a nova tabela.
 - **Extensão da auditoria** para `alteracao_campo`/`transicao_status`: gap
   já registrado em `architecture.md`, decisão de implementação do Dev.
+- **`ri_historico`:** nome de campo/tabela é decisão técnica reversível do
+  Dev na implementação (mesmo critério já usado para `auditoria`) — a
+  estrutura acima é o ponto de partida, não uma definição fechada.
 - **RE (instalação de link):** fora desta modelagem. Quando a v3 entrar em
-  planejamento, provavelmente espelha `ri`/`ri_item_*` em tabelas próprias
-  (`re`, `re_item_*`), reaproveitando a mesma separação que já existe hoje
-  no `modulo-posVenda` original entre subatividades RE/RI.
+  planejamento, provavelmente espelha `ri`/`ri_item_*`/`ri_historico` em
+  tabelas próprias (`re`, `re_item_*`, `re_historico`), reaproveitando a
+  mesma separação que já existe hoje no `modulo-posVenda` original entre
+  subatividades RE/RI.
 
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-08-22 | Nova tabela `ri_historico`; diagrama regenerado (agora com os 3 lados do RI e `ri_historico`); pendência de `ri_item_relatorio_eace` removida (já implementado no código) | Usuário pediu para trazer do `modulo-posVenda` o histórico de mensagem/anexo/e-mail e log de status/campo (RN-008, `business_rules.md`) |
 | 2026-08-20 | Criação do documento | Usuário pediu a modelagem de banco de dados do sistema |
 | 2026-08-21 | `ri.status` ganha o 8º valor `correcao_mega` | Acompanha a ampliação do RN-001 em `business_rules.md` (novo status "Correção MEGA") |
 | 2026-08-21 | `escola` ganha `lote`, `estado`, `municipio`, `status_conexao`, `data_instalacao_re`, `data_instalacao_ri` | Usuário respondeu a pendência de campos adicionais de Escola (requisitos.md, ITEM 11); nova regra RN-007 em `business_rules.md` |
 | 2026-08-21 | `ri_divergencia.tipo` confirmado (deixa de ser proposta) | Cliente validou o catálogo P-03 (`valor`, `quantidade`, `kit_relatorio`, `nf_financeiro`); pendência removida desta modelagem |
+| 2026-08-22 | RI passa de 2 para 3 lados: `ri_item_eace` reclassificada como 1º lado ("Kit declarado"); nova tabela `ri_item_relatorio_eace` (3º lado, "Relatório EACE", ainda não implementada) | Usuário esclareceu que o model já implementado não era "o relatório" — RN-002/RN-003 reescritas em `business_rules.md`; diagrama derivado (`.html`/`.pdf`) fica pendente de regeneração |

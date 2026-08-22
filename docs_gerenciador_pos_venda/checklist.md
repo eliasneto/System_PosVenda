@@ -164,50 +164,114 @@ Analista) e as regras de permissão da RN-004.
 
 ---
 
-### FEAT-004 — Cadastro manual de RI e itens (lado EACE e lado IXC)
-**Descrição:** Formulários para digitar manualmente, por INEP, os itens do
-relatório EACE e os dados do atendimento IXC, na mesma granularidade
-(item, quantidade, valor unitário).
+### FEAT-004 — Cadastro manual de RI e itens (3 lados: Kit declarado, IXC, Relatório EACE)
+**Descrição:** Formulários para digitar manualmente, por INEP, os itens dos
+**3 lados** do RI (esclarecido em 2026-08-22 — antes documentado como só
+2): **Kit declarado** (dado da EACE antes do projeto), **IXC** (chamado do
+atendimento) e **Relatório EACE** (baixado depois da instalação) — mesma
+granularidade nos três (item, quantidade, valor unitário).
 **Tipo:** fullstack
-**Status:** ⬜ Pendente
+**Status:** 🔍 Aguardando QA
 **Prioridade:** Alta
 **Critérios de aceite:**
 - RI nasce vinculado a um INEP já existente, status inicial "Implantação
   EACE".
-- Cada lado (EACE e IXC) aceita múltiplos itens por INEP (1:N).
-- Campo "Descrição do Item" é texto livre, sem validação de formato.
-- Lado EACE não é editável depois de criado, exceto por um novo lançamento
-  representando um relatório atualizado da EACE (RN-003).
-**Regras relacionadas:** RN-003, RN-004, RF-02, RF-03.
-**Dependências:** FEAT-002, FEAT-003.
+- Cada um dos 3 lados (Kit declarado, IXC, Relatório EACE) aceita
+  múltiplos itens por INEP (1:N).
+- Campo "Descrição do Item" é texto livre, sem validação de formato, nos
+  3 lados.
+- Kit declarado e Relatório EACE não são editáveis depois de criados,
+  exceto por um novo lançamento (RN-002/RN-003) — só o lado IXC aceita
+  editar/excluir item.
+**Regras relacionadas:** RN-002, RN-003, RN-004, RF-02, RF-03.
+**Dependências:** FEAT-002, FEAT-003 — **exceção autorizada explicitamente
+pelo usuário em 2026-08-22** para iniciar fora de ordem (mesmo precedente da
+FEAT-002/FEAT-007). FEAT-002 segue `🔍 Aguardando QA`; FEAT-003 (cadastro de
+usuário) segue `⬜ Pendente` — a distinção Administrador/Analista da RN-004
+já existe desde a FEAT-001 (`user.is_administrador`) e foi usada para a
+regra de exclusão, mas não há tela de cadastro/gestão de usuário.
 **Tipo de validação:** QA (QA-004).
-**Entrega do Dev:** nenhuma ainda.
-**Pendência atual:** nenhuma.
+**Entrega do Dev (2026-08-22):**
+- Modelos (`Ri`, `RiItemEace`, `RiItemIxc`) já existiam desde a FEAT-001;
+  criados `apps/ri/forms.py` e as views/rotas de cadastro (`ri_detail`,
+  `ri_iniciar`, `ri_item_ixc_update`, `ri_item_ixc_delete`).
+- Tela `ri/ri_detail.html` (acessível a partir do grid da FEAT-007): sem RI,
+  oferece "Iniciar RI" (status inicial "Implantação EACE"); com RI, dois
+  painéis — Lado EACE (só permite lançar item novo, sem editar/excluir,
+  RN-003) e Lado IXC (lança, edita e exclui item).
+- RN-004 aplicada: exclusão de item IXC só para Administrador (403 para
+  Analista); criação/edição para os dois perfis.
+- 11 testes automatizados (`apps/ri/tests.py`): login obrigatório, tela sem
+  RI, criação do RI (status e não duplicação), múltiplos itens EACE,
+  descrição livre com caracteres especiais, ausência de rota de
+  edição/exclusão do lado EACE, lançar/editar/excluir item IXC, permissão
+  de exclusão por perfil. Suíte completa do repositório (30 testes)
+  passando.
+- Corrigido durante a validação visual: campo de valor unitário do
+  formulário de edição do IXC vinha com vírgula (formatação pt-br) dentro
+  de um `<input type="number">`, que o navegador rejeita e mostra em
+  branco — ajustado para usar ponto; teste de regressão adicionado.
+- Validação visual em navegador (Playwright) contra o app real em Docker,
+  autenticado, em 1366px e 390px: fluxo completo (iniciar RI, lançar item
+  EACE, lançar/editar/excluir item IXC) sem quebra de layout e sem erro de
+  console.
+**Entrega do Dev (2026-08-22) — 3º lado (Relatório EACE):**
+- Model novo `RiItemRelatorioEace` (mesma estrutura de `RiItemEace`/
+  `RiItemIxc`); migration aplicada. Mantido o nome `RiItemEace` para o 1º
+  lado (decisão técnica reversível, CLAUDE.md §9) — docstrings/`verbose_name`
+  de todos os 3 models atualizados para deixar claro qual lado cada um é.
+- `RiItemRelatorioEaceForm` (`apps/ri/forms.py`); `ri_detail_view` ganha o
+  3º painel (só lançar, sem editar/excluir — mesma regra do 1º lado);
+  `grid_inep_view` e o drill-down do grid (FEAT-007) atualizados para
+  prefetch/mostrar os 3 lados lado a lado.
+- 4 testes novos (lançar múltiplos itens, ausência de rota de edição/
+  exclusão do 3º lado, drill-down mostra os 3); suíte completa do
+  repositório (42 testes) passando.
+- Validação visual em navegador (Playwright), 1366px e 390px: os 3
+  painéis na tela de cadastro e os 3 cards no drill-down do grid, sem
+  quebra de layout, sem erro de console.
+**Pendência atual:** tela formal de cadastro/gestão de usuário (FEAT-003)
+continua não implementada — pendência já registrada antes, sem relação
+com o 3º lado. Confronto (FEAT-005) e sua exibição de divergências
+(amarelo/vermelho) ainda não implementados — depende só desta feature,
+que agora está completa.
 
 ---
 
-### FEAT-005 — Confronto de divergências
-**Descrição:** Comparar item a item os dois lados (EACE × IXC) em
-quantidade e valor unitário, sem tolerância, e sinalizar divergência.
+### FEAT-005 — Confronto de divergências (2 confrontos: RN-002 e RN-003)
+**Descrição:** Esclarecido em 2026-08-22 que são **dois confrontos**, não
+um: (1) Kit declarado × IXC — informal, destaque amarelo, não bloqueia
+(RN-002); (2) Relatório EACE × IXC — formal, sem tolerância, destaque
+vermelho do lado do IXC, bloqueia (RN-003). Ambos item a item, mesma
+mecânica (quantidade e valor unitário).
 **Tipo:** fullstack
 **Status:** ⬜ Pendente
 **Prioridade:** Alta
 **Critérios de aceite:**
-- Diferença de quantidade ou valor unitário em qualquer item gera
-  divergência formal.
-- Comparação estrita — acentuação, espaço e caixa contam como divergência.
-- Campo "Descrição do Item" não entra no confronto de valor/quantidade.
-- INEP com divergência aberta aparece destacado (fundo vermelho) no grid
-  (FEAT-007).
+- Confronto 1 (Kit declarado × IXC, RN-002): diferença de quantidade ou
+  valor unitário em qualquer item = destaque amarelo no campo divergente;
+  nunca bloqueia nenhuma transição.
+- Confronto 2 (Relatório EACE × IXC, RN-003): diferença de quantidade ou
+  valor unitário em qualquer item = divergência formal, destacada em
+  vermelho do lado do item do IXC; bloqueia a transição do RI enquanto
+  aberta (RN-001).
+- Comparação estrita nos dois confrontos — acentuação, espaço e caixa
+  contam como divergência.
+- Campo "Descrição do Item" não entra no confronto de valor/quantidade em
+  nenhum dos dois — só como referência de casamento entre os itens.
+- INEP com divergência formal aberta (confronto 2) aparece destacado
+  (fundo vermelho) no grid (FEAT-007).
 **Regras relacionadas:** RN-002, RN-003, RF-04, RF-06.
-**Dependências:** FEAT-004.
+**Dependências:** FEAT-004 (precisa do 3º lado, "Relatório EACE",
+implementado — hoje `🔄 Em andamento`).
 **Tipo de validação:** QA (QA-005).
 **Entrega do Dev:** nenhuma ainda.
 **Pendência atual:** catálogo fechado dos tipos de divergência formal
 confirmado pelo cliente em 2026-08-21 (P-03, RN-003) — sem pendência nesse
-ponto. Resta o critério de casamento entre itens dos dois lados, ainda não
-confirmado; implementar a comparação de quantidade/valor com o catálogo de
-`tipo` já fechado.
+ponto. Resta o critério de casamento entre itens dos lados, ainda não
+confirmado; implementar as duas comparações de quantidade/valor com o
+catálogo de `tipo` já fechado. Depende do 3º lado da FEAT-004 existir
+antes de poder implementar o confronto 2.
 
 ---
 
@@ -216,7 +280,7 @@ confirmado; implementar a comparação de quantidade/valor com o catálogo de
 "Correção MEGA" e o bloqueio de transição enquanto houver divergência
 aberta.
 **Tipo:** fullstack
-**Status:** ⬜ Pendente
+**Status:** 🔄 Em andamento
 **Prioridade:** Alta
 **Critérios de aceite:**
 - RI só avança de "Andamento" para "Envio de Email para faturamento" sem
@@ -229,24 +293,57 @@ aberta.
 - Transições automáticas (envio de e-mail confirmado; resposta na caixa de
   entrada) mudam o status sem ação manual do usuário.
 **Regras relacionadas:** RN-001, RN-002, RN-003, RF-14, RF-15.
-**Dependências:** FEAT-004, FEAT-005.
+**Dependências:** FEAT-004, FEAT-005 — **exceção autorizada explicitamente
+pelo usuário em 2026-08-22** para iniciar a parte manual fora de ordem
+(mesmo precedente da FEAT-002/004/007), mesmo com a FEAT-005 (confronto)
+ainda `⬜ Pendente`.
 **Tipo de validação:** QA (QA-006).
-**Entrega do Dev:** nenhuma ainda.
-**Pendência atual:** nenhuma.
+**Entrega do Dev (2026-08-22, parcial):**
+- Campo de status do RI editável direto no drill-down do grid (FEAT-007),
+  só com os status "trocados pelo usuário" (RN-001): Andamento, Envio de
+  Email para faturamento, Aguardando validação EACE, Faturamento
+  Concluído, Correção MEGA. Os automáticos (Aguardando financeiro,
+  Aguardando Anexo portal EACE) e o inicial (Implantação EACE) não
+  aparecem como opção.
+- Regras aplicadas: "Correção MEGA" só a partir de "Andamento" e só volta
+  para "Andamento"; "Andamento" → "Envio de Email para faturamento"
+  bloqueado se houver divergência aberta que bloqueia (RN-003).
+- 8 testes automatizados cobrindo login, transição permitida, bloqueio de
+  status automático, as duas regras de "Correção MEGA" e o bloqueio/
+  liberação por divergência. Suíte completa do repositório (40 testes)
+  passando.
+- Validação visual em navegador (Playwright), 1366px — sem erro de
+  console.
+**Pendência atual:** ainda faltam, para fechar a feature: destaque amarelo
+de KIT divergente (RN-002) ao entrar em "Envio de Email para faturamento";
+transições automáticas por e-mail (dependem da FEAT-008/009, envio e
+leitura de e-mail com o financeiro, ainda não implementadas); e o
+confronto automático de divergências em si (FEAT-005 continua `⬜
+Pendente` — hoje as divergências só existem se forem criadas manualmente,
+ex.: admin/testes).
 
 ---
 
 ### FEAT-007 — Grid de INEPs com drill-down
-**Descrição:** Grid principal (INEP, Nome da escola, Endereço, Status,
-Responsável) com filtro por status e detalhe dos itens por INEP.
+**Descrição:** Grid principal com 6 colunas — INEP, Nome da escola,
+Endereço, Status de conexão, Status do RI, Responsável — com filtro e
+detalhe dos itens por INEP. Status de conexão é atributo do próprio
+INEP/Escola (RF-20); Status do RI e Responsável são atributos do RI
+(RN-001/RF-05) — o INEP/Escola não tem campo próprio de status de
+faturamento nem de responsável. As duas colunas de status ficam lado a
+lado na linha, nenhuma "dentro" da outra.
 **Tipo:** frontend-functional
 **Status:** 🔍 Aguardando QA
 **Prioridade:** Alta
 **Critérios de aceite:**
 - Uma linha do grid por INEP; botão de detalhe abre os itens (EACE e IXC)
   daquele INEP.
-- Filtro por status disponível no grid principal (grid único de itens, não
-  separado por tipo de validação).
+- Coluna e filtro "Status de conexão" (Escola, RF-20: desconectado/
+  parcialmente conectado/conectado) visíveis direto na linha, sem precisar
+  abrir o drill-down.
+- Coluna e filtro "Status do RI" (RN-001) e coluna "Responsável" (do RI),
+  também visíveis direto na linha (grid único de itens, não separado por
+  tipo de validação).
 - INEP com divergência aberta aparece com fundo vermelho (RN-003).
 - Item de menu reorganizado em hierarquia: aba "Projeto" > "EACE" > grid
   (hoje item plano "Grid de INEPs" em `core/base.html`); ver
@@ -285,6 +382,87 @@ verdade em vez de "Sem RI" — nenhuma mudança de código esperada, só dado.
 **Pendência atual:** nenhuma — isto não iniciou a FEAT-007 (depende de
 FEAT-004/FEAT-006, ainda `⬜ Pendente`); é só a referência de frontend.
 
+**Entrega do Dev (2026-08-22) — revertidas as duas correções abaixo, RF-05
+confirmado como fonte oficial:** localizado `requisitos-validacao-cliente.html`
+(documento de requisitos validado com o cliente, referenciado em
+`architecture.md`/`checklist.md` como "requisitos.md"). O RF-05 diz
+literalmente: *"grid com uma linha por INEP ... (colunas: INEP, Nome da
+escola, Endereço, **Status**, **Responsável**)"* — e a seção 5 do mesmo
+documento ("Ciclo de Vida do RI — Status") deixa claro que esse "Status" é
+o do RI (RN-001), não o de conexão. O status de conexão da Escola é um
+requisito **separado** (RF-20). Ou seja, as duas correções registradas
+logo abaixo (tirar Responsável do grid, trocar Status para conexão) foram
+na direção contrária ao RF-05 oficial. Revertido:
+- `grid_inep_view`/`grid_inep.html`: coluna e filtro "Status" voltam a ser
+  o status do RI (`Ri.STATUS_CHOICES`); coluna "Responsável" volta à
+  tabela principal — exatamente as 5 colunas do RF-05.
+- Status de conexão da Escola (RF-20) passa a aparecer só no drill-down
+  ("Status de conexão (RF-20): ...", visível para todo INEP, com ou sem
+  RI), não mais como coluna/filtro do grid.
+- Testes ajustados de volta ao comportamento do RF-05, mais 1 teste novo
+  confirmando que o status de conexão aparece no drill-down; suíte
+  completa do repositório (32 testes) passando.
+- Validação visual em navegador (Playwright), 1366px e 390px — sem erro de
+  console.
+- **Pendência para o Orquestrador (nota, ainda em aberto):** confirmar
+  se "requisitos.md" (citado em vários pontos deste projeto) já existiu e
+  foi perdido — mesmo padrão do incidente já registrado na FEAT-002/
+  FEAT-012 — ou se `requisitos-validacao-cliente.html` sempre foi a única
+  fonte. Não achei o `.md` em nenhum dos dois repositórios (`Sistema_posvenda`
+  e `sgpspeed_pos-venda`); enquanto isso, tratar o `.html` como fonte válida.
+
+**Entrega do Dev (2026-08-22) — Responsável sai do grid, fica dentro do RI
+(revertido no item acima):**
+- Usuário apontou que "Responsável" é atributo do RI, não do INEP/Escola —
+  não deveria ser coluna do grid principal (mesmo princípio já aplicado à
+  correção do "Status" logo abaixo).
+- `grid_inep.html`: coluna "Responsável" removida da tabela principal;
+  passou para dentro do painel de drill-down (linha "Responsável pelo RI",
+  visível só quando o INEP já tem RI) — e continua exibido na tela da
+  FEAT-004 (`ri_detail`, card "Responsável").
+- 1 teste novo confirmando a ausência da coluna no cabeçalho e a presença
+  no drill-down; suíte completa do repositório (31 testes) passando.
+- Validação visual em navegador (Playwright), 1366px e 390px — sem erro de
+  console.
+- **Pendência para o Orquestrador (resolvida em 2026-08-22):** "Descrição"
+  ajustada para deixar explícito que Status/Responsável são atributos do
+  RI, não do INEP/Escola.
+
+**Entrega do Dev (2026-08-22) — correção da coluna/filtro "Status" (RN-007,
+revertido no item acima):**
+- Usuário apontou que a coluna "Status" do grid estava mostrando o status
+  do RI (RN-001: Implantação EACE, Andamento, ...), quando deveria mostrar
+  o status de conexão da Escola (RN-007: desconectado/parcialmente
+  conectado/conectado). Confirmado diretamente com o usuário (as duas
+  regras são catálogos distintos e a arquitetura não deixava explícito
+  qual delas o grid deveria usar).
+- `grid_inep_view` (`apps/ri/views.py`) e `grid_inep.html`: coluna e filtro
+  "Status" agora usam `Escola.status_conexao`/`STATUS_CONEXAO_CHOICES`, não
+  mais `Ri.status`. O status do RI continua visível na tela da FEAT-004
+  (`ri_detail`, card "Status do RI") e no drill-down do grid.
+- 2 testes ajustados para refletir a nova semântica (texto exibido e
+  filtro); suíte completa do repositório (30 testes) passando.
+- Validação visual em navegador (Playwright), 1366px e 390px, com rolagem
+  horizontal conferida na tabela mobile — sem erro de console.
+- **Pendência para o Orquestrador (resolvida em 2026-08-22, em sentido
+  oposto ao sugerido):** o RF-05 confirma que "Status" do grid é o do RI,
+  não o de conexão — ver entrega de reversão logo acima.
+
+**Entrega do Dev (2026-08-22) — Status de conexão vira 6ª coluna do grid:**
+- `grid_inep_view`/`grid_inep.html`: coluna e filtro "Conexão" (Escola,
+  RF-20) voltam a aparecer direto na linha, ao lado de "Status do RI" e
+  "Responsável" — dois filtros de status independentes agora (conexão e
+  RI), cada um com seu próprio `<select>`.
+- 3 testes ajustados/novos (as 6 colunas presentes, filtro de conexão
+  isolado do filtro de RI); suíte completa do repositório (32 testes)
+  passando.
+- Validação visual em navegador (Playwright), 1366px e 390px — sem erro de
+  console.
+- **Bônus, a pedido do usuário:** dentro do drill-down, campo "Status do
+  RI" ganhou fundo âmbar e botão preto/amarelo (cor de ação principal do
+  projeto) para se destacar do resto do painel — só ajuste visual, sem
+  lógica.
+
 **Entrega do Dev (2026-08-22) — reorganização do menu (frontend-layout):**
 - Menu lateral reorganizado em `core/base.html`: item plano "Grid de INEPs"
   virou grupo recolhível "Projeto" (padrão trazido do `modulo-posVenda`,
@@ -299,6 +477,10 @@ FEAT-004/FEAT-006, ainda `⬜ Pendente`); é só a referência de frontend.
   validação visual do usuário, sem novo ciclo de QA (CLAUDE.md §3).
 **Status desta reorganização:** 👤 Aguardando validação visual do usuário.
 A FEAT-007 em si (grid funcional) continua `🔍 Aguardando QA`, sem mudança.
+
+**Pendência (2026-08-22, ligada à reabertura da FEAT-004 — resolvida):** o
+drill-down do grid ganhou o 3º card ("Relatório EACE"), junto com "Kit
+declarado" e "IXC" — ver entrega do Dev na FEAT-004.
 
 ---
 
@@ -473,9 +655,79 @@ descreve.
 e `scripts/deploy_homolog.sh` (escopo de homologação, não pedido nesta
 rodada) e o `docker-compose.hml.yml` correspondente.
 
+---
+
+### FEAT-013 — Alternância de modo escuro (dark mode)
+**Descrição:** Botão liga/desliga, disponível em todo o sistema, para
+ativar ou desativar o modo escuro.
+**Tipo:** frontend-functional (envolve JavaScript e memória de preferência
+do usuário entre sessões — não é só cor/espaçamento).
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Baixa — melhoria de interface, não faz parte do caminho
+crítico do processo RI (prazo 28/08/2026).
+**Critérios de aceite:**
+- Botão liga/desliga visível e acessível a partir de qualquer tela
+  autenticada (ex.: sidebar ou cabeçalho).
+- Preferência do usuário é lembrada entre sessões (não volta ao modo claro
+  ao recarregar a página ou logar de novo).
+- Modo escuro se aplica a todas as telas do sistema (login incluído),
+  mantendo contraste e legibilidade — sem quebra visual em nenhuma delas.
+- Não altera nenhuma regra de negócio, dado ou comportamento funcional
+  além da aparência.
+**Regras relacionadas:** nenhuma — feature de interface, sem regra de
+negócio associada.
+**Dependências:** nenhuma — isolada, pode ser feita a qualquer momento sem
+afetar o processo RI.
+**Tipo de validação:** QA (QA-013) — cobre navegação por todas as telas
+com o modo escuro ativo e a persistência da preferência.
+**Entrega do Dev:**
+- Botão de modo escuro no cabeçalho (visível em toda tela autenticada).
+- Preferência salva no navegador (localStorage); volta escura ao
+  recarregar ou logar de novo, sem alterar dado de usuário no banco.
+- Aplicado em login, dashboard, grid de INEPs (com filtros) e tela de RI.
+- Validado no navegador real (desktop e celular 390px), sem quebra visual.
+- Suíte completa (42 testes) passando.
+- **Pendência:** nenhuma na feature; ver nota abaixo sobre o ambiente local.
+
+---
+
+### FEAT-014 — Histórico de comunicação por RI (mensagem, anexo, e-mail)
+**Descrição:** Linha do tempo dentro da tela do RI (FEAT-004) onde o
+usuário escreve mensagem (comentário livre, com anexo opcional), anexa
+arquivo isolado e envia e-mail — reaproveitando o padrão de
+`RegistroHistorico` do `modulo-posVenda`. Mudança de status (FEAT-006) e de
+campo relevante do RI gera entrada automática (rótulo + valor anterior/
+novo) na mesma linha do tempo.
+**Tipo:** fullstack
+**Status:** ⬜ Pendente
+**Prioridade:** Média — não bloqueia o caminho crítico do faturamento
+(FEAT-004 a FEAT-010), é um registro de acompanhamento complementar.
+**Critérios de aceite:**
+- Dentro da tela do RI, usuário escreve uma mensagem e ela aparece na
+  linha do tempo, mais recente primeiro.
+- Usuário consegue anexar um arquivo (à mensagem ou como entrada própria).
+- Envio de e-mail a partir dessa tela (reaproveitando a infra já prevista
+  na FEAT-008) gera entrada na linha do tempo; e-mail recebido em resposta
+  (mesmo polling da FEAT-009) também aparece.
+- Mudança de status do RI e de campo relevante geram entrada automática
+  estruturada (rótulo + valor anterior/novo), não só uma frase livre.
+**Regras relacionadas:** RN-008. Sem RF associado em
+`requisitos-validacao-cliente.html` — pedido tratado como reaproveitamento
+técnico do `modulo-posVenda`, não como novo requisito formal (usuário
+pediu para não alterar os requisitos).
+**Dependências:** FEAT-004 (tela do RI já existe), FEAT-006 (transições de
+status a registrar).
+**Tipo de validação:** QA (QA-014).
+**Entrega do Dev:** nenhuma ainda.
+**Pendência atual:** nenhuma.
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-08-22 | Criada FEAT-014 (histórico de comunicação por RI) e RN-008 em `business_rules.md`; `ri_historico` adicionada a `modelo-dados.md` | Usuário pediu para trazer do `modulo-posVenda` o "módulo de logs" (mensagem, anexo, e-mail) e as alterações de status/campo; distinto do Auditoria/RN-006, que continua sem tela própria; requisitos não foram alterados a pedido do usuário |
+| 2026-08-22 | FEAT-013 entregue pelo Dev, `🔍 Aguardando QA` — modo escuro implementado (Tailwind `dark:`, preferência em localStorage) em login, dashboard, grid de INEPs e tela de RI; suíte completa (42 testes) passando | Validação visual feita no app real (Docker), desktop e celular; para isso a senha do usuário local `admin` foi redefinida temporariamente (o Dev não tinha a senha original e não pôde restaurá-la) — usuário deve trocá-la se for usar esse login |
 | 2026-08-22 | FEAT-007 entregue pelo Dev, `🔍 Aguardando QA` — grid real de INEPs (view/URL/template/menu), 8 testes automatizados, 18 testes da suíte passando | Usuário autorizou explicitamente iniciar fora de ordem (FEAT-004/006 ainda pendentes), mesmo precedente da FEAT-002; validado contra o app real (Docker) com as 2.622 escolas |
 | 2026-08-22 | Dev entrega referência de frontend da FEAT-007 (`docs_gerenciador_pos_venda/frontend_reference/`) | HTML estático adaptado da tela "Endereços" do `modulo-posVenda`, verificado em 1366px/390px; não inicia a FEAT-007 (dependências FEAT-004/006 continuam pendentes) — é só material de apoio para quando ela for implementada |
 | 2026-08-22 | FEAT-007: nota atualizada de "referência visual" para reaproveitamento de código de fato (tela "Endereços" do `modulo-posVenda`) | Usuário confirmou, no mesmo dia, que quer copiar/adaptar o template e as regras de frontend dessa tela — não só usá-la como inspiração; `ADR-001` recebeu emenda registrando a exceção (escopo limitado a essa tela, Provedores/Parceiro continuam descontinuados) |
@@ -499,3 +751,16 @@ rodada) e o `docker-compose.hml.yml` correspondente.
 | 2026-08-21 | FEAT-002 entregue pelo Dev, `🔍 Aguardando QA` — 2.622 escolas migradas para o banco do `Sistema_posvenda` (INEP, lote, UF, município, nome, endereço, velocidade, kit estimado), status inicial "desconectado" (RN-007) | Usuário autorizou chamar o Dev; entrega relatada pelo próprio Dev (idempotência e testes automatizados citados) — ainda sem verificação independente do QA |
 | 2026-08-22 | FEAT-001 recebe pendência: campos Usuário/Senha do `login.html` aparecem preenchidos ao carregar, por autofill do navegador (não há `value` fixo no template) | Usuário reportou; ajuste (`autocomplete="off"`) fica dentro da própria FEAT-001, sem gerar nova feature; implementação é do Dev, fora do escopo do Orquestrador |
 | 2026-08-22 | FEAT-007 recebe critério de aceite adicional: menu lateral reorganizado em aba "Projeto" > "EACE" > grid (hoje item plano "Grid de INEPs") | Usuário pediu a reorganização; confirmado que é o mesmo grid da FEAT-007 (sem lógica nova) e que "Projeto" por ora só agrupa "EACE"; ver `architecture.md`, "Estrutura de navegação (menu lateral)"; implementação é do Dev, fora do escopo do Orquestrador |
+| 2026-08-22 | FEAT-004 entregue pelo Dev, `🔍 Aguardando QA` — cadastro manual de RI e itens EACE/IXC, 11 testes automatizados, 30 testes da suíte passando | Usuário autorizou explicitamente iniciar fora de ordem (FEAT-002 ainda Aguardando QA, FEAT-003 ainda Pendente), mesmo precedente da FEAT-002/FEAT-007; validado contra o app real (Docker); corrigido bug de formatação decimal (vírgula) no formulário de edição do item IXC, achado durante a validação visual |
+| 2026-08-22 | FEAT-007: coluna e filtro "Status" do grid corrigidos pelo Dev — agora usam o status de conexão da Escola (RN-007), não mais o status do RI (RN-001) | Usuário identificou a inconsistência; confirmado que os dois catálogos existem na documentação e que o grid deveria usar o de conexão; status do RI segue visível na tela da FEAT-004 e no drill-down; pendência registrada para o Orquestrador deixar isso explícito em `architecture.md`/critérios de aceite |
+| 2026-08-22 | FEAT-007: coluna "Responsável" removida do grid principal pelo Dev — passa a aparecer só dentro do RI (drill-down do grid e tela da FEAT-004) | Usuário identificou que Responsável é atributo do RI, não do INEP/Escola, mesmo princípio da correção de Status; suíte completa (31 testes) passando |
+| 2026-08-22 | FEAT-007: as duas correções acima (Status→conexão, Responsável fora do grid) revertidas pelo Dev — localizado `requisitos-validacao-cliente.html` (o "requisitos" citado na documentação); RF-05 confirma que Status=status do RI e Responsável são as colunas oficiais do grid; status de conexão (RF-20) passa a aparecer só no drill-down | Usuário apontou que faltava o campo de status e que essa regra existe nos requisitos; suíte completa (32 testes) passando; pendência registrada para o Orquestrador sobre onde vive de fato o documento de requisitos |
+| 2026-08-22 | `architecture.md`/`checklist.md`: explicitado que Status e Responsável são atributos do RI (RN-001/RF-05), não do INEP/Escola — a Escola não tem campo próprio de status de faturamento nem de responsável (só o de conexão, RF-20) | Usuário confirmou a regra ("só RI e RE têm responsável; o INEP, atividade pai, não tem"); implementação do Dev já refletia isso corretamente (`Ri.status`/`Ri.responsavel`) — sem mudança de código, só clareza documental |
+| 2026-08-22 | FEAT-007 passa a exigir 6 colunas no grid: Status de conexão (Escola, RF-20) vira coluna e filtro próprios, ao lado de Status do RI e Responsável (RF-05) — sai do drill-down | Usuário apontou que status de conexão é atributo do próprio INEP/Escola e merece a mesma visibilidade das colunas do RI; implementação (adicionar a coluna/filtro de volta ao grid) é do Dev |
+| 2026-08-22 | FEAT-007: 6ª coluna (Status de conexão) implementada pelo Dev, com filtro próprio separado do filtro de Status do RI; suíte completa (32 testes) passando | Usuário confirmou o desenho de 6 colunas proposto pelo Orquestrador |
+| 2026-08-22 | FEAT-006 iniciada fora de ordem pelo Dev (parcial, `🔄 Em andamento`): campo de status do RI editável no drill-down do grid, com as regras de RN-001 (Correção MEGA) e RN-003 (bloqueio por divergência) já aplicadas; 8 testes novos, suíte completa (40 testes) passando | Usuário pediu o campo porque "pode alterar manualmente alguns status"; autorizada exceção de dependência (FEAT-005 ainda `⬜ Pendente`), mesmo precedente já usado antes |
+| 2026-08-22 | Campo "Status do RI" no drill-down ganha destaque visual (fundo âmbar, botão preto/amarelo) | Usuário pediu uma cor diferente para essa área; ajuste puramente visual, sem lógica |
+| 2026-08-22 | Botão "Ver / lançar itens" removido do drill-down do grid — os próprios cards "Lado EACE"/"Lado IXC" viraram links clicáveis (mesma cor âmbar do bloco de status) | Usuário pediu para os cards serem clicáveis em vez de precisar do botão separado, na mesma cor do status; ajuste puramente visual, sem lógica |
+| 2026-08-22 | Criada FEAT-013 — Alternância de modo escuro (dark mode), `⬜ Pendente`, prioridade baixa, sem dependências | Usuário pediu um botão liga/desliga de modo escuro para o sistema; classificada frontend-functional (envolve JS e memória de preferência) — exige QA |
+| 2026-08-22 | RI esclarecido como tendo 3 lados, não 2: "Kit declarado" (1º, hoje `RiItemEace`), "IXC" (2º, `RiItemIxc`) e "Relatório EACE" (3º, novo, ainda não implementado). RN-002/RN-003 (`business_rules.md`) e `modelo-dados.md` reescritos; FEAT-004 reaberta (`🔍 → 🔄`, falta o 3º lado); FEAT-005 critérios reescritos (2 confrontos: 1º×2º amarelo/informal, 3º×2º vermelho/bloqueia) | Usuário esclareceu, depois que o Dev entregou a FEAT-004 só com 2 lados, que o model já implementado representa o "Kit declarado" (dado da EACE antes do projeto), não "o relatório" — confirmado que os dois confrontos usam a mesma mecânica item a item |
+| 2026-08-22 | FEAT-004 completa: 3º lado ("Relatório EACE") implementado pelo Dev — model `RiItemRelatorioEace`, painel na tela de cadastro e 3º card no drill-down do grid (FEAT-007). `🔄 → 🔍 Aguardando QA`. Suíte completa (42 testes) passando | FEAT-005 (confronto) e sua exibição de divergências continuam pendentes, mas já podem começar — a base de dados dos 3 lados está pronta |

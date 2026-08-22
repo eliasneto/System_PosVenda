@@ -65,7 +65,7 @@
     <p class="subtitle">Entidades, campos e relacionamentos do banco de dados (v1 — processo RI)</p>
   </div>
   <div class="meta-box">
-    Atualizado em <strong>21/08/2026</strong><br>
+    Atualizado em <strong>22/08/2026</strong><br>
     Detalhe de cada campo em <strong>modelo-dados.md</strong>
   </div>
 </div>
@@ -74,6 +74,8 @@
   <b>ri</b> é a tabela central do processo (nasce com o RN-001 e percorre os 8 status, sendo 1 deles o desvio manual "correcao_mega").
   <b>ri_divergencia.tipo</b> foi confirmado pelo cliente em 21/08/2026 (P-03) — ver detalhe em <b>modelo-dados.md</b>.
   <b>escola.status_conexao</b> é derivado de <b>data_instalacao_re</b> e <b>data_instalacao_ri</b> (RN-007) — preenchimento manual, sem cálculo por RPA nesta versão.
+  O RI tem <b>3 lados</b>: <b>ri_item_eace</b> (1º, Kit declarado), <b>ri_item_ixc</b> (2º) e <b>ri_item_relatorio_eace</b> (3º, novo em 22/08/2026).
+  <b>ri_historico</b> (RN-008, novo em 22/08/2026) é a linha do tempo de mensagem/anexo/e-mail e log automático de status/campo, distinta de <b>auditoria</b> (trilha técnica, sem tela própria).
 </p>
 
 <div class="diagram-wrap">
@@ -143,6 +145,26 @@ erDiagram
         decimal valor_unitario
         datetime criado_em
     }
+    ri_item_relatorio_eace {
+        bigint id PK
+        bigint ri_id FK
+        varchar descricao_item
+        int quantidade
+        decimal valor_unitario
+        datetime criado_em
+    }
+    ri_historico {
+        bigint id PK
+        bigint ri_id FK
+        bigint usuario_id FK
+        enum tipo
+        text acao
+        varchar rotulo
+        text valor_anterior
+        text valor_novo
+        varchar arquivo
+        datetime criado_em
+    }
     ri_divergencia {
         bigint id PK
         bigint ri_id FK
@@ -178,9 +200,12 @@ erDiagram
     usuario ||--o{ ri : responsavel
     ri ||--o{ ri_item_eace : eace
     ri ||--o{ ri_item_ixc : ixc
+    ri ||--o{ ri_item_relatorio_eace : relatorio_eace
     ri ||--o{ ri_divergencia : gera
     ri ||--o{ documento : recebe
     ri ||--o{ email_financeiro_log : troca
+    ri ||--o{ ri_historico : historico
+    usuario ||--o{ ri_historico : escreve
     usuario ||--o{ auditoria : registra
 </pre>
 </div>
