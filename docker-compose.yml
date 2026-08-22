@@ -38,15 +38,15 @@ services:
       - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
       - EMAIL_USE_TLS=${EMAIL_USE_TLS}
       - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL}
-      - ADMIN_USERNAME=${ADMIN_USERNAME}
-      - ADMIN_EMAIL=${ADMIN_EMAIL}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     ports:
       - "8000:8000"
+    volumes:
+      # Codigo local montado por cima da imagem, para hot reload em dev
+      # (o runserver detecta a mudanca e reinicia sozinho).
+      - .:/app
     command: >
       sh -c "python manage.py migrate &&
-             python manage.py collectstatic --noinput &&
-             gunicorn --bind 0.0.0.0:8000 --timeout 120 config.wsgi:application"
+             python manage.py runserver 0.0.0.0:8000"
     depends_on:
       - db
 
