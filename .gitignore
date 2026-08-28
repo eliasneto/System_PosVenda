@@ -11,3 +11,12 @@ staticfiles/
 # nunca versionado; o comando importar_escolas_planilha aceita o caminho
 # como argumento.
 CONSOLIDADO EACE.xlsx
+
+# Planilhas de dado real de negocio (mesmo padrao do CONSOLIDADO EACE.xlsx
+# acima) - nunca versionar.
+doc/EACE.csv
+doc/FATURAMENTO MATERIAS EACE.xlsx
+
+# Credenciais reais de servidor em texto puro (achado de seguranca em
+# 2026-08-28) - nunca versionar. Mover para um cofre de senhas.
+ServidorEACE

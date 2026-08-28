@@ -38,6 +38,19 @@ services:
       - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
       - EMAIL_USE_TLS=${EMAIL_USE_TLS}
       - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL}
+      - GRAPH_FINANCEIRO_ENABLED=${GRAPH_FINANCEIRO_ENABLED}
+      - GRAPH_FINANCEIRO_CLIENT_ID=${GRAPH_FINANCEIRO_CLIENT_ID}
+      - GRAPH_FINANCEIRO_CLIENT_SECRET=${GRAPH_FINANCEIRO_CLIENT_SECRET}
+      - GRAPH_FINANCEIRO_TENANT_ID=${GRAPH_FINANCEIRO_TENANT_ID}
+      - GRAPH_FINANCEIRO_MAILBOX=${GRAPH_FINANCEIRO_MAILBOX}
+      # FEAT-027 (RN-043/RN-044): autenticacao/sincronizacao via Active
+      # Directory - so o container "web" faz login (email_scheduler nao).
+      - USE_AD_AUTH=${USE_AD_AUTH}
+      - AD_SERVER_URI=${AD_SERVER_URI}
+      - AD_BIND_DN=${AD_BIND_DN}
+      - AD_BIND_PASSWORD=${AD_BIND_PASSWORD}
+      - AD_USER_SEARCH_BASE=${AD_USER_SEARCH_BASE}
+      - AD_DEFAULT_DOMAIN=${AD_DEFAULT_DOMAIN}
     ports:
       - "8000:8000"
     volumes:
@@ -47,6 +60,50 @@ services:
     command: >
       sh -c "python manage.py migrate &&
              python manage.py runserver 0.0.0.0:8000"
+    depends_on:
+      - db
+
+  email_scheduler:
+    # FEAT-009 (RF-08/RF-19): agendamento do polling da caixa do financeiro
+    # via Microsoft Graph - o comando (`sincronizar_email_financeiro`) só
+    # faz uma passada por chamada (ver apps/ri/services.py), então quem
+    # repete no tempo é este container (mesma imagem do `web`, sem
+    # dependência nova como Celery/cron do SO). Enquanto
+    # GRAPH_FINANCEIRO_ENABLED=False (app do Azure AD ainda não
+    # provisionado), o comando falha rápido e o loop só tenta de novo no
+    # próximo ciclo - não derruba o container.
+    build: .
+    restart: unless-stopped
+    environment:
+      - DEBUG=${DEBUG}
+      - SECRET_KEY=${SECRET_KEY}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+      - DB_ENGINE=mysql
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=3306
+      - EMAIL_BACKEND=${EMAIL_BACKEND}
+      - EMAIL_HOST=${EMAIL_HOST}
+      - EMAIL_PORT=${EMAIL_PORT}
+      - EMAIL_HOST_USER=${EMAIL_HOST_USER}
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
+      - EMAIL_USE_TLS=${EMAIL_USE_TLS}
+      - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL}
+      - GRAPH_FINANCEIRO_ENABLED=${GRAPH_FINANCEIRO_ENABLED}
+      - GRAPH_FINANCEIRO_CLIENT_ID=${GRAPH_FINANCEIRO_CLIENT_ID}
+      - GRAPH_FINANCEIRO_CLIENT_SECRET=${GRAPH_FINANCEIRO_CLIENT_SECRET}
+      - GRAPH_FINANCEIRO_TENANT_ID=${GRAPH_FINANCEIRO_TENANT_ID}
+      - GRAPH_FINANCEIRO_MAILBOX=${GRAPH_FINANCEIRO_MAILBOX}
+    volumes:
+      - .:/app
+    command: >
+      sh -c "sleep 15 && while true; do
+               python manage.py sincronizar_email_financeiro || true;
+               sleep ${GRAPH_FINANCEIRO_POLL_INTERVAL_SECONDS:-300};
+             done"
     depends_on:
       - db
 
