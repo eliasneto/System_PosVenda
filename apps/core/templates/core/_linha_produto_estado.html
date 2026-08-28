@@ -1,0 +1,17 @@
+{% load humanize %}
+{% comment %}
+FEAT-026 (ampliação, 2026-08-28, pedido do usuário): 1 linha de
+"Equipamento Complementar por Estado" — UF à esquerda, Quantidade +
+escolas à direita. Sem meta/barra proporcional (RN-025 não se aplica —
+usuário confirmou que esses itens nunca são programados antes do
+projeto) — só o dado real por estado. `href`/`selecionado` já vêm
+prontos da view (core/views.py); clicar define `estado`, que dispara o
+link "Ver Faturamento de UF" já existente (pedido do usuário: "o valor
+no filtro de faturamento").
+{% endcomment %}
+<a href="{{ linha.href }}" class="flex items-center justify-between gap-3 py-2 border-b border-gray-100 dark:border-gray-800 last:border-0 group">
+    <span class="text-xs font-bold {% if linha.selecionado %}text-pv-yellow{% else %}text-gray-600 dark:text-gray-300 group-hover:text-pv-yellow{% endif %}">{{ linha.estado }}</span>
+    <span class="text-xs text-gray-500 dark:text-gray-400">
+        {{ linha.quantidade_total|intcomma }} unidade{{ linha.quantidade_total|pluralize }} · {{ linha.escolas_total|intcomma }} escola{{ linha.escolas_total|pluralize }}
+    </span>
+</a>

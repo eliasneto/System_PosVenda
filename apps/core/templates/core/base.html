@@ -4,11 +4,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <script>
+        // Aplica a preferência de modo escuro salva antes da primeira pintura da
+        // página, para não "flashar" claro e depois escurecer (FEAT-013).
+        (function () {
+            try {
+                if (localStorage.getItem('theme') === 'dark') {
+                    document.documentElement.classList.add('dark');
+                }
+            } catch (e) {}
+        })();
+    </script>
+
     <title>{% block title %}Gerenciador Pós Venda{% endblock %}</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' };
+    </script>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- FEAT-019: HTMX troca de status/responsável/histórico sem recarregar
+         a página inteira (ver architecture.md, "Padrão de Interação Frontend"). -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 
     <style>
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
@@ -27,19 +46,9 @@
         #sidebar::-webkit-scrollbar-thumb { background: #2d2d2d; border-radius: 10px; }
     </style>
 </head>
-<body class="bg-[#F8F9FA] text-gray-900 antialiased overflow-x-hidden">
+<body class="bg-[#F8F9FA] dark:bg-gray-950 text-gray-900 dark:text-gray-100 antialiased overflow-x-hidden">
 
-    <div class="messages-container fixed top-6 right-6 z-[100] flex flex-col gap-3">
-        {% if messages %}
-            {% for message in messages %}
-                <div class="px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 min-w-[300px]
-                    {% if message.tags == 'success' %} bg-green-50 border-green-100 text-green-800 {% else %} bg-red-50 border-red-100 text-red-800 {% endif %}">
-                    <i data-lucide="{% if message.tags == 'success' %}check-circle{% else %}alert-circle{% endif %}" class="w-5 h-5"></i>
-                    <span class="text-xs font-bold uppercase tracking-tight">{{ message }}</span>
-                </div>
-            {% endfor %}
-        {% endif %}
-    </div>
+    {% include "core/_messages.html" %}
 
     {% if user.is_authenticated %}
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 hidden md:hidden transition-opacity" onclick="toggleSidebar()"></div>
@@ -62,10 +71,28 @@
 
         <nav class="px-4 space-y-1 flex-grow">
             <p class="text-[10px] uppercase text-gray-600 font-extrabold px-4 py-3 tracking-widest">Menu Principal</p>
-            <a href="{% url 'home' %}" class="flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 {% if request.resolver_match.url_name == 'home' %} sidebar-link-active {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %} group">
-                <i data-lucide="layout-dashboard" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
-                <span class="text-sm font-semibold">Dashboard</span>
-            </a>
+
+            <!-- FEAT-026: Dashboard ganha 3 submenus (Faturamento, Equipamentos, Relatórios). -->
+            <div class="mb-1 relative">
+                <button onclick="toggleSubmenu('submenu-dashboard', 'seta-dashboard')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'home' or request.resolver_match.url_name == 'dashboard_equipamentos' or request.resolver_match.url_name == 'dashboard_relatorios' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="layout-dashboard" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
+                        <span class="text-sm font-semibold">Dashboard</span>
+                    </div>
+                    <i data-lucide="chevron-down" id="seta-dashboard" class="w-4 h-4 transition-transform duration-300 {% if request.resolver_match.url_name == 'home' or request.resolver_match.url_name == 'dashboard_equipamentos' or request.resolver_match.url_name == 'dashboard_relatorios' %} rotate-180 {% endif %}"></i>
+                </button>
+                <div id="submenu-dashboard" class="{% if request.resolver_match.url_name != 'home' and request.resolver_match.url_name != 'dashboard_equipamentos' and request.resolver_match.url_name != 'dashboard_relatorios' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
+                    <a href="{% url 'home' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'home' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'home' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Faturamento
+                    </a>
+                    <a href="{% url 'dashboard_equipamentos' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'dashboard_equipamentos' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'dashboard_equipamentos' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Equipamentos
+                    </a>
+                    <a href="{% url 'dashboard_relatorios' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'dashboard_relatorios' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'dashboard_relatorios' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Relatórios
+                    </a>
+                </div>
+            </div>
 
             <div class="mb-1 relative">
                 <button onclick="toggleSubmenu('submenu-projeto', 'seta-projeto')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'grid_inep' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
@@ -81,6 +108,26 @@
                     </a>
                 </div>
             </div>
+
+            {% if user.is_administrador %}
+            <div class="mb-1 relative">
+                <button onclick="toggleSubmenu('submenu-administrador', 'seta-administrador')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'planilha_eace' or request.resolver_match.url_name == 'usuarios' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="shield" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
+                        <span class="text-sm font-semibold">Administrador</span>
+                    </div>
+                    <i data-lucide="chevron-down" id="seta-administrador" class="w-4 h-4 transition-transform duration-300 {% if request.resolver_match.url_name == 'planilha_eace' or request.resolver_match.url_name == 'usuarios' %} rotate-180 {% endif %}"></i>
+                </button>
+                <div id="submenu-administrador" class="{% if request.resolver_match.url_name != 'planilha_eace' and request.resolver_match.url_name != 'usuarios' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
+                    <a href="{% url 'planilha_eace' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'planilha_eace' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'planilha_eace' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Planilha EACE
+                    </a>
+                    <a href="{% url 'usuarios' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'usuarios' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'usuarios' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Usuários
+                    </a>
+                </div>
+            </div>
+            {% endif %}
         </nav>
 
         <div class="mt-auto mb-8 px-6">
@@ -112,11 +159,19 @@
 
     <div id="main-wrapper" class="{% if user.is_authenticated %}md:ml-64{% endif %} min-h-screen flex flex-col transition-all duration-300 ease-in-out">
         {% if user.is_authenticated %}
-        <header class="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-            <button onclick="toggleSidebar()" class="p-2 text-gray-600 md:hidden hover:bg-gray-100 rounded-lg transition">
-                <i data-lucide="menu"></i>
+        <header class="sticky top-0 z-30 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <button onclick="toggleSidebar()" class="p-2 text-gray-600 dark:text-gray-300 md:hidden hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition">
+                    <i data-lucide="menu"></i>
+                </button>
+                <h2 class="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest italic hidden md:block">Gerenciador <span class="text-gray-900 dark:text-gray-100">Pós Venda</span></h2>
+            </div>
+
+            <button onclick="toggleTheme()" type="button" title="Alternar modo escuro" aria-label="Alternar modo escuro"
+                    class="p-2 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+                <i data-lucide="moon" class="w-5 h-5 dark:hidden"></i>
+                <i data-lucide="sun" class="w-5 h-5 hidden dark:block"></i>
             </button>
-            <h2 class="text-xs font-bold text-gray-400 uppercase tracking-widest italic hidden md:block">Gerenciador <span class="text-gray-900">Pós Venda</span></h2>
         </header>
         {% endif %}
 
@@ -127,8 +182,8 @@
         </main>
 
         {% if user.is_authenticated %}
-        <footer class="p-6 text-center border-t border-gray-200 bg-white/50">
-            <p class="text-[10px] text-gray-400 font-bold uppercase tracking-widest">&copy; 2026 MEGA · Gerenciador Pós Venda</p>
+        <footer class="p-6 text-center border-t border-gray-200 dark:border-gray-800 bg-white/50 dark:bg-gray-900/50">
+            <p class="text-[10px] text-gray-400 dark:text-gray-500 font-bold uppercase tracking-widest">&copy; 2026 MEGA · Gerenciador Pós Venda</p>
         </footer>
         {% endif %}
     </div>
@@ -162,9 +217,21 @@
             }
         }
 
-        document.addEventListener('DOMContentLoaded', function () {
-            const alerts = document.querySelectorAll('.messages-container > div');
-            alerts.forEach(function (alert) {
+        // Modo escuro: alterna a classe no <html> e lembra a escolha do usuário
+        // entre sessões via localStorage (FEAT-013). Sem esse acesso (ex.: modo
+        // privado), o botão continua alternando o tema só na página atual.
+        function toggleTheme() {
+            const escuro = document.documentElement.classList.toggle('dark');
+            try {
+                localStorage.setItem('theme', escuro ? 'dark' : 'light');
+            } catch (e) {}
+        }
+
+        // Trecho substituído sem reload (HTMX, FEAT-019) pode trazer ícone
+        // novo ou mensagem nova — reaplica os ícones Lucide e reativa o
+        // auto-fechamento das mensagens sempre que isso acontece.
+        function ativarAutoDismissMensagens() {
+            document.querySelectorAll('.messages-container > div').forEach(function (alert) {
                 setTimeout(function () {
                     alert.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
                     alert.style.opacity = '0';
@@ -172,6 +239,12 @@
                     setTimeout(function () { alert.remove(); }, 600);
                 }, 5000);
             });
+        }
+
+        document.addEventListener('DOMContentLoaded', ativarAutoDismissMensagens);
+        document.body.addEventListener('htmx:afterSwap', function () {
+            lucide.createIcons();
+            ativarAutoDismissMensagens();
         });
     </script>
     {% block extra_js %}{% endblock %}

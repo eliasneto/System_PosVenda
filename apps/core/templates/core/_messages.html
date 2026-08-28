@@ -1,0 +1,17 @@
+{% comment %}
+Toast de mensagens (django.contrib.messages). Extraído de base.html para
+ser reaproveitado como troca out-of-band pelas respostas HTMX (FEAT-019)
+— o atributo hx-swap-oob não tem efeito num carregamento normal de
+página, só quando este bloco chega dentro de uma resposta HTMX.
+{% endcomment %}
+<div id="messages-container" hx-swap-oob="true" class="messages-container fixed top-6 right-6 z-[100] flex flex-col gap-3">
+    {% if messages %}
+        {% for message in messages %}
+            <div class="px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 min-w-[300px]
+                {% if message.tags == 'success' %} bg-green-50 dark:bg-green-900/20 border-green-100 dark:border-green-900/50 text-green-800 dark:text-green-300 {% else %} bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900/50 text-red-800 dark:text-red-300 {% endif %}">
+                <i data-lucide="{% if message.tags == 'success' %}check-circle{% else %}alert-circle{% endif %}" class="w-5 h-5"></i>
+                <span class="text-xs font-bold uppercase tracking-tight">{{ message }}</span>
+            </div>
+        {% endfor %}
+    {% endif %}
+</div>

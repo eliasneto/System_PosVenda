@@ -1,22 +1,182 @@
 {% extends "core/base.html" %}
+{% load humanize %}
 
 {% block title %}Dashboard{% endblock %}
 
 {% block content %}
 <div class="mb-8">
-    <h1 class="text-2xl font-black text-gray-900 tracking-tight">Bem-vindo(a), {{ user.username }}</h1>
-    <p class="text-sm text-gray-500 mt-1">
-        Gerenciador Pós Venda — faturamento EACE por INEP (processo RI).
+    <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Dashboard</p>
+    <h1 class="text-2xl font-black text-gray-900 dark:text-gray-100 tracking-tight">Faturamento</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+        Bem-vindo(a), {{ user.username }} — faturamento EACE por INEP (processo RI).
     </p>
 </div>
 
-<div class="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm">
-    <div class="flex items-center gap-3 text-gray-400">
-        <i data-lucide="construction" class="w-5 h-5"></i>
-        <p class="text-sm font-semibold">
-            O grid de INEPs e as demais telas do processo RI entram nas próximas
-            features do checklist (FEAT-002 em diante).
+<!-- FEAT-026: dashboard financeiro do projeto (RN-025/RN-026). -->
+{% if estado_filtrado or kit_filtrado or produto_filtrado %}
+<div class="mb-4 flex flex-wrap items-center gap-3">
+    {% if estado_filtrado %}
+    <span class="inline-flex items-center gap-2 text-xs font-black uppercase tracking-widest text-pv-yellow bg-pv-yellow/10 px-3 py-1.5 rounded-full">
+        <i data-lucide="map-pin" class="w-3.5 h-3.5"></i> Filtrado por {{ estado_filtrado }}{% if municipio_filtrado %} · {{ municipio_filtrado }}{% endif %}
+    </span>
+    <a href="{% url 'home' %}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2">
+        Ver todos os estados
+    </a>
+    {% if not kit_filtrado and not produto_filtrado %}
+    <!-- Ampliação (2026-08-28, pedido do usuário): navegação cruzada entre os
+         dashboards Faturamento/Equipamentos, mantendo o mesmo estado filtrado
+         — os 2 usam o mesmo parâmetro `?estado=UF`. -->
+    <a href="{% url 'dashboard_equipamentos' %}?estado={{ estado_filtrado }}" class="inline-flex items-center gap-1.5 text-xs font-bold text-pv-yellow hover:text-pv-yellow/80 underline underline-offset-2">
+        <i data-lucide="arrow-right-left" class="w-3.5 h-3.5"></i> Ver Equipamentos de {{ estado_filtrado }}
+    </a>
+    {% endif %}
+    {% endif %}
+    {% if kit_filtrado %}
+    <span class="inline-flex items-center gap-2 text-xs font-black uppercase tracking-widest text-pv-yellow bg-pv-yellow/10 px-3 py-1.5 rounded-full">
+        <i data-lucide="wifi" class="w-3.5 h-3.5"></i> Kit: {{ kit_filtrado }}
+    </span>
+    {% endif %}
+    {% if produto_filtrado %}
+    <span class="inline-flex items-center gap-2 text-xs font-black uppercase tracking-widest text-pv-yellow bg-pv-yellow/10 px-3 py-1.5 rounded-full">
+        <i data-lucide="package-plus" class="w-3.5 h-3.5"></i> Equipamento: {{ produto_filtrado }}
+    </span>
+    {% endif %}
+    {% if kit_filtrado or produto_filtrado %}
+    <!-- Ampliação (2026-08-28, pedido do usuário): "o financeiro tem que
+         trazer os valores referente aquele filtro" — vindo de Equipamentos
+         via "Ver Faturamento de UF". Limpa só Kit/Equipamento, preserva
+         estado/município (mesma volta, inversa do link que trouxe aqui). -->
+    <a href="{{ limpar_kit_produto_href }}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2">
+        Ver Faturamento geral
+    </a>
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="grid grid-cols-1 {% if tem_meta %}md:grid-cols-2{% endif %} gap-6">
+    {% if tem_meta %}
+    <!-- Card 1 (RN-025): Valor Total do Projeto — some quando produto_filtrado
+         (Equipamento Complementar nunca é programado antes do projeto,
+         confirmado pelo usuário — sem meta, sem sentido esse card). -->
+    <div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+                <i data-lucide="target" class="w-5 h-5 text-pv-yellow"></i>
+            </div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Valor Total do Projeto</p>
+        </div>
+        <p class="text-3xl font-black text-gray-900 dark:text-gray-100 tracking-tight">
+            <span class="mr-1.5">R$</span>{{ valor_total_projeto|intcomma }}
+        </p>
+        <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
+            {% if kit_filtrado %}Kit "{{ kit_filtrado }}" (1º lado){% else %}Kit + Nobreak inicial (1º lado){% endif %}{% if recorte_label %} das escolas de {{ recorte_label }}{% else %} de todas as escolas{% endif %}.
         </p>
     </div>
+    {% endif %}
+
+    <!-- Card 2 (RN-026): Valor já faturado + diferença para a meta. Sem
+         meta (produto_filtrado), mostra só o valor faturado, sem badge de %
+         nem barra proporcional — não há alvo pra comparar. -->
+    <div class="relative bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+        {% if tem_meta %}
+        <!-- % do Valor Total do Projeto já entregue (pedido do usuário, 2026-08-27). -->
+        <span class="absolute top-5 right-5 text-[11px] font-black px-2.5 py-1 rounded-full {% if meta_atingida %}bg-emerald-500/10 text-emerald-600 dark:text-emerald-400{% else %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400{% endif %}">
+            {{ percentual_faturado_pct|floatformat:0 }}%
+        </span>
+        {% endif %}
+        <div class="flex items-start justify-between gap-6">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-2xl {% if not tem_meta or meta_atingida %}bg-emerald-500/10{% else %}bg-red-500/10{% endif %} flex items-center justify-center">
+                        <i data-lucide="trending-up" class="w-5 h-5 {% if not tem_meta or meta_atingida %}text-emerald-500{% else %}text-red-500{% endif %}"></i>
+                    </div>
+                    <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Valor já Faturado</p>
+                </div>
+                <p class="text-3xl font-black text-gray-900 dark:text-gray-100 tracking-tight">
+                    <span class="mr-1.5">R$</span>{{ valor_faturado|intcomma }}
+                </p>
+                {% if tem_meta %}
+                {% if meta_atingida %}
+                <p class="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-2">
+                    Meta{% if recorte_label %} de {{ recorte_label }}{% endif %} atingida{% if valor_excedente > 0 %} — R$ {{ valor_excedente|intcomma }} acima do total{% if recorte_label %} do recorte{% else %} do projeto{% endif %}{% endif %}.
+                </p>
+                {% else %}
+                <p class="text-xs font-bold text-red-600 dark:text-red-400 mt-2">
+                    Falta R$ {{ valor_faltante|intcomma }} para atingir o total{% if recorte_label %} de {{ recorte_label }}{% else %} do projeto{% endif %}.
+                </p>
+                {% endif %}
+                {% else %}
+                <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                    "{{ produto_filtrado }}"{% if recorte_label %} em {{ recorte_label }}{% endif %} — equipamento complementar, nunca programado antes do projeto (sem meta pra comparar).
+                </p>
+                {% endif %}
+            </div>
+
+            {% if tem_meta %}
+            <!-- Divisão proporcional: verde (faturado) em cima, vermelho (falta) embaixo.
+                 mt-9: espaço para não encostar no badge de % no canto (pedido do usuário). -->
+            <div class="h-28 w-3 rounded-full overflow-hidden bg-gray-100 dark:bg-gray-800 flex flex-col shrink-0 mt-9"
+                 role="img" aria-label="{{ percentual_faturado_pct|floatformat:0 }}% do valor total já faturado">
+                <div class="bg-emerald-500" style="height: {{ percentual_faturado_css }}%"></div>
+                <div class="bg-red-500" style="height: {{ percentual_faltante_css }}%"></div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
 </div>
+
+{% if not kit_filtrado and not produto_filtrado %}
+<!-- Gráfico "Faturado por Estado" (RN-027): clicar numa linha filtra os 2 cards
+     acima. Expande, dentro do mesmo card, mostrando "Faturado por Município"
+     quando um estado está selecionado (pedido do usuário, 2026-08-27).
+     Some com Kit/Equipamento filtrado (ampliação, 2026-08-28): comparar vários
+     estados não faz sentido já filtrado por 1 item específico — o Card 2
+     sozinho já mostra esse valor. -->
+<div class="relative bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm mt-6">
+    <!-- Mesma % do card "Valor já Faturado" acima, como referência rápida. -->
+    <span class="absolute top-5 right-5 text-[11px] font-black px-2.5 py-1 rounded-full {% if meta_atingida %}bg-emerald-500/10 text-emerald-600 dark:text-emerald-400{% else %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400{% endif %}">
+        {{ percentual_faturado_pct|floatformat:0 }}%
+    </span>
+    <div class="flex items-center gap-3 mb-6">
+        <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+            <i data-lucide="bar-chart-3" class="w-5 h-5 text-pv-yellow"></i>
+        </div>
+        <div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Faturado por Estado</p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500">Clique num estado para filtrar os cards acima.</p>
+        </div>
+    </div>
+
+    <div class="space-y-4">
+        {% for linha in faturamento_por_estado %}
+        {% include "core/_linha_faturamento.html" %}
+        {% empty %}
+        <p class="text-xs text-gray-400 dark:text-gray-500">Nenhuma escola com Estado cadastrado para exibir o gráfico.</p>
+        {% endfor %}
+    </div>
+
+    {% if estado_filtrado %}
+    <!-- Expansão (RN-027 ampliada): Município dentro do estado selecionado. -->
+    <div class="mt-8 pt-6 border-t border-gray-100 dark:border-gray-800">
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                Faturado por Município · {{ estado_filtrado }}
+            </p>
+            {% if municipio_filtrado %}
+            <a href="?estado={{ estado_filtrado }}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2 shrink-0">
+                Ver todos os municípios
+            </a>
+            {% endif %}
+        </div>
+        <div class="space-y-4">
+            {% for linha in faturamento_por_municipio %}
+            {% include "core/_linha_faturamento.html" %}
+            {% empty %}
+            <p class="text-xs text-gray-400 dark:text-gray-500">Nenhuma escola com Município cadastrado em {{ estado_filtrado }}.</p>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
 {% endblock %}

@@ -1,0 +1,9 @@
+{% comment %}
+Badge de "Status do RI" na linha resumida do grid (FEAT-007). FEAT-019:
+troca out-of-band pelo id, atualizada junto com o formulário de status
+sem precisar recarregar a página nem reabrir o drill-down.
+{% endcomment %}
+<span class="inline-flex items-center gap-2" id="status-badge-{{ escola.inep }}" hx-swap-oob="true">
+    <span class="w-2.5 h-2.5 rounded-full shrink-0 {% if not ri %}bg-gray-300 dark:bg-gray-600{% elif divergencia_aberta %}bg-orange-500{% elif ri.status == 'faturamento_concluido' %}bg-green-500{% else %}bg-blue-500{% endif %}"></span>
+    <span class="text-[11px] font-bold text-gray-800 dark:text-gray-200">{% if ri %}{{ ri.get_status_display }}{% else %}Sem RI{% endif %}</span>
+</span>

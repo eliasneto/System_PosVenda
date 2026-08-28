@@ -1,19 +1,19 @@
 {% extends "core/base.html" %}
 
-{% block title %}Gerenciador Pós Venda | Grid de INEPs{% endblock %}
+{% block title %}Gerenciador Pós Venda | Pagamentos a Receber{% endblock %}
 
 {% block content %}
 <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
     <div>
         <nav class="flex mb-2" aria-label="Breadcrumb">
-            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400">
-                <li class="text-gray-900">Faturamento EACE</li>
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li class="text-gray-900 dark:text-gray-100">Faturamento EACE</li>
             </ol>
         </nav>
-        <h1 class="text-4xl font-black text-gray-900 italic uppercase tracking-tighter leading-none">
-            Grid <span class="text-pv-yellow">/</span> INEPs
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            Pagamentos a Receber
         </h1>
-        <p class="text-sm text-gray-500 mt-3 font-bold uppercase tracking-wider">Processo RI — implantação até faturamento concluído</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Processo RI — implantação até faturamento concluído</p>
     </div>
 
     <div class="flex gap-4">
@@ -21,24 +21,39 @@
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Total de INEPs</p>
             <p class="text-xl font-black italic text-pv-yellow">{{ total_inep }}</p>
         </div>
-        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+        <a href="{% url 'grid_inep' %}?divergencia=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if status_conexao_filtro %}&status_conexao={{ status_conexao_filtro }}{% endif %}{% if status_ri_filtro %}&status_ri={{ status_ri_filtro }}{% endif %}"
+           class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white hover:ring-2 hover:ring-amber-400 transition {% if divergencia_filtro %}ring-2 ring-pv-yellow{% endif %}"
+           title="Clique para filtrar os INEPs com divergência aberta">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Com divergência</p>
             <p class="text-xl font-black italic {% if total_divergencia %}text-red-400{% else %}text-pv-yellow{% endif %}">{{ total_divergencia }}</p>
-        </div>
+        </a>
+        <a href="{% url 'grid_inep' %}?status_ri={{ status_resposta_financeiro }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if status_conexao_filtro %}&status_conexao={{ status_conexao_filtro }}{% endif %}{% if divergencia_filtro %}&divergencia=1{% endif %}"
+           class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white hover:ring-2 hover:ring-amber-400 transition {% if status_ri_filtro == status_resposta_financeiro %}ring-2 ring-pv-yellow{% endif %}"
+           title="Clique para filtrar os INEPs com RI em Resposta Financeiro">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Resposta Financeiro</p>
+            <p class="text-xl font-black italic text-pv-yellow">{{ total_resposta_financeiro }}</p>
+        </a>
     </div>
 </div>
 
-<form method="GET" class="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm mb-8 flex flex-col lg:flex-row lg:flex-wrap gap-3 lg:items-center">
+<form method="GET" class="bg-white dark:bg-gray-900 p-4 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-8 flex flex-col lg:flex-row lg:flex-wrap gap-3 lg:items-center">
     <div class="relative w-full lg:flex-1 lg:min-w-[12rem]">
-        <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300"></i>
+        <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 dark:text-gray-600"></i>
         <input type="text" name="q" value="{{ q }}" placeholder="Buscar por INEP, nome da escola, município ou UF..."
-               class="w-full pl-12 pr-4 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 uppercase">
+               class="w-full pl-12 pr-4 py-4 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 dark:text-gray-100 uppercase placeholder:text-gray-400 dark:placeholder:text-gray-500">
     </div>
 
-    <select name="status" data-select-placeholder class="w-full lg:w-56 px-4 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 uppercase">
-        <option value="">Status</option>
-        {% for valor, rotulo in status_opcoes %}
-        <option value="{{ valor }}" {% if status_filtro == valor %}selected{% endif %}>{{ rotulo }}</option>
+    <select name="status_conexao" data-select-placeholder class="w-full lg:w-56 px-4 py-4 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase">
+        <option value="">Status de conexão</option>
+        {% for valor, rotulo in status_conexao_opcoes %}
+        <option value="{{ valor }}" {% if status_conexao_filtro == valor %}selected{% endif %}>{{ rotulo }}</option>
+        {% endfor %}
+    </select>
+
+    <select name="status_ri" data-select-placeholder class="w-full lg:w-56 px-4 py-4 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase">
+        <option value="">Status do RI</option>
+        {% for valor, rotulo in status_ri_opcoes %}
+        <option value="{{ valor }}" {% if status_ri_filtro == valor %}selected{% endif %}>{{ rotulo }}</option>
         {% endfor %}
     </select>
 
@@ -46,77 +61,121 @@
         <button type="submit" class="px-6 py-4 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
             Filtrar
         </button>
-        {% if q or status_filtro %}
-        <a href="{% url 'grid_inep' %}" class="px-4 py-4 bg-gray-100 text-gray-400 rounded-2xl hover:bg-red-50 hover:text-red-500 transition flex items-center justify-center" title="Limpar filtros">
+        {% if q or status_conexao_filtro or status_ri_filtro or divergencia_filtro %}
+        <a href="{% url 'grid_inep' %}" class="px-4 py-4 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-2xl hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 dark:hover:text-red-400 transition flex items-center justify-center" title="Limpar filtros">
             <i data-lucide="x" class="w-5 h-5"></i>
         </a>
         {% endif %}
     </div>
 </form>
 
-<div class="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden flex flex-col">
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
     <div class="overflow-x-auto contain-layout">
         <table class="min-w-full text-left border-collapse">
             <thead>
-                <tr class="text-[10px] font-black uppercase text-gray-500 bg-gray-100 border-b border-gray-300 divide-x divide-gray-300">
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
                     <th class="px-4 py-2">INEP</th>
                     <th class="px-4 py-2">Nome da Escola</th>
                     <th class="px-4 py-2">Endereço</th>
-                    <th class="px-4 py-2" title="Vermelho = divergência aberta (RN-003)">Status</th>
-                    <th class="px-4 py-2">Responsável</th>
+                    <th class="px-4 py-2" title="Status de conexão da Escola (RF-20)">Conexão</th>
+                    <th class="px-4 py-2" title="Status do RI (RN-001); vermelho na linha = divergência aberta (RN-003)">Status do RI</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-300">
+            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
                 {% for linha in page_obj %}
-                <tr class="hover:bg-{% if linha.divergencia_aberta %}red-100{% else %}gray-50{% endif %} transition-all group cursor-pointer divide-x divide-gray-300 {% if linha.divergencia_aberta %}bg-red-50{% endif %}"
+                <tr class="hover:bg-{% if linha.divergencia_aberta %}red-100{% else %}gray-50{% endif %} dark:hover:bg-{% if linha.divergencia_aberta %}red-900/30{% else %}gray-800{% endif %} transition-all group cursor-pointer divide-x divide-gray-300 dark:divide-gray-700 {% if linha.divergencia_aberta %}bg-red-50 dark:bg-red-950/20{% endif %}"
                     data-inep-toggle title="Clique para ver os itens EACE e IXC">
                     <td class="px-4 py-2">
                         <div class="flex items-center gap-2">
-                            <i data-lucide="chevron-right" class="w-3.5 h-3.5 {% if linha.divergencia_aberta %}text-red-300{% else %}text-gray-300{% endif %} shrink-0 transition-transform" data-inep-chevron></i>
-                            <span class="font-black text-gray-900 italic uppercase text-[12px] leading-none">{{ linha.escola.inep }}</span>
+                            <i data-lucide="chevron-right" class="w-3.5 h-3.5 {% if linha.divergencia_aberta %}text-red-300 dark:text-red-500{% else %}text-gray-300 dark:text-gray-600{% endif %} shrink-0 transition-transform" data-inep-chevron></i>
+                            <span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[12px] leading-none">{{ linha.escola.inep }}</span>
                         </div>
                     </td>
-                    <td class="px-4 py-2"><span class="font-black text-gray-900 uppercase text-[11px]">{{ linha.escola.nome }}</span></td>
-                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 font-bold">{{ linha.escola.endereco|default:"Não informado" }}{% if linha.escola.municipio %} — {{ linha.escola.municipio }}/{{ linha.escola.estado }}{% endif %}</span></td>
+                    <td class="px-4 py-2"><span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">{{ linha.escola.nome }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.escola.endereco|default:"Não informado" }}{% if linha.escola.municipio %} — {{ linha.escola.municipio }}/{{ linha.escola.estado }}{% endif %}</span></td>
                     <td class="px-4 py-2">
                         <span class="inline-flex items-center gap-2">
-                            <span class="w-2.5 h-2.5 rounded-full shrink-0 {% if not linha.ri %}bg-gray-300{% elif linha.divergencia_aberta %}bg-orange-500{% elif linha.ri.status == 'faturamento_concluido' %}bg-green-500{% else %}bg-blue-500{% endif %}"></span>
-                            <span class="text-[11px] font-bold text-gray-800">{% if linha.ri %}{{ linha.ri.get_status_display }}{% else %}Sem RI{% endif %}</span>
+                            <span class="w-2.5 h-2.5 rounded-full shrink-0 {% if linha.escola.status_conexao == 'conectado' %}bg-green-500{% elif linha.escola.status_conexao == 'parcialmente_conectado' %}bg-orange-500{% else %}bg-gray-300 dark:bg-gray-600{% endif %}"></span>
+                            <span class="text-[11px] font-bold text-gray-800 dark:text-gray-200">{{ linha.escola.get_status_conexao_display }}</span>
                         </span>
                     </td>
                     <td class="px-4 py-2">
-                        <span class="text-[11px] font-bold text-gray-800">
-                            {% if linha.ri and linha.ri.responsavel %}{{ linha.ri.responsavel.get_full_name|default:linha.ri.responsavel.username }}{% else %}Não atribuído{% endif %}
-                        </span>
+                        {% include "ri/_status_badge_grid.html" with ri=linha.ri escola=linha.escola divergencia_aberta=linha.divergencia_aberta %}
                     </td>
                 </tr>
                 <tr class="hidden" data-inep-detalhe>
-                    <td colspan="5" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %}">
+                    <td colspan="5" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
                         {% if not linha.ri %}
-                        <p class="text-[11px] font-bold text-gray-500 uppercase">RI ainda não implantado para este INEP (aguardando FEAT-004).</p>
+                        <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">RI ainda não iniciado para este INEP.</p>
+                        <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-xl hover:bg-gray-800 transition">
+                            Iniciar RI
+                        </a>
                         {% else %}
-                        {% if linha.divergencia_aberta %}
-                        <p class="text-[10px] font-black uppercase text-red-500 mb-2">Divergência aberta</p>
-                        {% else %}
-                        <p class="text-[10px] font-black uppercase text-gray-400 mb-2">Itens (EACE × IXC)</p>
+                        <div class="flex flex-col sm:flex-row gap-3 mb-4">
+                            {% include "ri/_status_form.html" with ri=linha.ri next_url=request.get_full_path status_ri_manuais=status_ri_manuais status_ri_editaveis=status_ri_editaveis usuario_administrador=usuario_administrador status_resposta_financeiro=status_resposta_financeiro %}
+                            {% include "ri/_responsavel_form_grid.html" with ri=linha.ri next_url=request.get_full_path usuarios=usuarios %}
+                        </div>
+
+                        {% if linha.ri.status == 'envio_email_faturamento' %}
+                        <div class="mb-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/60 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <p class="text-[10px] font-black uppercase text-blue-800 dark:text-blue-300 mb-1">Envio ao financeiro (RF-16/17/18)</p>
+                                <p class="text-[11px] text-blue-700 dark:text-blue-300">
+                                    {% if linha.ri.dados_financeiro_confirmados_em %}
+                                    Último e-mail enviado em {{ linha.ri.dados_financeiro_confirmados_em|date:"d/m/Y H:i" }}.
+                                    {% else %}
+                                    Envia os itens do lado IXC (abaixo) ao financeiro.
+                                    {% endif %}
+                                </p>
+                            </div>
+                            <button type="button" data-abrir-modal-email="modal-email-{{ linha.ri.pk }}"
+                                    class="shrink-0 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                                Compor e-mail
+                            </button>
+                        </div>
                         {% endif %}
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-[11px]">
-                            <div class="bg-white border border-gray-200 rounded-xl p-3">
-                                <p class="font-black uppercase text-gray-500 mb-1">Lado EACE</p>
+
+                        <div class="flex items-center justify-between gap-3 mb-2">
+                            {% if linha.divergencia_aberta %}
+                            <p class="text-[10px] font-black uppercase text-red-500 dark:text-red-400">Divergência aberta</p>
+                            {% else %}
+                            <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">Itens (Kit declarado × IXC × Relatório EACE)</p>
+                            {% endif %}
+                            <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="shrink-0 inline-flex items-center gap-1 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400 hover:underline">
+                                <i data-lucide="history" class="w-3 h-3"></i> Ver histórico completo
+                            </a>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-[11px] mb-3">
+                            <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="block bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3 hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-300 dark:hover:border-amber-700 transition cursor-pointer">
+                                <p class="font-black uppercase text-amber-800 dark:text-amber-300 mb-1">Kit declarado <span class="text-amber-600 dark:text-amber-400">(1º)</span></p>
                                 {% for item in linha.ri.itens_eace.all %}
-                                <p class="text-gray-700">{{ item.descricao_item }} — {{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</p>
+                                <p class="text-gray-700 dark:text-gray-300">{{ item.descricao_item }} — {{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</p>
                                 {% empty %}
-                                <p class="text-gray-400 italic">Nenhum item lançado.</p>
+                                {% if linha.kit_declarado_referencia %}
+                                <p class="text-gray-400 dark:text-gray-500 italic">{{ linha.kit_declarado_referencia }} — referência, ainda não lançado</p>
+                                {% else %}
+                                <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
+                                {% endif %}
                                 {% endfor %}
-                            </div>
-                            <div class="bg-white border border-gray-200 rounded-xl p-3">
-                                <p class="font-black uppercase text-gray-500 mb-1">Lado IXC</p>
+                                <!-- RN-017: Nobreak declarado, item padrão igual para todas as escolas -->
+                                <p class="text-gray-500 dark:text-gray-400 pt-1 border-t border-amber-100 dark:border-amber-800/40 mt-1">Nobreak: {{ linha.escola.nobreak_inicial|default:"—" }} — 1 un.</p>
+                            </a>
+                            <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="block bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3 hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-300 dark:hover:border-amber-700 transition cursor-pointer">
+                                <p class="font-black uppercase text-amber-800 dark:text-amber-300 mb-1">IXC <span class="text-amber-600 dark:text-amber-400">(2º)</span></p>
                                 {% for item in linha.ri.itens_ixc.all %}
-                                <p class="text-gray-700">{{ item.descricao_item }} — {{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</p>
+                                <p class="text-gray-700 dark:text-gray-300">{{ item.descricao_item }} — {{ item.quantidade }} un.</p>
                                 {% empty %}
-                                <p class="text-gray-400 italic">Nenhum item lançado.</p>
+                                <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
                                 {% endfor %}
-                            </div>
+                            </a>
+                            <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="block bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3 hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-300 dark:hover:border-amber-700 transition cursor-pointer">
+                                <p class="font-black uppercase text-amber-800 dark:text-amber-300 mb-1">Relatório EACE <span class="text-amber-600 dark:text-amber-400">(3º)</span></p>
+                                {% for item in linha.ri.itens_relatorio_eace.all %}
+                                <p class="text-gray-700 dark:text-gray-300">{{ item.descricao_item }} — {{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</p>
+                                {% empty %}
+                                <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
+                                {% endfor %}
+                            </a>
                         </div>
                         {% endif %}
                     </td>
@@ -125,12 +184,12 @@
                 <tr>
                     <td colspan="5" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
-                            <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400">
+                            <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="search-x" class="w-8 h-8"></i>
                             </div>
                             <div>
-                                <p class="font-black italic uppercase text-gray-600">Nenhum INEP encontrado</p>
-                                <p class="text-xs font-bold text-gray-400 mt-1">Ajuste os filtros de busca ou status.</p>
+                                <p class="font-black italic uppercase text-gray-600 dark:text-gray-400">Nenhum INEP encontrado</p>
+                                <p class="text-xs font-bold text-gray-400 dark:text-gray-500 mt-1">Ajuste os filtros de busca ou status.</p>
                             </div>
                         </div>
                     </td>
@@ -141,18 +200,18 @@
     </div>
 
     {% if page_obj.has_other_pages %}
-    <div class="bg-gray-50/50 px-8 py-6 border-t border-gray-100 flex items-center justify-between">
-        <span class="text-[10px] font-black text-gray-400 uppercase italic tracking-widest">
+    <div class="bg-gray-50/50 dark:bg-gray-800/40 px-8 py-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest">
             Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}
         </span>
         <div class="flex gap-2">
             {% if page_obj.has_previous %}
-            <a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q }}{% endif %}{% if status_filtro %}&status={{ status_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition shadow-sm text-gray-600">
+            <a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q }}{% endif %}{% if status_conexao_filtro %}&status_conexao={{ status_conexao_filtro|urlencode }}{% endif %}{% if status_ri_filtro %}&status_ri={{ status_ri_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-left" class="w-5 h-5"></i>
             </a>
             {% endif %}
             {% if page_obj.has_next %}
-            <a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q }}{% endif %}{% if status_filtro %}&status={{ status_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition shadow-sm text-gray-600">
+            <a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q }}{% endif %}{% if status_conexao_filtro %}&status_conexao={{ status_conexao_filtro|urlencode }}{% endif %}{% if status_ri_filtro %}&status_ri={{ status_ri_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-right" class="w-5 h-5"></i>
             </a>
             {% endif %}
@@ -160,6 +219,83 @@
     </div>
     {% endif %}
 </div>
+
+{% comment %}
+FEAT-008: as telas de composição de e-mail ficam FORA do container com
+"overflow-x-auto contain-layout" da tabela acima — o `contain: layout`
+dele vira containing block de `position: fixed`, o que faz o modal
+ancorar no próprio container (só a área visível da tabela) em vez de
+cobrir a viewport inteira. Por isso este 2º laço, fora do card, só para
+renderizar os modais (nenhuma consulta nova — mesmo `page_obj` já
+carregado acima).
+{% endcomment %}
+{% for linha in page_obj %}
+{% if linha.ri.status == 'envio_email_faturamento' %}
+<div id="modal-email-{{ linha.ri.pk }}" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email>
+    <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
+    <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <form method="POST" action="{% url 'ri_enviar_email_financeiro' pk=linha.ri.pk %}" enctype="multipart/form-data"
+              onsubmit="return confirm('Enviar este e-mail ao financeiro? O status do RI muda para \'Aguardando financeiro\'.');">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800">
+                <h2 class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Enviar e-mail — INEP {{ linha.escola.inep }}</h2>
+                <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">De</label>
+                    <input type="text" value="{{ remetente_financeiro }}" disabled
+                           class="w-full mt-1 px-3 py-2 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-500 dark:text-gray-400 cursor-not-allowed">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Para</label>
+                    <input type="text" name="para" value="{{ para_financeiro_sugestao }}" required
+                           class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Cc</label>
+                    <input type="text" name="cc" value="{{ cc_financeiro_sugestao }}"
+                           class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Assunto</label>
+                    <input type="text" name="assunto" value="{{ linha.assunto_sugerido }}" required
+                           class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Anexo</label>
+                    <p class="text-[10px] text-gray-400 dark:text-gray-500 mb-1">A planilha de faturamento com os itens do lado IXC é gerada e anexada automaticamente (use "Baixar planilha" para conferir antes). Este campo é opcional, para anexar mais um arquivo.</p>
+                    <input type="file" name="anexo_extra" class="w-full text-xs font-bold text-gray-500 dark:text-gray-400 cursor-pointer file:mr-3 file:px-4 file:py-2 file:rounded-lg file:border-0 file:bg-[#0F0F0F] file:text-[#FFC107] file:font-black file:uppercase file:text-[10px] file:cursor-pointer">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Mensagem</label>
+                    <textarea name="mensagem" rows="4" placeholder="Ex.: kit substituído em campo..."
+                              class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300 resize-none">{{ linha.ri.observacoes_envio_financeiro }}</textarea>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800">
+                <button type="button" data-fechar-modal-email class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                    Cancelar
+                </button>
+                {# FEAT-017/RN-013: baixa a mesma planilha que seria anexada, sem enviar nada — para validar antes de confirmar o envio. #}
+                <a href="{% url 'ri_baixar_planilha_financeiro' pk=linha.ri.pk %}?next={{ request.get_full_path|urlencode }}"
+                   target="_blank"
+                   class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition inline-flex items-center gap-1.5">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                    Baixar planilha
+                </a>
+                <button type="submit" class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                    Enviar e-mail
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+{% endfor %}
 {% endblock %}
 
 {% block extra_js %}
@@ -175,6 +311,32 @@ document.querySelectorAll('[data-inep-toggle]').forEach(function (linha) {
         detalhe.classList.toggle('hidden', expandido);
         var chevron = linha.querySelector('[data-inep-chevron]');
         if (chevron) chevron.classList.toggle('rotate-90', !expandido);
+    });
+});
+
+// FEAT-008: botão "Compor e-mail" abre a tela/modal de composição
+// (De/Para/Cc/Assunto/Anexo/Mensagem); "Cancelar"/X/clique fora fecham.
+document.querySelectorAll('[data-abrir-modal-email]').forEach(function (botao) {
+    botao.addEventListener('click', function () {
+        var modal = document.getElementById(botao.getAttribute('data-abrir-modal-email'));
+        if (modal) modal.classList.remove('hidden');
+    });
+});
+document.querySelectorAll('[data-fechar-modal-email]').forEach(function (botaoFechar) {
+    botaoFechar.addEventListener('click', function () {
+        var modal = botaoFechar.closest('[data-modal-email]');
+        if (modal) modal.classList.add('hidden');
+    });
+});
+
+// "Status do RI" e "Responsável" do drill-down salvam direto ao trocar a
+// opção da lista — sem botão de salvar (ajuste pedido pelo usuário).
+// `requestSubmit()` (em vez de `submit()`) dispara o evento "submit" que o
+// HTMX escuta para assumir a requisição sem recarregar a página (FEAT-019);
+// sem HTMX carregado, o comportamento é o mesmo de antes (POST tradicional).
+document.querySelectorAll('form[data-salvar-ao-trocar] select').forEach(function (select) {
+    select.addEventListener('change', function () {
+        select.form.requestSubmit();
     });
 });
 

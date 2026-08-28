@@ -60,6 +60,7 @@ class ImportarEscolasPlanilhaTests(TestCase):
         self.assertEqual(escola.municipio, "Nova Aliança")
         self.assertEqual(escola.velocidade_dl_minima, "50")
         self.assertEqual(escola.kit_inicial, "2")
+        self.assertEqual(escola.nobreak_inicial, "Nobreak")  # RN-017
 
     def test_inep_curto_e_preenchido_com_zeros_a_esquerda(self):
         caminho = _criar_planilha(self.tmp_path, [
@@ -149,3 +150,17 @@ class EscolaStatusConexaoTests(TestCase):
         escola.data_instalacao_ri = None
         escola.save()
         self.assertEqual(escola.status_conexao, Escola.PARCIALMENTE_CONECTADO)
+
+
+class EscolaNobreakTests(TestCase):
+    """RN-017: Nobreak declarado é item padrão, igual para toda escola —
+    sem passo manual, tanto para escola já existente quanto para nova."""
+
+    def test_escola_nova_nasce_com_nobreak_padrao(self):
+        escola = Escola.objects.create(inep="55555555", nome="Escola E")
+        self.assertEqual(escola.nobreak_inicial, "Nobreak")
+
+    def test_nobreak_padrao_e_o_mesmo_para_qualquer_escola(self):
+        escola_a = Escola.objects.create(inep="66666666", nome="Escola F")
+        escola_b = Escola.objects.create(inep="77777777", nome="Escola G")
+        self.assertEqual(escola_a.nobreak_inicial, escola_b.nobreak_inicial)

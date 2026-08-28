@@ -1,0 +1,23 @@
+{% load humanize %}
+{% comment %}
+FEAT-026 (ampliação, 2026-08-28): 1 linha de "Kits Instalados por Estado" —
+rótulo à esquerda, quantidade instalada + meta (Kits Programados) à direita,
+barra proporcional à meta já instalada. Mesmo padrão visual de
+`_linha_faturamento.html` (Faturamento), adaptado pra contagem de Kits em vez
+de R$ — partial separado para não arriscar o já aprovado. `href`/`rotulo`/
+`selecionado` já vêm prontos da view (core/views.py).
+{% endcomment %}
+<a href="{{ linha.href }}" class="block group">
+    <div class="flex items-center justify-between gap-3 text-xs font-bold mb-1.5">
+        <span class="truncate {% if linha.selecionado %}text-pv-yellow{% else %}text-gray-600 dark:text-gray-300{% endif %}">{{ linha.rotulo }}</span>
+        <span class="flex items-center gap-2 text-right shrink-0">
+            <span class="text-gray-500 dark:text-gray-400">{{ linha.valor|intcomma }} instalado{{ linha.valor|pluralize }}</span>
+            <span class="text-gray-300 dark:text-gray-600">·</span>
+            <span class="text-gray-400 dark:text-gray-500">Meta: {{ linha.meta|intcomma }}</span>
+        </span>
+    </div>
+    <div class="h-2.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+        <div class="h-full rounded-full transition-all {% if linha.selecionado %}bg-pv-yellow{% else %}bg-gray-400 dark:bg-gray-600 group-hover:bg-pv-yellow/70{% endif %}"
+             style="width: {{ linha.percentual_css }}%"></div>
+    </div>
+</a>

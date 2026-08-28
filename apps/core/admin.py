@@ -7,6 +7,6 @@ from .models import User
 @admin.register(User)
 class CoreUserAdmin(UserAdmin):
     fieldsets = UserAdmin.fieldsets + (
-        ("Gerenciador Pos-Venda", {"fields": ("perfil",)}),
+        ("Gerenciador Pos-Venda", {"fields": ("perfil", "acesso_liberado")}),
     )
-    list_display = ("username", "email", "perfil", "is_staff", "is_superuser")
+    list_display = ("username", "email", "perfil", "acesso_liberado", "is_staff", "is_superuser")

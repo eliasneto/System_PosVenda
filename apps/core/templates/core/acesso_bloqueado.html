@@ -1,0 +1,18 @@
+{% extends "core/base.html" %}
+
+{% block title %}Gerenciador Pós Venda | Aguardando liberação{% endblock %}
+
+{% block content %}
+<div class="flex flex-col items-center justify-center text-center py-20 px-6">
+    <div class="w-16 h-16 rounded-2xl bg-pv-black flex items-center justify-center shadow-lg mb-6">
+        <i data-lucide="lock" class="w-7 h-7 text-pv-yellow"></i>
+    </div>
+    <h1 class="text-2xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter">
+        Aguardando liberação do Administrador
+    </h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 max-w-md">
+        Seu acesso aos dados do sistema ainda não foi liberado. Peça a um Administrador
+        para liberar seu usuário em "Administrador &gt; Usuários".
+    </p>
+</div>
+{% endblock %}

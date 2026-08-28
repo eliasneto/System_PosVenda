@@ -1,0 +1,96 @@
+{% extends "core/base.html" %}
+
+{% block title %}Gerenciador Pós Venda | Usuários{% endblock %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li>Administrador</li>
+                <li>/</li>
+                <li class="text-gray-900 dark:text-gray-100">Usuários</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            Usuários
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+            Perfil (RN-004) e acesso aos dados (RN-045)
+        </p>
+    </div>
+</div>
+
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    <th class="px-4 py-2">Usuário</th>
+                    <th class="px-4 py-2">E-mail</th>
+                    <th class="px-4 py-2">Perfil</th>
+                    <th class="px-4 py-2">Acesso</th>
+                    <th class="px-4 py-2">Ação de Perfil</th>
+                    <th class="px-4 py-2">Ação de Acesso</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                {% for usuario in usuarios %}
+                <tr class="text-xs font-bold text-gray-700 dark:text-gray-300">
+                    <td class="px-4 py-3">
+                        {{ usuario.username }}
+                        {% if usuario == request.user %}
+                        <span class="ml-2 text-[9px] font-black uppercase text-gray-400 dark:text-gray-500">(você)</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-gray-500 dark:text-gray-400">{{ usuario.email|default:"—" }}</td>
+                    <td class="px-4 py-3">
+                        <span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest
+                            {% if usuario.is_administrador %}bg-pv-yellow/20 text-amber-600 dark:text-pv-yellow{% else %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400{% endif %}">
+                            {{ usuario.get_perfil_display }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3">
+                        <span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest
+                            {% if usuario.acesso_liberado %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400{% endif %}">
+                            {% if usuario.acesso_liberado %}Ligado{% else %}Desligado{% endif %}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3">
+                        {% if usuario == request.user %}
+                        <span class="text-[10px] text-gray-400 dark:text-gray-500">Não é possível trocar o próprio perfil</span>
+                        {% else %}
+                        <form method="POST" action="{% url 'usuarios_trocar_perfil' usuario_id=usuario.id %}"
+                              onsubmit="return confirm('Trocar o perfil de {{ usuario.username|escapejs }} para {% if usuario.is_administrador %}Analista{% else %}Administrador{% endif %}?');">
+                            {% csrf_token %}
+                            <button type="submit" class="px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-xl hover:bg-gray-800 transition">
+                                {% if usuario.is_administrador %}Tornar Analista{% else %}Tornar Administrador{% endif %}
+                            </button>
+                        </form>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3">
+                        {% if usuario == request.user %}
+                        <span class="text-[10px] text-gray-400 dark:text-gray-500">Não é possível ligar/desligar o próprio acesso</span>
+                        {% else %}
+                        <form method="POST" action="{% url 'usuarios_trocar_acesso' usuario_id=usuario.id %}"
+                              onsubmit="return confirm('{% if usuario.acesso_liberado %}Desligar{% else %}Ligar{% endif %} o acesso de {{ usuario.username|escapejs }}?');">
+                            {% csrf_token %}
+                            <button type="submit" class="px-4 py-2 font-black uppercase text-[10px] rounded-xl transition
+                                {% if usuario.acesso_liberado %}bg-red-50 text-red-600 hover:bg-red-500 hover:text-white dark:bg-red-900/20{% else %}bg-emerald-50 text-emerald-700 hover:bg-emerald-500 hover:text-white dark:bg-emerald-900/20 dark:text-emerald-400{% endif %}">
+                                {% if usuario.acesso_liberado %}Desligar{% else %}Ligar{% endif %}
+                            </button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500">Nenhum usuário cadastrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

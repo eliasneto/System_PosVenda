@@ -1,5 +1,5 @@
 # Lixo — Mapa de Exclusão da Cópia (Gerenciador Pós-Venda)
-_Última atualização: 2026-08-20_
+_Última atualização: 2026-08-28_
 
 > **O que é este arquivo:** um checklist de tudo que existe hoje em
 > `modulo-posVenda` e que **não deve ir para o novo sistema** (ou, se for
@@ -40,6 +40,12 @@ aqui só para não haver ambiguidade na hora de separar o resto.
   arquivo em si (importa `apps.leads`/`apps.clientes`), mas o **padrão**
   (polling IMAP a cada ~5 min) a replicar para a caixa
   `posvendas@megainfraestrutura.com.br`.
+- `apps/integracoes/ad/ad_sync.py` e o bloco `USE_AD_AUTH`/`AUTH_LDAP_*` de
+  `config/settings.py` — **decisão tomada em 2026-08-28** (ver `ADR-002`,
+  RN-043/RN-044, `FEAT-027`): o sistema novo passa a ter autenticação via
+  AD, reaproveitando a mesma conta de serviço de bind e as mesmas variáveis
+  `AD_*` já configuradas no `.env` do `modulo-posVenda`. Resolve o item 7
+  abaixo, que tratava isso como decisão em aberto.
 
 ## 2. Adiado, não é lixo (reaproveitável na v3)
 
@@ -153,10 +159,6 @@ Dados operacionais deste sistema, sem relação com o Gerenciador Pós-Venda.
 Depende de decisão técnica na hora de implementar (CLAUDE.md §9 — decisão
 reversível e de baixo risco, mas melhor não presumir aqui):
 
-- `apps/integracoes/ad/ad_sync.py` — sincroniza e-mail de usuário via Active
-  Directory. O sistema novo tem cadastro de usuário manual (Administrador
-  cria/edita/desativa, ITEM 13); não está definido se haverá integração com
-  AD. Se não houver, sai; se houver, fica.
 - `apps/core/models.RegistroHistorico` — pode servir de base genérica para o
   mecanismo de auditoria de campo/status do RN-001/ITEM 10, em vez de criar
   um log específico do zero. Decisão do Dev na hora de codar (ver ITEM 10).
@@ -194,4 +196,5 @@ Antes de apagar qualquer item marcado aqui **no repositório novo**:
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-08-28 | Item 7 resolvido: `apps/integracoes/ad/ad_sync.py` e o bloco `AUTH_LDAP_*`/`USE_AD_AUTH` de `config/settings.py` passam de "aguardando decisão" para "Fica" (seção 1) — usuário decidiu incluir autenticação via AD (`ADR-002`, `FEAT-027`) |
 | 2026-08-20 | Criação do documento — primeiro levantamento do que não faz parte do recorte v1/v2/v3, organizado por app, por trecho de model/template e por artefato de operação |

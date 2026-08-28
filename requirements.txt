@@ -4,3 +4,10 @@ python-dotenv==1.2.2
 gunicorn==23.0.0
 mysqlclient==2.2.8
 openpyxl==3.1.5
+reportlab==4.4.4
+requests==2.32.3
+# FEAT-027 (RN-043/RN-044): autenticacao via Active Directory (ADR-002) -
+# mesmas versoes ja usadas no modulo-posVenda; exige libldap2-dev/
+# libsasl2-dev no Dockerfile pra compilar o python-ldap.
+python-ldap==3.4.3
+django-auth-ldap==4.8.0

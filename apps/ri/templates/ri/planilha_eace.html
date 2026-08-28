@@ -1,0 +1,96 @@
+{% extends "core/base.html" %}
+
+{% block title %}Gerenciador Pós Venda | Planilha EACE{% endblock %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li>Administrador</li>
+                <li>/</li>
+                <li class="text-gray-900 dark:text-gray-100">Planilha EACE</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            Planilha EACE
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+            Fonte usada pelo Sincronizador do Lado Relatório EACE (3º lado do RI)
+        </p>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm">
+        <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100 mb-1">Arquivo ativo</h2>
+        {% if planilha_ativa %}
+        <div class="flex items-start gap-3 mt-4">
+            <div class="w-11 h-11 rounded-2xl bg-pv-black flex items-center justify-center shrink-0">
+                <i data-lucide="file-spreadsheet" class="w-5 h-5 text-pv-yellow"></i>
+            </div>
+            <div class="min-w-0">
+                <p class="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{{ planilha_ativa.nome_original }}</p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Enviado por <span class="font-bold">{{ planilha_ativa.enviado_por.username|default:"—" }}</span>
+                    em {{ planilha_ativa.enviado_em|date:"d/m/Y H:i" }}
+                </p>
+            </div>
+        </div>
+        <!-- FEAT-025/RN-023: aplica o Sincronizador (RN-022/FEAT-024) ao
+             RI atual de cada Escola de uma vez, sem abrir RI por RI. -->
+        <form method="POST" action="{% url 'planilha_eace_sincronizar_todas' %}" class="mt-5">
+            {% csrf_token %}
+            <button type="submit" class="w-full px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center justify-center gap-2">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Sincronizar todas as RI
+            </button>
+        </form>
+        {% else %}
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-4">Nenhuma planilha enviada ainda.</p>
+        {% endif %}
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm">
+        <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100 mb-1">
+            {% if planilha_ativa %}Substituir arquivo{% else %}Enviar arquivo{% endif %}
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            Arquivo <span class="font-bold">.csv</span> com as colunas Projeto (INEP), Descrição do
+            Item, Qtde Produto e Valor Unit UR. Um novo envio substitui o arquivo atual.
+        </p>
+        <form method="POST" enctype="multipart/form-data" class="space-y-4">
+            {% csrf_token %}
+            <div>
+                <!-- Input nativo (form.arquivo) fica sr-only — "CHOOSE
+                     FILE"/"No file chosen" é texto do navegador, não dá
+                     para traduzir por CSS. O rótulo abaixo aciona o
+                     input pelo `for`; o span mostra o nome em português. -->
+                <label for="{{ form.arquivo.id_for_label }}" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-lg cursor-pointer hover:bg-gray-800 transition">
+                    Escolher arquivo
+                </label>
+                <span id="nome-arquivo-planilha-eace" class="ml-3 text-xs font-bold text-gray-500 dark:text-gray-400 align-middle">Nenhum arquivo selecionado</span>
+                {{ form.arquivo }}
+                {% if form.arquivo.errors %}
+                <p class="text-xs font-bold text-red-500 mt-2">{{ form.arquivo.errors.0 }}</p>
+                {% endif %}
+            </div>
+            <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center gap-2">
+                <i data-lucide="upload" class="w-4 h-4"></i>
+                Importar
+            </button>
+        </form>
+        <script>
+            (function () {
+                var input = document.getElementById("{{ form.arquivo.id_for_label }}");
+                var nome = document.getElementById("nome-arquivo-planilha-eace");
+                if (input && nome) {
+                    input.addEventListener("change", function () {
+                        nome.textContent = input.files.length ? input.files[0].name : "Nenhum arquivo selecionado";
+                    });
+                }
+            })();
+        </script>
+    </div>
+</div>
+{% endblock %}

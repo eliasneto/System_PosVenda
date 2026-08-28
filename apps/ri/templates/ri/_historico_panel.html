@@ -1,0 +1,129 @@
+{% comment %}
+Linha do tempo do RI (FEAT-014/RN-008). FEAT-019: troca out-of-band pelo
+id — repõe todo este bloco (formulário limpo + entradas + paginação)
+depois de um novo registro, sem recarregar a página.
+{% endcomment %}
+<div id="historico" hx-swap-oob="true" class="mt-6 bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6">
+    <h2 class="text-sm font-black uppercase text-gray-800 dark:text-gray-200 mb-1">Histórico de comunicação</h2>
+    <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold mb-4">
+        Mensagens, anexos e alterações de status ficam registrados aqui, mais recentes primeiro (RN-008).
+    </p>
+
+    <form method="POST" enctype="multipart/form-data"
+          hx-post="{% url 'ri_detail' inep=ri.escola.inep %}" hx-swap="none" hx-encoding="multipart/form-data"
+          class="flex flex-col gap-3 border-b border-gray-100 dark:border-gray-800 pb-6 mb-6">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="adicionar_historico">
+        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+            Mensagem
+            {{ historico_form.mensagem }}
+        </label>
+        {% if historico_form.mensagem.errors %}
+        <p class="text-[11px] font-bold text-red-500 dark:text-red-400">{{ historico_form.mensagem.errors.0 }}</p>
+        {% endif %}
+        {% if historico_form.non_field_errors %}
+        <p class="text-[11px] font-bold text-red-500 dark:text-red-400">{{ historico_form.non_field_errors.0 }}</p>
+        {% endif %}
+        <div class="flex flex-wrap items-end gap-3">
+            <div class="flex-1">
+                <span class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 block mb-2">
+                    Anexo (opcional)
+                </span>
+                {# O rótulo abaixo é o único gatilho do seletor de arquivo — a área ao redor não deve abrir a janela de upload. #}
+                <div class="flex items-center gap-3">
+                    <label for="{{ historico_form.anexo.id_for_label }}"
+                           class="shrink-0 px-4 py-2.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] tracking-wide rounded-xl cursor-pointer hover:opacity-90 transition">
+                        Selecionar arquivo
+                    </label>
+                    {{ historico_form.anexo }}
+                    <span id="historico-anexo-nome" class="text-xs font-bold text-gray-500 dark:text-gray-400 truncate">
+                        Nenhum arquivo selecionado
+                    </span>
+                </div>
+            </div>
+            <button type="submit" class="self-end px-5 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-xl hover:bg-gray-800 transition shadow">
+                Enviar
+            </button>
+        </div>
+    </form>
+
+    <div class="flex flex-col gap-4">
+        {% for entrada in historico %}
+        <div class="flex gap-3">
+            <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0
+                {% if entrada.tipo == 'mensagem' %}bg-blue-50 dark:bg-blue-900/20 text-blue-500 dark:text-blue-400
+                {% elif entrada.tipo == 'anexo' %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400
+                {% elif entrada.tipo == 'email' %}bg-purple-50 dark:bg-purple-900/20 text-purple-500 dark:text-purple-400
+                {% else %}bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400{% endif %}">
+                <i data-lucide="{% if entrada.tipo == 'mensagem' %}message-square{% elif entrada.tipo == 'anexo' %}paperclip{% elif entrada.tipo == 'email' %}mail{% else %}history{% endif %}" class="w-4 h-4"></i>
+            </div>
+            <div class="flex-1 bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3">
+                <div class="flex items-center justify-between gap-2 mb-1">
+                    <span class="text-xs font-bold text-gray-700 dark:text-gray-300">
+                        {% if entrada.tipo == 'log_status' or entrada.tipo == 'log_campo' %}
+                            Sistema
+                        {% elif entrada.tipo == 'email' and not entrada.autor %}
+                            {# FEAT-009: leitura automática da resposta do financeiro, sem usuário logado #}
+                            Sistema
+                        {% elif entrada.autor %}
+                            {{ entrada.autor.get_full_name|default:entrada.autor.username }}
+                        {% else %}
+                            Usuário removido
+                        {% endif %}
+                    </span>
+                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase shrink-0">{{ entrada.criado_em|date:"d/m/Y H:i" }}</span>
+                </div>
+                {% if entrada.tipo == 'log_status' or entrada.tipo == 'log_campo' %}
+                <p class="text-xs text-gray-600 dark:text-gray-400">
+                    {% if entrada.valor_anterior %}
+                    Alterou <strong class="text-gray-800 dark:text-gray-200">{{ entrada.campo }}</strong>:
+                    <span class="text-gray-400 dark:text-gray-500">{{ entrada.valor_anterior }}</span>
+                    <i data-lucide="arrow-right" class="w-3 h-3 inline"></i>
+                    <span class="font-bold text-gray-800 dark:text-gray-200">{{ entrada.valor_novo }}</span>
+                    {% else %}
+                    Cadastrou <strong class="text-gray-800 dark:text-gray-200">{{ entrada.campo }}</strong>:
+                    <span class="font-bold text-gray-800 dark:text-gray-200">{{ entrada.valor_novo }}</span>
+                    {% endif %}
+                </p>
+                {% else %}
+                    {% if entrada.mensagem %}
+                    <p class="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-line">{{ entrada.mensagem }}</p>
+                    {% endif %}
+                    {% if entrada.anexo %}
+                    <a href="{{ entrada.anexo.url }}" target="_blank" class="inline-flex items-center gap-1 mt-2 text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline">
+                        <i data-lucide="paperclip" class="w-3 h-3"></i> Baixar anexo
+                    </a>
+                    {% endif %}
+                    {% for documento in entrada.documentos.all %}
+                    <a href="{{ documento.arquivo.url }}" target="_blank" class="inline-flex items-center gap-1 mt-2 mr-3 text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline">
+                        <i data-lucide="paperclip" class="w-3 h-3"></i> Baixar {{ documento.get_tipo_display }}
+                    </a>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+        {% empty %}
+        <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum registro ainda.</p>
+        {% endfor %}
+    </div>
+
+    {% if historico.has_other_pages %}
+    <div class="flex items-center justify-between mt-6 pt-4 border-t border-gray-100 dark:border-gray-800">
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest">
+            Página {{ historico.number }} de {{ historico.paginator.num_pages }}
+        </span>
+        <div class="flex gap-2">
+            {% if historico.has_previous %}
+            <a href="?historico_page={{ historico.previous_page_number }}#historico" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+            {% if historico.has_next %}
+            <a href="?historico_page={{ historico.next_page_number }}#historico" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>

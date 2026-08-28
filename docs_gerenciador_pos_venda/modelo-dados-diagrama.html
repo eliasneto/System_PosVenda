@@ -65,7 +65,7 @@
     <p class="subtitle">Entidades, campos e relacionamentos do banco de dados (v1 — processo RI)</p>
   </div>
   <div class="meta-box">
-    Atualizado em <strong>22/08/2026</strong><br>
+    Atualizado em <strong>24/08/2026</strong><br>
     Detalhe de cada campo em <strong>modelo-dados.md</strong>
   </div>
 </div>
@@ -76,6 +76,7 @@
   <b>escola.status_conexao</b> é derivado de <b>data_instalacao_re</b> e <b>data_instalacao_ri</b> (RN-007) — preenchimento manual, sem cálculo por RPA nesta versão.
   O RI tem <b>3 lados</b>: <b>ri_item_eace</b> (1º, Kit declarado), <b>ri_item_ixc</b> (2º) e <b>ri_item_relatorio_eace</b> (3º, novo em 22/08/2026).
   <b>ri_historico</b> (RN-008, novo em 22/08/2026) é a linha do tempo de mensagem/anexo/e-mail e log automático de status/campo, distinta de <b>auditoria</b> (trilha técnica, sem tela própria).
+  <b>kit_padrao</b> (RN-010, catálogo LPU, novo em 24/08/2026) guarda o valor fixo de Equipamento e de Serviço por Lote; não tem FK — cruza com <b>escola</b> por valor (<b>kit_inicial</b> + <b>lote</b> iguais), linha pontilhada no diagrama.
 </p>
 
 <div class="diagram-wrap">
@@ -195,6 +196,17 @@ erDiagram
         enum status_leitura
         datetime data_hora
     }
+    kit_padrao {
+        bigint id PK
+        varchar descricao
+        int lote
+        varchar unidade
+        int quantidade_padrao
+        decimal valor_equipamento
+        decimal valor_servico
+        datetime criado_em
+        datetime atualizado_em
+    }
 
     escola ||--o{ ri : possui
     usuario ||--o{ ri : responsavel
@@ -207,6 +219,7 @@ erDiagram
     ri ||--o{ ri_historico : historico
     usuario ||--o{ ri_historico : escreve
     usuario ||--o{ auditoria : registra
+    escola }o..o{ kit_padrao : "cruzamento por valor (kit_inicial+lote), nao FK"
 </pre>
 </div>
 

@@ -1,5 +1,5 @@
 # Arquitetura Técnica — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-08-22_
+_Última atualização: 2026-08-28_
 
 > Esta pasta documenta um **sistema novo e separado** do `modulo-posVenda`
 > (repositório e banco de dados próprios, ver `requisitos.md`, bloco 0 e
@@ -91,10 +91,20 @@ INEP é considerado concluído (Faturado).
   implementação do Dev (estender existente ou log específico do módulo).
 - **Usuários e Permissões** — dois perfis: Administrador (tudo) e Analista
   (tudo exceto excluir). CRUD de INEP/item, documentos e cadastro de
-  usuário seguem essa regra.
-- **Infra de e-mail** — reaproveita o padrão de polling IMAP já usado em
-  `apps/integracoes/email` (sincronização de resposta), adaptado para a
-  caixa dedicada do financeiro.
+  usuário seguem essa regra. **Exceção (RN-043, 2026-08-28):** login via
+  Active Directory cria automaticamente o usuário local, com perfil
+  Analista, no primeiro acesso — único caso em que a criação de usuário não
+  passa pelo Administrador.
+- **Infra de e-mail** — reaproveita o padrão de polling via **Microsoft
+  Graph** já usado em `apps/integracoes/email` (sincronização de resposta;
+  corrigido em 2026-08-25 — não é IMAP, a Microsoft aposentou Basic Auth
+  IMAP nessa caixa e o `modulo-posVenda` já migrou para Graph, com um app
+  do Azure AD próprio dele, real e habilitado —
+  `GRAPH_EMAIL_REPLIES_ENABLED=true` no `.env` de lá), adaptado para a
+  caixa dedicada do financeiro com um app do Azure AD **exclusivo deste
+  sistema** (RN-009, ainda não provisionado, ver `FEAT-009`), e o código de
+  rastreio de `apps/core/email_tracking.py` (RN-009), que identifica o
+  INEP pelo assunto do e-mail.
 - **Frontend da tela "Endereços"** (`apps/leads/templates/leads/
   enderecos_lastmile.html` e partials) — exceção pontual à descontinuação
   de Leads, ver `ADR-001` (emenda 2026-08-22): reaproveita o template e as
@@ -102,32 +112,87 @@ INEP é considerado concluído (Faturado).
   Setor→Responsável) para a `FEAT-007`. Trechos dependentes de
   Parceiro/cotação/Setor ainda precisam ser removidos ou adaptados pelo Dev
   na implementação.
+- **Autenticação e sincronização via Active Directory** (`ADR-002`,
+  RN-043/RN-044, `FEAT-027`) — login passa a validar credenciais contra o
+  AD (`django_auth_ldap.backend.LDAPBackend`, com `ModelBackend` como
+  fallback), reaproveitando a mesma conta de serviço de bind e as mesmas
+  variáveis `AD_*`/`USE_AD_AUTH` já configuradas no `.env` do
+  `modulo-posVenda` — decisão explícita do usuário, diferente do app do
+  Graph do financeiro (RN-009), que é exclusivo deste sistema. Depois de
+  qualquer login, `apps/integracoes/ad/ad_sync.py` sincroniza e-mail/nome
+  do usuário a partir do AD, sem bloquear o login se o LDAP estiver
+  indisponível. Resolve a pendência aberta em `lixo.md` (item 7).
 
 ### Novos nesta versão (v1)
 
-- **Faturamento INEP** — INEP como cabeçalho, itens como registros filhos
-  (`Descrição do Item`, `Qtde Produto`, `Valor Unit UR`), relação 1:N.
-  Guarda também o "lado IXC" digitado manualmente na mesma granularidade.
+- **Faturamento INEP (3 lados do RI, esclarecido em 2026-08-22)** — INEP
+  como cabeçalho, itens como registros filhos (`Descrição do Item`, `Qtde
+  Produto`, `Valor Unit UR`), relação 1:N, em **3 lados** independentes:
+  1. **Kit declarado** — dados informados pela EACE **antes do início do
+     projeto** (model já implementado na FEAT-004, hoje chamado
+     `RiItemEace` — nome pode ser ajustado pelo Dev para não confundir com
+     o lado 3).
+  2. **IXC** — dados informados manualmente pelo usuário a partir do
+     chamado (já implementado, `RiItemIxc`).
+  3. **Relatório EACE** (novo, ainda não implementado) — dados do relatório
+     baixado no portal da EACE **depois da instalação**; mesma
+     granularidade dos outros dois lados; nunca editado pelo pós-venda,
+     só por um relatório novo/atualizado da própria EACE.
+
   Só escopo **RI**.
-- **Confronto** — compara item a item (quantidade e valor unitário, sem
-  tolerância) o "lado EACE" (relatório, digitado à mão na v1) contra o
-  "lado IXC"; e o KIT contra o relatório (erro formal) e contra o
-  implantado em campo (alerta informal, não bloqueia). Lado EACE nunca é
-  corrigido pelo pós-venda — só por um relatório atualizado da EACE.
-- **Grid de INEPs** — linha por INEP (colunas: INEP, Nome da escola,
-  Endereço, Status, Responsável) com drill-down para os itens; grid único
-  de itens com filtro por status (não um grid separado por tipo de
-  validação); exibe divergência com fundo vermelho.
+- **Catálogo de preços fixos EACE (LPU, RN-010)** — valores fixos por
+  produto/kit e por Lote (Equipamento + Serviço), vindos da aba `LPU` de
+  `CONSOLIDADO EACE.xlsx`; cruzado com `Escola.kit_inicial` **e**
+  `Escola.lote` (não só a descrição) para resolver Quantidade/Valor do
+  Kit declarado (1º lado) sem digitação manual. Model `KitPadrao` já
+  existe (FEAT-004), ainda vazio; evolução do formato (lote, unidade,
+  valor de equipamento/serviço) e importação em lote ficam para a
+  FEAT-015.
+- **Confronto (2 confrontos, RN-002/RN-003)** — compara item a item
+  (Descrição/Quantidade/Valor Unitário):
+  - **1º × 2º lado** (Kit declarado × IXC) — informal, destaque **amarelo**,
+    não bloqueia (RN-002).
+  - **3º × 2º lado** (Relatório EACE × IXC) — formal, sem tolerância,
+    destaque **vermelho do lado do IXC** (2º lado); KIT também entra aqui
+    contra o relatório (erro formal); **bloqueia** a transição do RI
+    enquanto aberto (RN-003/RN-001).
+- **Grid de INEPs** — linha por INEP, **5 colunas**: INEP, Nome da escola,
+  Endereço, **Status de conexão** (atributo da própria Escola/INEP, RF-20:
+  desconectado/parcialmente conectado/conectado) e **Status do RI** (RN-001/
+  seção 5 dos requisitos: Implantação EACE, Andamento, ... Faturamento
+  Concluído). Com drill-down para os itens; grid único de itens com filtro
+  por status do RI (não um grid separado por tipo de validação); exibe
+  divergência com fundo vermelho. Status do RI é atributo do RI, não do
+  INEP/Escola; Status de conexão é o único status que pertence à própria
+  Escola/INEP — as duas colunas ficam lado a lado no grid, sem uma estar
+  "dentro" da outra. O mesmo vale, futuramente, para o RE.
+  **Responsável** (também atributo do RI, RN-012) **não é coluna da tabela
+  principal** — decisão revista em 2026-08-25: fica só dentro do drill-down
+  do grid e da tela de detalhe do RI (FEAT-004), como campo editável
+  (`<select>` com os usuários do sistema), não mais como texto fixo.
 - **Documentos** — armazena a Nota Fiscal (PDF) e o XML recebidos do
   financeiro por INEP; substitui uma NF anterior quando chega uma nova.
 - **Fluxo de e-mail com o financeiro** — caixa própria do sistema
-  `posvendas@megainfraestrutura.com.br` (envio e leitura, SMTP/IMAP);
-  envio 1 e-mail por INEP (botão por linha do grid) com dados da escola e
-  valores. Destinatários (Para): `hilber.lustosa@speedcsc.com.br`,
-  `financeiro@speedcsc.com.br`. Cópia (Cc): `logistica-l@speedcsc.com.br`,
-  `posvendas@megainfraestrutura.com.br`, `david.alves@speedcsc.com.br`.
-  Leitura por polling IMAP (~5 min) identificando o INEP pela resposta ao
-  e-mail enviado; e-mail fora do padrão gera alerta no log, não bloqueia.
+  `posvendas@megainfraestrutura.com.br` (envio via SMTP; leitura via
+  Microsoft Graph, não IMAP — ver "Infra de e-mail" acima); o
+  grid mostra só um botão por linha do INEP (habilitado conforme o status
+  do RI), que abre uma tela/modal de composição com os campos De
+  (automático, remetente do sistema, não editável), Para, Cc, Assunto,
+  Anexo e Mensagem — não mais um formulário direto na tela do grid.
+  Para/Cc/Assunto vêm pré-preenchidos — Para: `hilber.lustosa@speedcsc.com.br`,
+  `financeiro@speedcsc.com.br`; Cc: `logistica-l@speedcsc.com.br`,
+  `posvendas@megainfraestrutura.com.br`, `david.alves@speedcsc.com.br`;
+  Assunto com o código de rastreio (RN-009) — mas editáveis pelo usuário
+  antes de enviar. Anexo: uma cópia preenchida da planilha-modelo
+  `doc/FATURAMENTO MATERIAS EACE.xlsx` (uma aba por produto/KIT lançado
+  no Lado IXC, criada automaticamente quando não há aba correspondente)
+  continua anexada por padrão, no lugar do PDF gerado antes (FEAT-017);
+  o campo permite acrescentar mais um arquivo, opcional; botão "Baixar
+  planilha" gera a mesma cópia antes de enviar, para conferência — ver
+  `business_rules.md`, RN-013/RN-014/RN-015. Leitura por polling via Microsoft Graph (~5 min,
+  serviço `email_scheduler`) identificando o INEP pelo código de rastreio
+  embutido no assunto do e-mail enviado (RN-009); e-mail fora do padrão
+  gera alerta no log, não bloqueia.
 - **Segunda validação** — confere se a NF recebida bate com o que foi
   solicitado ao financeiro antes de liberar o passo seguinte. Catálogo de
   status proposto em `requisitos.md` (ITEM 7, ainda `❓ aguardando
@@ -178,6 +243,32 @@ INEP é considerado concluído (Faturado).
   que RE ganha seu próprio model/tela quando chegar a hora, no mesmo
   formato da RI, em vez de ser encaixada dentro do que já existe.
 
+## Padrão de Interação Frontend — Atualizações Sem Reload Completo
+
+Ações pontuais de atualização (troca de status do RI, troca de responsável,
+registro de histórico/log) usam **HTMX** para atualizar só o trecho da tela
+afetado, sem recarregar a página inteira nem perder posição de rolagem ou
+filtros aplicados. HTMX já era a ferramenta padrão do Dev para esse tipo de
+interação (`.claude/agents/dev.md`, seção 11); esta seção registra a decisão
+no nível do projeto — até 2026-08-26 ela só existia na instrução do agente,
+não na arquitetura documentada.
+
+Aplicação inicial (escopo da `FEAT-019`): `ri_status_update_view`,
+`ri_responsavel_update_view` e o registro de histórico/log da `FEAT-014`,
+hoje implementados como POST tradicional com `redirect()` de página
+completa (`apps/ri/views.py`).
+
+Regras do padrão, quando usado:
+
+- a view responde com o partial atualizado (fragmento HTML) quando a
+  requisição chega via HTMX (header `HX-Request`), e mantém o
+  comportamento de POST + redirect tradicional como fallback quando não
+  chega — navegação sem JavaScript continua funcionando;
+- mensagens de sucesso/erro (`django.contrib.messages`) continuam sendo
+  exibidas no fluxo HTMX;
+- CSRF continua obrigatório;
+- ações destrutivas continuam exigindo confirmação.
+
 ## Decisões Pendentes
 
 - Critério exato de casamento entre os itens dos dois lados (EACE × IXC),
@@ -213,6 +304,11 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-08-28 | Novo módulo "Autenticação e sincronização via Active Directory" em "Módulos e Responsabilidades"; "Usuários e Permissões" recebe exceção (RN-043) | Usuário pediu a integração com AD, resolvendo a pendência aberta em `lixo.md` (item 7); RN-043/RN-044 criadas em `business_rules.md`; decisão de reaproveitar a mesma conta de serviço/config do `modulo-posVenda` registrada em `ADR-002`; gera `FEAT-027` |
+| 2026-08-26 | Nova seção "Padrão de Interação Frontend — Atualizações Sem Reload Completo" (HTMX); `FEAT-019` criada | Usuário pediu para trocar de status/responsável e registrar histórico sem recarregar a página inteira; HTMX já era padrão do Dev (`dev.md`) mas não estava registrado na arquitetura do projeto |
+| 2026-08-26 | "Fluxo de e-mail com o financeiro" atualizado: nota de alvo (PDF → planilha) vira descrição do estado atual, já entregue e validado no navegador real | FEAT-017/FEAT-018 entregues pelo Dev no mesmo dia; RN-013 revisada 2× até o desenho final (aba automática, exigência só no envio/download) e RN-015 criada (1 KIT por INEP) |
+| 2026-08-26 | "Fluxo de e-mail com o financeiro" recebe nota de alvo: anexo automático passa de PDF para cópia preenchida de `doc/FATURAMENTO MATERIAS EACE.xlsx` | RN-013/RN-014 criadas e FEAT-017/FEAT-018 abertas — alvo ainda não implementado, estado atual (PDF) mantido na descrição até a entrega |
+| 2026-08-24 | Módulo "Catálogo de preços fixos EACE (LPU)" registrado em "Módulos e Responsabilidades" | Usuário indicou a aba `LPU` de `CONSOLIDADO EACE.xlsx` (produto/lote/valor de equipamento/valor de serviço) como origem dos valores fixos do Kit; RN-010 ampliada e FEAT-015 criada |
 | 2026-08-22 | Nota de prontidão para RE na seção "Fora do escopo da v1" (Versão 3) | Usuário pediu para deixar a arquitetura pronta para RE, mas confirmou que a v1 continua só RI e que os requisitos não devem ser alterados agora — registrado só como orientação de padrão (RE ganha model/tela próprios, não entra dentro da RI), sem antecipar modelo, status ou regra de RE |
 | 2026-08-22 | Módulo "Frontend da tela Endereços" adicionado aos reaproveitados; ADR-001 recebe emenda | Usuário confirmou reaproveitamento de código (não só referência visual) do frontend da tela Endereços do `modulo-posVenda` para a FEAT-007, mantendo descontinuados Provedores/Parceiro e o restante de Leads |
 | 2026-08-22 | ADR-001 e seção "Relação com o `modulo-posVenda`" | Usuário definiu o destino final: um único sistema (este); `modulo-posVenda` é fonte de reaproveitamento até ser eliminado |
@@ -235,3 +331,10 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 | 2026-08-21 | Repositório do sistema novo registrado (`Sistema_posvenda`, privado); FEAT-001 entregue pelo Dev | Usuário criou o repositório no GitHub; Dev montou a base do projeto (config, apps core/escolas/ri/auditoria) sobre ele |
 | 2026-08-21 | Catálogo de tipos de divergência (P-03) sai de "Decisões Pendentes" — confirmado pelo cliente | Pendência restante do confronto EACE×IXC passa a ser só o critério de casamento entre itens (ainda em aberto) |
 | 2026-08-22 | Estrutura de navegação do menu lateral definida: aba "Projeto" > "EACE" > grid da FEAT-007 | Usuário pediu reorganização do menu (hoje item plano "Grid de INEPs"); confirmado que é o mesmo grid da FEAT-007, sem lógica nova, e que "Projeto" por ora só agrupa "EACE" |
+| 2026-08-22 | Esclarecido: Status e Responsável são atributos do RI (e, futuramente, do RE) — o INEP/Escola (atividade pai) não tem esses campos próprios; a coluna do grid mostra o dado do RI mais recente daquele INEP | Usuário confirmou a regra depois de eu apontar que o RF-05 (`requisitos-validacao-cliente.html`) já lista as duas colunas; a implementação entregue pelo Dev já refletia essa regra (`Ri.status`/`Ri.responsavel`, nunca campo da `Escola`) — sem mudança de código, só de clareza na documentação |
+| 2026-08-22 | Grid de INEPs passa a ter 6 colunas: Status de conexão (Escola, RF-20) entra como coluna própria, ao lado de Status do RI e Responsável (RF-05) — não fica mais só dentro do drill-down | Usuário apontou que status de conexão é atributo do próprio INEP/Escola e merece a mesma visibilidade de linha que as colunas do RI, não deveria ficar escondido dentro do drill-down |
+| 2026-08-22 | RI passa de 2 para 3 "lados": Kit declarado (1º, antes do projeto), IXC (2º) e Relatório EACE (3º, novo); dois confrontos — RN-002 (1º×2º, amarelo, informal) e RN-003 (3º×2º, vermelho do lado do IXC, bloqueia) | Usuário esclareceu que o model já implementado (`RiItemEace`, FEAT-004) representa o 1º lado, não "o relatório"; ver `business_rules.md` (RN-002/RN-003 reescritas) e `checklist.md` (FEAT-004/FEAT-005 atualizadas) |
+| 2026-08-23 | "Infra de e-mail" e "Fluxo de e-mail com o financeiro" passam a citar explicitamente o mecanismo de código de rastreio (RN-009), reaproveitado de `apps/core/email_tracking.py` do `modulo-posVenda` | Usuário pediu para trazer ao `Sistema_posvenda` a funcionalidade de e-mail (enviar, receber, rastreio e histórico) já existente no `modulo-posVenda`; identificação do INEP na resposta (FEAT-009) deixa de ser genérica e passa a referenciar o mecanismo concreto |
+| 2026-08-24 | "Fluxo de e-mail com o financeiro" passa a descrever uma tela/modal de composição (De/Para/Cc/Assunto/Anexo/Mensagem) aberta por um único botão do grid, em vez do formulário com só "Observação" direto na tela; Para/Cc/Assunto viram pré-preenchidos e editáveis (antes estritamente fixos); Anexo passa a ser adicional ao PDF automático (RN-008), não substituto | Usuário reprovou a entrega da FEAT-008 (só um campo de observação) antes mesmo do QA revisar; pediu tela dedicada de envio de e-mail; FEAT-008 volta para `🔄 Em andamento` em `checklist.md` |
+| 2026-08-25 | Grid de INEPs volta a ter 5 colunas: "Responsável" deixa de ser coluna da tabela principal e passa a viver só dentro do RI (drill-down do grid e tela da FEAT-004), agora como campo editável (`<select>` com os usuários do sistema) — RN-012 criada em `business_rules.md`; FEAT-007 volta a `🔄 Em andamento` | Usuário viu, na tela real, a coluna "Responsável" ainda na tabela principal e pediu a mudança; reabre, com decisão explícita do usuário, a discussão já registrada em 2026-08-22 sobre onde essa coluna deveria viver (RF-05 continua valendo para Status; Responsável passa a ter tratamento próprio) |
+| 2026-08-25 | Corrigido: "Infra de e-mail" e "Fluxo de e-mail com o financeiro" descreviam a leitura como polling IMAP — não é IMAP, é Microsoft Graph (a Microsoft aposentou Basic Auth IMAP nessa caixa); passam a citar o serviço `email_scheduler` (FEAT-012) e o app do Azure AD exclusivo deste sistema (RN-009, ainda não provisionado) | Usuário perguntou se o `modulo-posVenda` também precisou dessa mudança; verificação no código confirmou que sim — `apps/integracoes/email` de lá já usa Microsoft Graph (`GRAPH_EMAIL_REPLIES_ENABLED=true`, credenciais reais no `.env` de lá), não IMAP; a descrição desta arquitetura estava desatualizada nesse ponto |

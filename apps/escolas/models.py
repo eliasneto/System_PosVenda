@@ -23,6 +23,16 @@ class Escola(models.Model):
     estado = models.CharField("UF", max_length=2, blank=True)
     municipio = models.CharField("Município", max_length=150, blank=True)
     kit_inicial = models.CharField("Kit declarado (EACE)", max_length=100, blank=True)
+    nobreak_inicial = models.CharField(
+        "Nobreak declarado (EACE)",
+        max_length=100,
+        blank=True,
+        default="Nobreak",
+        help_text=(
+            "RN-017: item padrão, igual para todas as escolas (sem "
+            "quantidade/valor, não entra no cálculo financeiro)."
+        ),
+    )
     velocidade_dl_minima = models.CharField("Velocidade mínima", max_length=50, blank=True)
     status_conexao = models.CharField(
         "Status de conexão",

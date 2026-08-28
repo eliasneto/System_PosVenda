@@ -1,5 +1,5 @@
 # Modelagem de Banco de Dados — Gerenciador Pós-Venda
-_Última atualização: 2026-08-22 (tarde)_
+_Última atualização: 2026-08-26_
 
 > Escopo: banco de dados próprio deste sistema (separado do `modulo-posVenda`
 > original, ver `architecture.md`). Cobre o processo **RI** da v1
@@ -28,6 +28,7 @@ _Última atualização: 2026-08-22 (tarde)_
 | `ri` | `email_financeiro_log` | 1 RI → N e-mails (enviados/recebidos) |
 | `ri` | `ri_historico` | 1 RI → N registros de histórico (mensagem, anexo, e-mail, log automático) |
 | `usuario` | `auditoria` | 1 usuário → N registros de auditoria |
+| `escola` | `kit_padrao` | cruzamento por valor (`escola.kit_inicial` = `kit_padrao.descricao` **e** `escola.lote` = `kit_padrao.lote`) — não é FK, ver RN-010 |
 
 ## Tabelas
 
@@ -86,6 +87,11 @@ Um RI nasce com status `implantacao_eace` e percorre os 8 status do RN-001
 | `status` | `ENUM(...)` | não | Os 8 valores do RN-001 (ver abaixo). Default `implantacao_eace` |
 | `kit_informado_ixc` | `VARCHAR(100)` | sim | KIT do chamado IXC, para o alerta do RN-002 |
 | `divergencia_kit` | `BOOLEAN` | não | Alerta amarelo (RN-002) — `kit_informado_ixc` ≠ `escola.kit_inicial`. Não bloqueia |
+| `data_ativacao` | `DATE` | sim | Data de Ativação do Lado IXC (RN-011); valor único por RI, não por item |
+| `municipio_ixc` | `VARCHAR(150)` | sim | Município do Lado IXC (RN-014), preenchimento manual; usado na planilha de faturamento (RN-013). Comparado a `escola.municipio` — divergência é só alerta visual |
+| `estado_ixc` | `CHAR(2)` | sim | UF do Lado IXC (RN-014), preenchimento manual, sempre maiúsculo. Comparado a `escola.estado` — divergência é só alerta visual |
+| `observacoes_envio_financeiro` | `TEXT` | sim | Texto livre do campo "Mensagem" da tela de composição de e-mail (FEAT-008) |
+| `dados_financeiro_confirmados_em` | `DATETIME` | sim | Preenchido ao confirmar o envio na tela de composição (FEAT-008) |
 | `concluido_em` | `DATETIME` | sim | Preenchido ao chegar em `faturamento_concluido` |
 | `criado_em` / `atualizado_em` | `DATETIME` | não | — |
 
@@ -104,6 +110,42 @@ outro valor.
 |---|---|---|---|---|---|
 | 1 | 1 (`53008430`) | `andamento` | 2 | Kit Padrão 10Mb | false |
 | 2 | 3 (`53012345`) | `correcao_mega` | 2 | Kit Padrão 20Mb | false |
+
+### `kit_padrao` (catálogo de preços fixos EACE — LPU, RN-010)
+Catálogo de valores fixos por produto/kit, informado pela EACE na aba
+`LPU` de `CONSOLIDADO EACE.xlsx` ("TABELA 1 - LISTA DE PREÇOS UNITÁRIOS").
+Sem FK para `escola` — o cruzamento com `escola.kit_inicial`/`escola.lote`
+é por valor (mesmo texto + mesmo lote), usado para resolver Quantidade e
+Valor Unitário de `ri_item_eace` (RN-010). Tabela existe desde 2026-08-24
+(model `KitPadrao`, migration 0005), hoje só com `descricao`/
+`quantidade_padrao`/`valor_unitario_padrao` e vazia (nenhum valor
+inventado). Os campos abaixo já refletem a evolução prevista para
+incorporar os valores reais da planilha (lote, unidade, valor de
+equipamento e de serviço separados) — ver FEAT-015, ainda não migrada.
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `id` | `BIGINT` | não | Chave primária |
+| `descricao` | `VARCHAR(255)` | não | Mesmo texto de `escola.kit_inicial` |
+| `lote` | `INT` | sim | Mesmo valor de `escola.lote`; o preço varia por lote (ex.: `9`, `11`, hoje os únicos mapeados na planilha) |
+| `unidade` | `VARCHAR(50)` | sim | Texto da coluna "Unidade" da planilha (`Escola`, `Escola/Mês`, `Unidade`, `km`, `enlace`, `metro`, `par`) — define se o valor é o KIT fechado da escola (`Escola`/`Escola/Mês`) ou preço unitário de item avulso |
+| `quantidade_padrao` | `INT` | não | `1` para linhas tipo `Escola`/`Escola/Mês` (o kit fechado); sem uso automático nas demais linhas |
+| `valor_equipamento` | `DECIMAL(10,2)` | sim | Coluna "Equipamentos (R$)" da planilha; nulo quando a planilha não traz valor de equipamento para o item |
+| `valor_servico` | `DECIMAL(10,2)` | sim | Coluna "Serviços (R$)" da planilha |
+| `descricao_curta` | `VARCHAR(255)` | sim | Nome mostrado nas listas do Lado IXC (RN-011) — `descricao` sem o qualificador entre parênteses do final; preenchida automaticamente ao salvar quando vazia |
+| `numero_access_points` | `INT` | sim | Extraído automaticamente da `descricao` (padrão "... N Access Points"); usado para cruzar com `escola.kit_inicial` quando ela traz só o número (RN-010 ampliada) |
+| `aba_planilha_financeiro` | `VARCHAR(50)` | sim | Atalho opcional: nome da aba na planilha de faturamento (RN-013) — permite juntar produtos parecidos numa aba compartilhada (ex.: "Rack 3U"/"Rack 5U" → "RACK"). Sem preencher, o produto ganha aba própria automática. Não se aplica a KIT |
+| `criado_em` / `atualizado_em` | `DATETIME` | não | — |
+
+Chave única de negócio: (`descricao`, `lote`) — a mesma descrição pode se
+repetir com valor diferente em outro lote.
+
+**Exemplo:**
+| id | descricao | lote | unidade | valor_equipamento | valor_servico |
+|---|---|---|---|---|---|
+| 1 | Kit Cobertura Wi-Fi - 6 Access Points | 9 | Escola | 14457.89 | 20673.51 |
+| 2 | Kit Cobertura Wi-Fi - 6 Access Points | 11 | Escola | 13896.92 | 19871.38 |
+| 3 | Access Point adicional Indoor | 9 | Unidade | 727.31 | 1711.70 |
 
 ### `ri_item_eace` (1º lado — Kit declarado)
 **Esclarecido em 2026-08-22:** apesar do nome (mantido por ora — ajuste de
@@ -128,14 +170,20 @@ amarelo, não bloqueia).
 | 1 | 1 | Roteador Wi-Fi 6 | 2 | 350.00 |
 
 ### `ri_item_ixc` (2º lado — IXC)
-Mesma estrutura de `ri_item_eace`, para o lado IXC (RF-03). Entra nos dois
-confrontos: contra o 1º lado (RN-002, informal) e contra o 3º lado
-(RN-003, formal — divergência aparece destacada do lado deste, o IXC).
+Mesma estrutura de `ri_item_eace`, para o lado IXC (RF-03), mais 1 campo
+próprio. Entra nos dois confrontos: contra o 1º lado (RN-002, informal) e
+contra o 3º lado (RN-003, formal — divergência aparece destacada do lado
+deste, o IXC). Único dos 3 lados editável/excluível pelo pós-venda
+(RN-004).
+
+| Campo | Tipo | Nulo | Descrição |
+|---|---|---|---|
+| `eh_kit` | `BOOLEAN` | não | Default `false`. Marca o item como o "KIT Instalado" (RN-011), não produto avulso — usado na planilha de faturamento (RN-013, aba fixa "NF KIT") e no limite de 1 KIT por RI (RN-015) |
 
 **Exemplo (com divergência de quantidade em relação ao item acima):**
-| id | ri_id | descricao_item | quantidade | valor_unitario |
-|---|---|---|---|---|
-| 1 | 1 | Roteador Wi-Fi 6 | 1 | 350.00 |
+| id | ri_id | descricao_item | quantidade | valor_unitario | eh_kit |
+|---|---|---|---|---|---|
+| 1 | 1 | Roteador Wi-Fi 6 | 1 | 350.00 | false |
 
 ### `ri_item_relatorio_eace` (3º lado — Relatório EACE, novo, 2026-08-22)
 Itens do relatório baixado no portal da EACE **depois da instalação**.
@@ -292,6 +340,14 @@ ver `architecture.md`).
 - **`ri_historico`:** nome de campo/tabela é decisão técnica reversível do
   Dev na implementação (mesmo critério já usado para `auditoria`) — a
   estrutura acima é o ponto de partida, não uma definição fechada.
+- **`kit_padrao` (catálogo LPU):** evoluído e entregue pelo Dev na
+  FEAT-015 (2026-08-24) — `lote`, `unidade`, `valor_equipamento` e
+  `valor_servico` já implementados, com comando de importação a partir
+  da aba `LPU` de `CONSOLIDADO EACE.xlsx`. **Decidido:**
+  `ri_item_eace.valor_unitario` continua único, não discrimina
+  Equipamento/Serviço como o catálogo (RN-010). Pendência residual: não
+  existe ainda código que crie `ri_item_eace` automaticamente a partir
+  do catálogo — fica para uma feature futura.
 - **RE (instalação de link):** fora desta modelagem. Quando a v3 entrar em
   planejamento, provavelmente espelha `ri`/`ri_item_*`/`ri_historico` em
   tabelas próprias (`re`, `re_item_*`, `re_historico`), reaproveitando a
@@ -301,6 +357,9 @@ ver `architecture.md`).
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-08-26 | Documentados campos que faltavam: `ri.data_ativacao`/`municipio_ixc`/`estado_ixc`/`observacoes_envio_financeiro`/`dados_financeiro_confirmados_em`; `kit_padrao.descricao_curta`/`numero_access_points`/`aba_planilha_financeiro`; `ri_item_ixc.eh_kit` | Orquestrador identificou, ao consolidar a documentação de FEAT-017/FEAT-018 (RN-013/RN-014/RN-015), que vários campos já existentes no código desde FEAT-004/FEAT-011/FEAT-015/FEAT-016/FEAT-017/FEAT-018 nunca tinham sido sincronizados aqui; `modelo-dados-diagrama.html`/`.pdf` ainda não regenerados — pendência separada |
+| 2026-08-24 | Pendência sobre `ri_item_eace.valor_unitario` removida | Usuário decidiu manter valor único, sem discriminar Equipamento/Serviço (RN-010) |
+| 2026-08-24 | Tabela `kit_padrao` detalhada (lote, unidade, valor de equipamento e de serviço separados), com chave de negócio (`descricao`, `lote`); relação com `escola` registrada no diagrama de resumo | Usuário indicou a aba `LPU` de `CONSOLIDADO EACE.xlsx` como origem dos valores fixos do Kit por produto/lote e pediu integração com o kit já guardado por escola; gera FEAT-015 |
 | 2026-08-22 | Nova tabela `ri_historico`; diagrama regenerado (agora com os 3 lados do RI e `ri_historico`); pendência de `ri_item_relatorio_eace` removida (já implementado no código) | Usuário pediu para trazer do `modulo-posVenda` o histórico de mensagem/anexo/e-mail e log de status/campo (RN-008, `business_rules.md`) |
 | 2026-08-20 | Criação do documento | Usuário pediu a modelagem de banco de dados do sistema |
 | 2026-08-21 | `ri.status` ganha o 8º valor `correcao_mega` | Acompanha a ampliação do RN-001 em `business_rules.md` (novo status "Correção MEGA") |

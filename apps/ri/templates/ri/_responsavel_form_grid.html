@@ -1,0 +1,23 @@
+{% comment %}
+Formulário de troca de responsável do RI, versão do drill-down do grid
+(FEAT-007). FEAT-019: mesmo padrão do `_status_form.html` — hx-post sem
+reload, id + hx-swap-oob repõem este bloco com o valor real salvo.
+{% endcomment %}
+<form method="POST" action="{% url 'ri_responsavel_update' pk=ri.pk %}"
+      hx-post="{% url 'ri_responsavel_update' pk=ri.pk %}" hx-swap="none"
+      id="form-responsavel-grid-{{ ri.pk }}" hx-swap-oob="true"
+      data-salvar-ao-trocar
+      class="flex flex-wrap items-center gap-3 sm:flex-1 sm:min-w-[15rem] bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded-xl px-4 py-3">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <input type="hidden" name="origem" value="grid">
+    <label class="text-[10px] font-black uppercase text-amber-800 dark:text-amber-300">Responsável</label>
+    <select name="responsavel" class="flex-1 px-3 py-2 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+        {% if not ri.responsavel %}
+        <option value="" selected>Não atribuído</option>
+        {% endif %}
+        {% for usuario in usuarios %}
+        <option value="{{ usuario.pk }}" {% if ri.responsavel_id == usuario.pk %}selected{% endif %}>{{ usuario.get_full_name|default:usuario.username }}</option>
+        {% endfor %}
+    </select>
+</form>

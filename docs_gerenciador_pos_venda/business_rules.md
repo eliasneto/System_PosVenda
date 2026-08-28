@@ -1,5 +1,5 @@
 # Regras de Negócio — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-08-22_
+_Última atualização: 2026-08-28_ (RN-045 criada — liberação de acesso aos dados, liga/desliga por usuário, FEAT-029)
 
 ## Ciclo de Vida do RI
 
@@ -19,7 +19,7 @@ dar visibilidade de em que ponto do faturamento cada INEP está.
 | 2 | Andamento | Usuário | chamado do IXC chega; usuário digita no sistema os dados do chamado (lado IXC) |
 | 3 | Envio de Email para faturamento | Usuário | usuário confirma que todos os dados do chamado estão no sistema |
 | 4 | Aguardando financeiro | Sistema | e-mail ao financeiro é efetivamente enviado |
-| 5 | Aguardando Anexo portal EACE | Sistema | resposta do financeiro (NF + XML) entra na caixa de entrada |
+| 5 | Resposta Financeiro | Sistema | qualquer resposta do financeiro entra na caixa de entrada — válida (NF + XML) ou fora do padrão (RN-016) |
 | 6 | Aguardando validação EACE | Usuário | usuário concluiu o anexo do PDF/XML no portal da EACE |
 | 7 | Faturamento Concluído | Usuário | cliente EACE validou a instalação |
 | 8 | Correção MEGA | Usuário (Analista ou Administrador) | usuário identifica, durante o status "Andamento", divergência de quantidade/valor (RN-003/RF-04) entre o lado IXC e o relatório da EACE, e marca que os dados voltaram para a MEGA corrigir |
@@ -60,9 +60,192 @@ sequência principal + "Correção MEGA"); guarda (guard) impedindo a transiçã
 2→3 com divergência de quantidade/valor aberta; transições manuais 2→8 e 8→2
 sem gatilho automático em nenhum dos dois sentidos; duas transições
 automáticas disparadas por evento de sistema (envio de e-mail confirmado;
-leitura de resposta na caixa de entrada do financeiro).
+leitura de resposta na caixa de entrada do financeiro — RN-016 estende essa
+2ª transição para cobrir também resposta fora do padrão, não só a válida).
 
 **Features relacionadas:** FEAT-006.
+
+**Status:** Ativa
+
+### RN-016 — Status "Resposta Financeiro" e extensão do gatilho automático
+**Descrição:** O status 5 do ciclo de vida do RI (RN-001), antes chamado
+"Aguardando Anexo portal EACE", passa a se chamar "Resposta Financeiro".
+Continua sendo o mesmo status na mesma posição da sequência — não é um
+status novo. O gatilho automático que leva o RI até ele passa a valer para
+qualquer resposta do financeiro identificada pelo código de rastreio
+(RN-009), não só a resposta no padrão esperado (1 PDF + 1 XML): antes, uma
+resposta fora do padrão deixava o RI parado em "Aguardando financeiro" e só
+gerava alerta no log; agora ela também avança o RI para "Resposta
+Financeiro".
+
+**Contexto:** Usuário pediu, em 2026-08-26, visibilidade de quando o
+financeiro responde ao e-mail — e um card no grid (FEAT-007) com a
+contagem de INEPs nesse status, no mesmo padrão dos 2 cards já existentes
+("Total de INEPs" e "Com divergência"). Confirmado que é renomeação do
+status automático já existente (não um status novo, para não exigir uma
+transição manual adicional que hoje não existe) e que o gatilho deve valer
+também para resposta fora do padrão.
+
+**Critérios:**
+- Rótulo exibido em todo o sistema (filtro do grid, badge de status,
+  drill-down, `ri_detail`, histórico do RI) passa de "Aguardando Anexo
+  portal EACE" para "Resposta Financeiro"; valor interno gravado no banco
+  não muda — RI já existentes nesse status continuam íntegros, sem
+  necessidade de migração de dado.
+- Qualquer resposta do financeiro identificada pelo código de rastreio
+  (RN-009) muda o RI de "Aguardando financeiro" para "Resposta Financeiro"
+  — resposta válida (1 PDF + 1 XML) e resposta fora do padrão.
+- A 2ª validação da Nota Fiscal (RN-005) continua ocorrendo durante esse
+  status, sem mudança de critério — só o nome do status muda.
+- Grid de INEPs (FEAT-007) ganha um 3º card, mesmo estilo dos 2 já
+  existentes no topo da tela, com a contagem de INEPs cujo RI atual está em
+  "Resposta Financeiro"; clique no card filtra o grid por esse status
+  (mesmo efeito de selecionar o valor no filtro "Status do RI" já
+  existente).
+
+**Exceções:** e-mail sem código de rastreio identificável no assunto
+continua sem mudar o status de nenhum RI (RN-009) — a exceção é só para
+resposta fora do padrão de anexo, que agora muda o status mesmo assim.
+
+**Impacto técnico:** `apps/ri/models.py` (`Ri.STATUS_CHOICES`, rótulo do
+valor `AGUARDANDO_ANEXO_PORTAL_EACE`); `apps/ri/services.py`
+(`_processar_mensagem` chama `trocar_status_com_log` também no ramo "fora
+do padrão", não só no ramo válido); `apps/ri/views.py`
+(`grid_inep_view`) e `grid_inep.html` (3º card, contagem e link de
+filtro).
+
+**Features relacionadas:** FEAT-007, FEAT-009, FEAT-020.
+
+**Status:** Ativa
+
+### RN-019 — Exceção do Administrador: saída manual de "Aguardando financeiro"
+**Descrição:** Enquanto o RI está no status "Aguardando financeiro" (RN-001),
+a transição para o próximo status continua sendo, por padrão, só
+automática — disparada pelo sistema quando chega qualquer resposta do
+financeiro (RN-016). Um usuário com perfil Administrador (RN-004) ganha uma
+exceção: pode forçar manualmente essa transição, levando o RI direto para
+"Resposta Financeiro", sem esperar o gatilho automático. Usuário com perfil
+Analista continua sem nenhuma opção manual nesse status, como já é hoje
+para todo mundo.
+
+**Contexto:** Usuário pediu, em 2026-08-26, que esse status ficasse
+bloqueado a alterações e só um Administrador pudesse desbloquear.
+Levantamento mostrou que "Aguardando financeiro" já não tem hoje transição
+manual para nenhum perfil — fica de fora de `STATUS_RI_MANUAIS` (FEAT-006)
+por ser 100% automático (RN-001). Confirmado com o usuário que a regra é,
+então, uma exceção nova só para Administrador, e não o bloqueio de algo que
+já existisse.
+
+**Critérios:**
+- Único destino permitido para essa transição manual: "Resposta
+  Financeiro" — o mesmo destino que o gatilho automático (RN-016) usaria.
+- Disponível só quando o RI está em "Aguardando financeiro"; usuário
+  Administrador (RN-004, `is_administrador`) vê a opção; Analista não vê.
+- Ação registra log na linha do tempo do RI (RN-008), igual às demais
+  trocas de status, identificando o Administrador como autor.
+- Se, depois dessa transição manual, o RI algum dia voltar a "Aguardando
+  financeiro" (ex.: reenvio ao financeiro), a exceção volta a valer
+  normalmente — não é um destravamento permanente do RI, é uma ação
+  pontual de transição.
+
+**Exceções:** não altera nenhuma outra regra do ciclo de vida (RN-001,
+RN-003, RN-016); não libera edição dos demais dados do RI (Lado IXC, Kit,
+anexos) — isso continua sem restrição própria, fora do escopo desta regra.
+
+**Impacto técnico:** `apps/ri/views.py` — incluir "Aguardando financeiro"
+como origem manual só quando `request.user.is_administrador` for
+verdadeiro, com destino fixo "Resposta Financeiro" (não abre o mesmo
+`<select>` genérico dos demais status manuais); `_validar_transicao_status_ri`
+ganha esse caso específico; `STATUS_RI_MANUAIS`/`STATUS_RI_EDITAVEIS`
+continuam sem essa opção para o perfil Analista.
+
+**Features relacionadas:** FEAT-006.
+
+**Status:** Ativa
+
+### RN-020 — Bloqueio dos campos do Lado IXC e do Lado Relatório EACE em "Faturamento Concluído"
+**Descrição:** Enquanto o RI está no status "Faturamento Concluído" (RN-001,
+status 7), os campos do Lado IXC (RN-011, inclusive Data de Ativação/
+Município/Estado da RN-014) e do Lado Relatório EACE (RN-018) — 2º e 3º lado
+do RI — ficam bloqueados para edição, tanto para Administrador quanto para
+Analista. Enquanto o RI estiver nesse status, só um usuário com perfil
+Administrador (RN-004) pode trocar o status do RI; Analista perde, só nesse
+status, a opção manual de troca que tem nos demais status editáveis
+(RN-001). Assim que o Administrador troca o status para outro valor, os
+campos do Lado IXC e do Lado Relatório EACE voltam a ficar liberados
+normalmente, com as mesmas regras de permissão de hoje (RN-004) — o bloqueio
+vale só enquanto o RI permanece em "Faturamento Concluído", não é um
+travamento permanente do RI.
+
+**Contexto:** Usuário pediu, em 2026-08-27, que "Faturamento Concluído"
+funcione como um checkpoint: uma vez concluído o faturamento, os dados que
+alimentaram esse fechamento (Lado IXC e Lado Relatório EACE) não podem mais
+ser alterados por engano, e só o Administrador decide reabrir o processo.
+
+**Critérios:**
+- Bloqueio de campo: todo campo dos formulários do Lado IXC (KIT Instalado +
+  Produtos + Data Ativação/Município/Estado) e do Lado Relatório EACE (KIT
+  Instalado + Produtos) fica somente leitura enquanto
+  `ri.status == "Faturamento Concluído"` — vale para Administrador e
+  Analista, sem exceção de perfil.
+- Bloqueio de status: com o RI em "Faturamento Concluído", só Administrador
+  (RN-004, `is_administrador`) vê e usa a opção de trocar o status; Analista
+  não vê a opção, mesmo "Faturamento Concluído" sendo hoje um dos status que
+  ambos os perfis trocam livremente (`STATUS_RI_MANUAIS`).
+- Ao Administrador trocar o status para qualquer outro valor, os campos do
+  Lado IXC e do Lado Relatório EACE voltam a ficar editáveis normalmente.
+- Se o RI voltar a "Faturamento Concluído" depois (novo ciclo), o bloqueio
+  de campo e a exigência de Administrador para trocar o status valem de
+  novo — não é um destravamento permanente.
+
+**Exceções:** não altera as demais regras do ciclo de vida (RN-001, RN-003,
+RN-016, RN-019) nem os destinos possíveis da transição — esta regra só
+acrescenta quem pode acionar a troca de status a partir de "Faturamento
+Concluído" e o bloqueio de campo associado a esse status. Campos fora do
+Lado IXC e do Lado Relatório EACE (ex.: Responsável, RN-012) não são
+afetados por este bloqueio.
+
+**Impacto técnico:** `apps/ri/views.py` —
+`_validar_transicao_status_ri` ganha guarda para
+`ri.status == Ri.FATURAMENTO_CONCLUIDO` exigindo `usuario.is_administrador`;
+views/formulários de edição do Lado IXC e do Lado Relatório EACE (RN-011/
+RN-018) passam a checar `ri.status` antes de aceitar alteração (bloqueio
+também no backend, não só ocultar campo no template); templates dos dois
+lados renderizam os campos como somente leitura nesse status.
+
+**Features relacionadas:** FEAT-006, FEAT-004.
+
+**Status:** Ativa
+
+### RN-012 — Responsável pelo RI (atribuição editável)
+**Descrição:** O RI criado pela tela do sistema (`ri_iniciar`, FEAT-004)
+nasce com o usuário que o criou como responsável (comportamento já
+existente). Esse responsável pode ser trocado depois, manualmente, por
+qualquer usuário autorizado a editar o RI — não é um dado fixo do cadastro.
+
+**Contexto:** usuário identificou, em 2026-08-25, que a coluna
+"Responsável" estava aparecendo na tabela principal do grid (FEAT-007) e
+pediu que ela saia de lá e passe a viver dentro das informações do RI, como
+campo editável.
+
+**Critérios:** campo exibido dentro do RI (drill-down do grid da FEAT-007 e
+tela de detalhe da FEAT-004), nunca como coluna da tabela principal do grid;
+editável por meio de uma lista (`<select>`) com os usuários cadastrados no
+sistema; mesma permissão de edição do restante do RI — Administrador e
+Analista (RN-004), sem restrição adicional de perfil.
+
+**Exceções:** RI criado fora da tela do sistema (Django admin, fixture,
+carga de dados) pode ficar sem responsável — a tela mostra "Não atribuído"
+até alguém escolher um usuário na lista; a atribuição automática ao criador
+vale só para o fluxo normal (`ri_iniciar`). Não há forma de voltar um RI já
+atribuído para "Não atribuído" pela tela — só reatribuir a outro usuário.
+
+**Impacto técnico:** campo já existente `Ri.responsavel` (FK para o usuário do
+sistema, `null=True`); view/endpoint de atualização (mesmo padrão do
+`ri_status_update_view`, RN-001) e um `<select>` com `User.objects.all()` (ou
+equivalente) no template do drill-down e do `ri_detail`.
+
+**Features relacionadas:** FEAT-004, FEAT-007.
 
 **Status:** Ativa
 
@@ -89,30 +272,44 @@ divergente = destaque visual amarelo.
 **Exceções:** Não bloqueia nenhuma transição de status nem o avanço do
 processo — é apenas indicador visual.
 
+**Esclarecido em 2026-08-26:** além da comparação item a item acima
+(quantidade/valor unitário, cobre também os Produtos avulsos), o alerta
+inclui um campo específico do KIT — "qual KIT foi declarado antes do
+projeto" (`Escola.kit_inicial`) × "qual KIT foi instalado" (item com
+`eh_kit=True` no Lado IXC, RN-011/RN-015) — com a **mesma mecânica visual
+da RN-014** (município): campo único, destaque amarelo só quando os dois
+lados têm valor e divergem, sem bloquear. Isso resolve a favor de manter
+os campos `Escola.kit_inicial`/`Ri.kit_informado_ixc`/`Ri.divergencia_kit`
+como o indicador simples do KIT (em vez de aposentá-los) — o Dev decide
+apenas se `kit_informado_ixc` continua sincronizado manualmente ou passa a
+refletir o item `eh_kit` atual do Lado IXC (decisão técnica reversível e de
+baixo risco, CLAUDE.md §9).
+
 **Impacto técnico:** comparação item a item entre os itens do "Kit
 declarado" (model já implementado na FEAT-004, hoje chamado `RiItemEace` —
 nome pode confundir com o 3º lado novo da RN-003; ajuste de nome é decisão
-técnica do Dev) e os itens do "IXC" (`RiItemIxc`). Os campos
-`Escola.kit_inicial`/`Ri.kit_informado_ixc`/`Ri.divergencia_kit`, criados
-antes deste esclarecimento, ficam a critério do Dev: manter como indicador
-simples complementar ou aposentar em favor da comparação item a item
-(decisão técnica reversível e de baixo risco, CLAUDE.md §9).
+técnica do Dev) e os itens do "IXC" (`RiItemIxc`), mais o alerta de campo
+único do KIT descrito acima (`Escola.kit_inicial` × `Ri.kit_informado_ixc`/
+`Ri.divergencia_kit` ou equivalente pós-RN-011).
 
 **Features relacionadas:** FEAT-004, FEAT-005.
 
-**Status:** Ativa (redação atualizada em 2026-08-22)
+**Status:** Ativa (redação atualizada em 2026-08-22; esclarecida em
+2026-08-26)
 
 ## Confronto de Divergências
 
 ### RN-003 — Confronto de divergências (Relatório EACE × IXC)
-**Descrição:** O sistema compara, item a item, os dados do relatório
-baixado no portal da EACE **depois da instalação** ("Relatório EACE", 3º
-lado do RI) contra os dados digitados para o "lado IXC" (2º lado,
-atendimento), usando quantidade e valor unitário, sem tolerância.
-Divergência aparece destacada em **vermelho do lado do IXC** (2º lado) —
-é ali que a correção deve ser feita. O KIT também entra nesse confronto
-formal contra o Relatório EACE — diferente do alerta informal de "Kit
-declarado" × IXC (RN-002).
+**Descrição:** O sistema compara o "KIT Instalado" e os "Produtos"
+lançados no Lado Relatório EACE (3º lado, depois da instalação) contra os
+lançados no Lado IXC (2º lado, atendimento) — mesmo critério nos dois:
+Descrição (qual KIT/Produto do catálogo `KitPadrao`, RN-011/RN-018) e
+Quantidade, sem tolerância. Valor Unitário fica fora deste confronto
+(esclarecido em 2026-08-26 — ver abaixo). Divergência aparece destacada em
+**vermelho nos itens do Lado IXC** (2º lado) — é ali que a correção deve
+ser feita (editando/excluindo o item, RN-004). Bloqueia a transição do RI
+de "Andamento" para "Envio de Email para faturamento" (RN-001) enquanto
+estiver aberta.
 
 **Contexto:** `requisitos.md`, ITEM 4 e "PROCESSO do Projeto" (correções 1
 e 2, 2026-08-20). **Esclarecido em 2026-08-22:** o RI tem **3 lados**, não
@@ -121,33 +318,73 @@ e 2, 2026-08-20). **Esclarecido em 2026-08-22:** o RI tem **3 lados**, não
 formal é sempre entre o 3º lado e o 2º; o 1º lado não participa dele — só
 do confronto informal RN-002.
 
-**Critérios:** comparação estrita — acentuação, espaço e maiúscula/minúscula
-contam como divergência; o campo "Descrição do Item" não entra no confronto
-de quantidade/valor, é usado só como referência de casamento entre os
-lados; o lado do Relatório EACE nunca é editado pelo pós-venda — uma
-correção só pode vir de um relatório novo/atualizado da própria EACE.
+**Esclarecido em 2026-08-26:** a redação original (2026-08-22) previa
+comparar quantidade **e valor unitário**. Usuário confirmou tirar Valor
+Unitário do confronto — o Lado IXC nasce sempre com R$ 0,00 (RN-011,
+criada depois desta regra), então comparar valor acusaria divergência em
+todo item, sem relação nenhuma com o faturamento real. Quantidade
+continua no confronto. Isso também fecha a pendência de casamento entre
+itens que esta regra deixou em aberto desde 2026-08-22: com os dois lados
+escolhendo a descrição no mesmo catálogo `KitPadrao` (RN-011/RN-018), o
+casamento por Descrição igual deixou de ser uma aproximação arriscada.
+
+**Critérios:**
+- Comparação por Descrição (qual KIT/Produto do catálogo foi escolhido) +
+  Quantidade — Valor Unitário não entra (ver esclarecimento acima).
+- "KIT Instalado": comparado isoladamente — no máximo 1 de cada lado
+  (RN-015/RN-018). Divergência quando um lado tem KIT lançado e o outro
+  não, ou quando a Descrição do KIT difere entre os dois lados.
+- "Produtos": comparados como conjunto — para cada Descrição de produto, a
+  Quantidade total lançada no Lado IXC precisa ser igual à Quantidade
+  total lançada no Lado Relatório EACE. Produto faltando, sobrando ou com
+  quantidade diferente em qualquer um dos dois lados = divergência.
+- Comparação estrita — acentuação, espaço e maiúscula/minúscula contam
+  como divergência (a Descrição vem do mesmo catálogo nos dois lados, então
+  isso só ocorre na prática via "Outro", com número de Access Points
+  diferente).
+- Recalculada automaticamente a cada lançamento, edição ou exclusão de
+  item em qualquer um dos dois lados — não é uma ação manual de "conferir".
+- O lado do Relatório EACE nunca é editado pelo pós-venda diretamente, a
+  não ser pela exceção abaixo (RN-018, ampliada em 2026-08-27) — qualquer
+  item, KIT ou Produto, pode ser editado/excluído.
+
+**Exceção (RN-018, criada em 2026-08-26 para o KIT; ampliada em
+2026-08-27 para os Produtos):** qualquer item do Relatório EACE — "KIT
+Instalado" ou "Produto" — pode ser editado/excluído (mesmo padrão de
+permissão da RN-004 já usado no Lado IXC; exclusão só Administrador). A
+exceção nasceu só para o KIT: sem ela, o limite de 1 KIT por INEP
+(RN-015, estendido ao Relatório EACE pela RN-018) tornaria impossível
+corrigir o KIT pela tela. Ampliada para Produtos depois que o
+Sincronizador (FEAT-024/RN-022) passou a casar itens da Planilha EACE
+automaticamente — um Produto casado errado (ex.: "Nobreak" por outro
+item) também precisa de correção pela tela, não só o KIT.
 
 **Exceções:** o catálogo fechado dos tipos de divergência formal (`valor`,
 `quantidade`, `kit_relatorio`, `nf_financeiro`) foi **confirmado pelo
 cliente em 2026-08-21 (P-03)** — ver `requisitos.md`, "PROCESSO do
 Projeto"; pode ser ajustado ao longo do projeto se necessário, mas vale
-para a v1 a partir de agora. **Pendência restante:** o critério exato de
-casamento entre os itens dos lados (hoje proposto como texto igual da
-descrição) ainda não foi confirmado pelo usuário, que optou por seguir sem
-essa definição por agora.
+para a v1 a partir de agora. Este confronto usa o tipo `kit_relatorio`.
 
-**Impacto técnico:** tabela `ri_divergencia` (`modelo-dados.md`); bloqueia a
-transição de status 2→3 do RN-001 enquanto houver divergência de
-quantidade/valor aberta. Precisa de um **model novo** para o "Relatório
-EACE" (3º lado) — o model já implementado na FEAT-004, hoje chamado
-`RiItemEace`, na verdade representa o 1º lado ("Kit declarado", RN-002),
-não este; nome/uso a ajustar pelo Dev. Grid (FEAT-007) e tela de cadastro
-(FEAT-004) precisam de um 3º card para esse novo lado.
+**Impacto técnico:** tabela `ri_divergencia` (`modelo-dados.md`) — um
+registro por RI para este confronto (`tipo=kit_relatorio`,
+`bloqueia=True`), sincronizado (criado, atualizado ou resolvido) a cada
+mudança em `RiItemIxc` ou `RiItemRelatorioEace`, não acumulado por item
+divergente. O bloqueio da transição "Andamento" → "Envio de Email para
+faturamento" já está implementado (`_validar_transicao_status_ri`, `apps/
+ri/views.py`, checa `ri.divergencias.filter(resolvida_em__isnull=True,
+bloqueia=True).exists()`) — falta só o gerador da divergência descrito
+aqui. O grid de INEPs (FEAT-007) já destaca (fundo vermelho) o INEP com
+divergência aberta — também só falta o gerador alimentar isso. Destaque
+vermelho nos itens do Lado IXC (`ri_detail.html`) usa a mesma mecânica de
+acessibilidade já usada na RN-014 (borda + texto, não só cor).
 
 **Features relacionadas:** FEAT-004, FEAT-005, FEAT-006, FEAT-007.
 
-**Status:** Ativa (redação atualizada em 2026-08-22 — RI passa de 2 para 3
-lados; pendência restante só no critério de casamento entre itens)
+**Status:** Ativa (redação reescrita em 2026-08-26 — confronto por
+Descrição + Quantidade, sem Valor Unitário; pendência de casamento entre
+itens encerrada) — **extensão (RN-018, 2026-08-27):** exceção de editar/
+excluir do Relatório EACE deixou de valer só para o KIT, passa a valer
+também para Produtos.
 
 ## Permissões
 
@@ -161,16 +398,267 @@ anexados (NF/XML) e ao cadastro de usuário.
 **Critérios:** exclusão de INEP/item e de usuário — só Administrador;
 criação, edição e leitura de INEP/item, documentos e marcações manuais
 (inclusive "Correção MEGA", RN-001) — Administrador e Analista; cadastro de
-usuário (criar/editar/desativar) — só Administrador.
+usuário (criar/editar/desativar) — só Administrador. **Ampliação (FEAT-028,
+2026-08-28):** troca de perfil (Administrador ↔ Analista) de outro usuário
+pode ser feita pela tela interna "Administrador > Usuários", sem precisar do
+`/admin/` do Django; escopo dessa tela é só listar usuário e trocar perfil —
+criar usuário, editar username/e-mail e ativar/desativar continuam só pelo
+`/admin/`. Administrador não pode trocar o próprio perfil por essa tela
+(evita se autorrebaixar sem outro Administrador por perto para reverter).
 
-**Exceções:** nenhuma além das listadas — não há terceiro perfil nem
-permissão granular por módulo nesta versão.
+**Exceções:** login via Active Directory (RN-043) cria automaticamente o
+usuário local com perfil Analista no primeiro acesso — único caso em que a
+criação de usuário não depende do Administrador; edição e desativação
+continuam exclusivas dele, inclusive para usuário criado assim.
 
 **Impacto técnico:** campo `usuario.perfil` (`administrador`/`analista`,
 `modelo-dados.md`); checagem de permissão nas ações de exclusão e no
-cadastro de usuário.
+cadastro de usuário; view da tela "Administrador > Usuários" (FEAT-028)
+bloqueia troca de perfil da própria conta logada.
 
-**Features relacionadas:** FEAT-003, FEAT-004, FEAT-006, FEAT-010.
+**Features relacionadas:** FEAT-003, FEAT-004, FEAT-006, FEAT-010, FEAT-027,
+FEAT-028.
+
+**Status:** Ativa — **extensão (RN-021, 2026-08-27):** upload/gestão da
+Planilha EACE (Administrador > Planilha EACE) também restrita a
+Administrador. **Exceção (RN-043, 2026-08-28):** criação automática de
+usuário via login AD, sempre com perfil Analista. **Ampliação (FEAT-028,
+2026-08-28):** tela interna para trocar perfil de outro usuário, com bloqueio
+de autopromoção/autorrebaixamento.
+
+### RN-045 — Liberação de acesso aos dados (liga/desliga)
+**Descrição:** Além do perfil (RN-004), toda conta de usuário tem um segundo
+controle, independente do perfil: acesso aos dados **Ligado**/**Desligado**.
+Com login válido mas conta **Desligada**, a pessoa entra no sistema e vê o
+menu normalmente, mas nenhuma tela com informação real do projeto mostra
+dado nenhum — em vez disso, mostra um aviso claro de que o acesso depende da
+liberação do Administrador. Vale para Analista **e também para
+Administrador** (perfil não isenta do controle).
+
+**Contexto:** pedido do usuário em 2026-08-28 — quer um controle manual do
+Administrador antes de qualquer conta nova (inclusive as criadas sozinhas
+pelo login via Active Directory, RN-043) enxergar dado real do projeto.
+
+**Critérios:** toda tela com informação do projeto fica bloqueada (aviso de
+"aguardando liberação", não tela vazia sem explicação, nem erro) para
+usuário Desligado — inclui os 3 submenus do Dashboard, o Grid de INEPs e o
+detalhe do RI (com drill-down), e também as telas do próprio menu
+Administrador (Planilha EACE, Usuários — RN-004/RN-021/FEAT-028). O menu
+lateral continua visível normalmente. Administrador liga/desliga qualquer
+outra conta pela tela "Administrador > Usuários" (mesma tela da RN-004
+ampliada, FEAT-028) — não pode ligar/desligar a própria conta pela tela
+(mesmo motivo da RN-004: evita se desligar sem outro Administrador já ligado
+por perto para reverter).
+
+**Exceções:** conta de usuário que já existia **antes** desta regra entrar
+em vigor continua exatamente como está hoje — com acesso aos dados, sem
+precisar de nenhuma liberação manual. O padrão "nasce Desligado" vale só
+para conta criada a partir de agora, seja pelo `/admin/` do Django, seja
+pelo login automático via Active Directory (RN-043). Essa exceção também
+garante que sempre existe pelo menos um Administrador já Ligado capaz de
+liberar as contas novas — sem isso, ninguém conseguiria ligar ninguém.
+
+**Impacto técnico:** novo campo booleano no model `User`, ausente do
+`modelo-dados.md` atual — precisa ser somado lá (nome técnico a critério do
+Dev, seguindo o padrão de `perfil`); migração de dado (não só de schema)
+para marcar todo usuário já existente como Ligado, já que o valor padrão do
+campo (Desligado) só vale para linha nova — mesmo padrão já usado em
+`ri.migrations.0010_backfill_numero_access_points`; checagem de acesso
+precisa cobrir toda tela autenticada com dado, não só uma view isolada
+(mecanismo de aplicação — decorator, mixin ou middleware — é decisão técnica
+do Dev); toggle na tela "Administrador > Usuários" (FEAT-028) bloqueia
+autotroca da própria conta logada, mesmo padrão já usado ali para o perfil.
+
+**Features relacionadas:** FEAT-004, FEAT-006, FEAT-007, FEAT-010, FEAT-026,
+FEAT-027, FEAT-028, FEAT-029.
+
+**Status:** Ativa
+
+## Autenticação
+
+### RN-043 — Autenticação via Active Directory (login)
+**Descrição:** O login do sistema passa a validar usuário e senha contra o
+Active Directory (LDAP), reaproveitando o padrão do `modulo-posVenda`
+(`django_auth_ldap.backend.LDAPBackend`), com `ModelBackend` (login local)
+como fallback quando `USE_AD_AUTH` estiver desligado ou a biblioteca LDAP
+não estiver disponível.
+
+**Contexto:** decisão do usuário em 2026-08-28, resolvendo a pendência
+registrada em `lixo.md` (item 7) sobre se haveria integração com AD.
+
+**Critérios:** primeiro login bem-sucedido de um usuário válido no AD que
+ainda não tem cadastro local cria o usuário automaticamente, com perfil
+Analista (RN-004) — nunca Administrador; usuário já existente localmente
+autentica normalmente pelo AD, sem duplicar cadastro; usuário desativado
+localmente (`is_active=False`) não consegue logar mesmo com senha correta
+no AD, mesma regra que já vale hoje para login local.
+
+**Exceções:** RN-004 — cadastro automático via AD é a única forma de
+criação de usuário que não depende do Administrador; edição e desativação
+continuam exclusivas dele.
+
+**Impacto técnico:** `AUTHENTICATION_BACKENDS` condicional a `USE_AD_AUTH`
+(`config/settings.py`); variáveis `AD_SERVER_URI`, `AD_BIND_DN`,
+`AD_BIND_PASSWORD`, `AD_USER_SEARCH_BASE`, `AD_DEFAULT_DOMAIN`
+reaproveitadas com os mesmos valores já usados no `.env` do
+`modulo-posVenda` — decisão explícita do usuário, ver `ADR-002`; perfil
+Analista atribuído no momento da criação automática do usuário.
+
+**Features relacionadas:** FEAT-027, FEAT-029.
+
+**Status:** Ativa — **ampliação (RN-045, 2026-08-28):** usuário criado
+automaticamente por este login nasce também com acesso aos dados Desligado,
+mesmo critério de qualquer conta nova a partir de agora.
+
+### RN-044 — Sincronização de e-mail e nome via Active Directory (pós-login)
+**Descrição:** A cada login bem-sucedido (via AD ou local), o sistema busca
+no AD, pela mesma conta de serviço de bind da RN-043, o e-mail e o nome
+(`displayName`/`sn`) do usuário e atualiza o cadastro local quando
+diferente — reaproveita `apps/integracoes/ad/ad_sync.py` do
+`modulo-posVenda`.
+
+**Contexto:** mesma decisão de 2026-08-28 (RN-043).
+
+**Critérios:** não sobrescreve e-mail já em uso por outro usuário local — a
+atualização é ignorada nesse caso, sem erro visível ao usuário; falha ou
+indisponibilidade do LDAP não bloqueia o login, só deixa de sincronizar
+naquele acesso.
+
+**Exceções:** se `USE_AD_AUTH` estiver desligado ou o LDAP indisponível, a
+sincronização não ocorre — sem isso não há como consultar o AD.
+
+**Impacto técnico:** reaproveita `sincronizar_email_usuario`,
+`sincronizar_nome_usuario` e o receiver do signal `user_logged_in` de
+`apps/integracoes/ad/ad_sync.py`.
+
+**Features relacionadas:** FEAT-027.
+
+**Status:** Ativa
+
+## Envio e Rastreio de E-mail
+
+### RN-009 — Código de rastreio do e-mail do RI
+**Descrição:** Todo e-mail enviado ao financeiro (FEAT-008) carrega, no
+assunto, um código de rastreio que identifica o INEP de origem. Ao chegar
+a resposta (FEAT-009), o sistema extrai esse código do assunto para
+associar a resposta ao RI correto, sem depender de remetente ou corpo do
+texto.
+
+**Contexto:** pedido do usuário em 2026-08-23 para trazer ao
+`Sistema_posvenda` a funcionalidade de e-mail (enviar, receber, rastreio e
+histórico) já em produção no `modulo-posVenda` — mecanismo formalizado lá
+como RN-042/PO-066 (`apps/core/email_tracking.py`).
+
+**Critérios:** código no formato `RI-AAAAMMDD-INEP` (data do envio + INEP
+do RI), prefixado ao assunto como `#{codigo} - {assunto original}` — mesma
+mecânica de `montar_codigo_rastreio`/`montar_assunto_com_codigo` do
+`modulo-posVenda`, adaptada: sem a taxonomia de níveis RE/RI/MC/Global do
+RN-042 original, porque este sistema só trata RI (RN-008, exceção). Na
+leitura da resposta (FEAT-009), o assunto é varrido com o mesmo padrão de
+regex (`extrair_codigos_rastreio`) para localizar o RI de origem.
+
+**Exceções:** resposta sem código de rastreio identificável no assunto
+segue a exceção já registrada em RN-005 — não bloqueia o fluxo, só gera
+alerta no log de e-mail.
+
+**Impacto técnico:** geração do código no envio (FEAT-008) e extração na
+leitura (FEAT-009); reaproveita `apps/core/email_tracking.py` do
+`modulo-posVenda` como base, sem dependência de model (mesmo desenho
+original).
+
+**Features relacionadas:** FEAT-008, FEAT-009.
+
+**Status:** Ativa
+
+### RN-013 — Anexo do financeiro em planilha (substitui o PDF)
+**Descrição:** O e-mail enviado ao financeiro (FEAT-008) — e o botão
+"Baixar planilha" da mesma tela — passam a gerar uma cópia preenchida da
+planilha-modelo `doc/FATURAMENTO MATERIAS EACE.xlsx`, no lugar do PDF
+gerado antes. A cópia tem uma aba por produto distinto lançado no Lado
+IXC daquele RI (KIT incluso); produto sem aba já cadastrada **não
+bloqueia** — ganha uma aba nova, criada na hora. O envio/download só é
+bloqueado quando falta KIT lançado, Data de Ativação, Município ou
+Estado do Lado IXC (RN-014/RN-015).
+
+**Contexto:** Usuário pediu, em 2026-08-26, para o e-mail ao financeiro
+levar a planilha-modelo em vez do PDF, porque o conteúdo dela é copiado
+direto para a Nota Fiscal — a estrutura, o texto fixo e o espaçamento da
+planilha não podem mudar. Regra revisada 2× no mesmo dia depois da
+entrega inicial: (1) bloquear por falta de aba cadastrada se mostrou
+impraticável — catálogo real tem produtos cujo nome não bate com nenhuma
+aba do modelo, e usuário reportou o erro em produção ao lançar "Nobreak";
+(2) a exigência de KIT/Data de Ativação/Município/Estado tentou travar o
+"Salvar" do Lado IXC antes de o usuário esclarecer que deve travar só o
+envio/download, para não impedir lançar um Produto novo por causa de um
+campo sem relação com aquela ação.
+
+**Critérios:**
+- Linha 10 de cada aba: `E10` (VENCIMENTO) recebe a data do envio do
+  e-mail (ou do clique em "Baixar planilha"); `H10` (VALOR R$) recebe a
+  soma do subtotal (quantidade × valor unitário do catálogo `KitPadrao`,
+  mesmo produto e Lote da escola, RN-010) de todo item lançado que caia
+  naquela aba — não usa `RiItemIxc.valor_unitario` gravado no item (nasce
+  0,00 por padrão, RN-011, sujeito a correção manual avulsa); `F10`
+  (OBSERVAÇÕES DA NOTA FISCAL) é o mesmo texto fixo do modelo, com 4
+  trechos substituídos: INEP da escola, ITEM LPU (nome do produto/KIT
+  daquela aba), MUNICIPIO/UF (RN-014) e VENCIMENTO (mesma data de `E10`)
+  — todo o resto do texto (nº de contrato, texto legal) é copiado sem
+  alteração.
+- `H12` mantém a fórmula já existente no modelo (`=SUM(H10:H11)`) — não é
+  sobrescrita com um valor fixo.
+- Linha 16 de cada aba: `C16` (RAZÃO SOCIAL) recebe o nome da escola,
+  `F16` (ENDEREÇO) o endereço da escola, `G16` (MUNICIPIO) e `H16` (UF)
+  os valores do Lado IXC (RN-014), `I16` (ITEM LPU) o mesmo nome do
+  produto/KIT usado no `F10`.
+- Demais células da planilha-modelo (inclusive `G10`, "CONTRATO EACE")
+  são copiadas exatamente como estão — o sistema não gera nem altera o
+  que não foi listado acima.
+- **Nome da aba:** KIT sempre usa a aba fixa "NF KIT", com o texto "KIT
+  N" (N = número de Access Points, extraído da descrição do item — RN-015
+  garante no máximo 1 KIT por RI, então não há ambiguidade de qual
+  prevalece). Produto avulso usa `KitPadrao.aba_planilha_financeiro`
+  quando cadastrado (permite juntar produtos parecidos numa aba
+  compartilhada, ex.: "Rack 3U"/"Rack 5U"/"Rack 7U" → aba "RACK" — quando
+  2+ produtos caem na mesma aba, o valor de `H10` soma o subtotal de cada
+  um, não só a quantidade de um deles); sem cadastro, usa a própria
+  descrição do produto como nome da aba.
+- **Aba sem correspondência no modelo é criada, não bloqueia:** quando o
+  nome resolvido (fixo do KIT, ou de `aba_planilha_financeiro`, ou do
+  próprio produto) não bate com nenhuma aba já existente no arquivo
+  modelo, o sistema cria uma aba nova clonando o layout (célula,
+  formatação, mesclagem e imagem — a logo do financeiro, presente em toda
+  aba do modelo) de uma aba já existente; nome da aba truncado a 31
+  caracteres (limite do Excel), mas o texto completo continua no `F10`/
+  `I16`. Só as abas dos produtos realmente lançados neste RI entram na
+  cópia final — as demais abas do modelo (produtos não lançados) saem.
+- **Exigência para gerar (envio de e-mail ou "Baixar planilha"):** o RI
+  precisa ter, até esse momento — não a cada "Salvar" do Lado IXC — pelo
+  menos 1 item lançado, sendo 1 deles o KIT (RN-015), mais `Ri.
+  data_ativacao`, `Ri.municipio_ixc` e `Ri.estado_ixc` preenchidos
+  (RN-014). Falta de qualquer um bloqueia com 1 mensagem só, listando
+  exatamente o que falta (ex.: "Antes de enviar o e-mail ou baixar a
+  planilha, preencha no Lado IXC: o KIT Instalado, a Data de Ativação, o
+  Município (Lado IXC) e o Estado (Lado IXC)."). Produto avulso nunca é
+  obrigatório.
+- Tela de composição de e-mail (FEAT-008) tem um botão "Baixar planilha",
+  que gera e baixa a mesma cópia que seria anexada, sem enviar o e-mail —
+  para o usuário validar antes de confirmar o envio; sujeito à mesma
+  exigência acima.
+
+**Exceções:** nenhuma além do critério de exigência acima — não há mais
+bloqueio por produto sem aba cadastrada (revisto em 2026-08-26).
+
+**Impacto técnico:** `apps/ri/services.py` — `gerar_planilha_faturamento`
+(orquestra a geração e a checagem de exigência), `_obter_ou_criar_aba`
+(usa a aba existente ou clona, copiando imagem manualmente — `Workbook.
+copy_worksheet` do openpyxl não copia imagem), `_item_lpu_e_aba`,
+`_resolver_catalogo_ixc`, exceção `PlanilhaFaturamentoError`; `apps/ri/
+models.py` — `KitPadrao.aba_planilha_financeiro` (opcional, migration
+`0014`/`0015`) e `RiItemIxc.eh_kit` (migration `0014`); anexo do e-mail
+(FEAT-008) passa a ser esse arquivo, no lugar do PDF de
+`gerar_pdf_dados_financeiro` (removida).
+
+**Features relacionadas:** FEAT-008, FEAT-017, FEAT-018.
 
 **Status:** Ativa
 
@@ -183,17 +671,19 @@ correspondem ao que foi solicitado no e-mail enviado para aquele INEP.
 
 **Contexto:** `requisitos.md`, ITEM 7 e "PROCESSO do Projeto".
 
-**Critérios:** validação ocorre durante o status "Aguardando Anexo portal
-EACE" (RN-001); encontrar divergência classifica como o tipo
-"NF × financeiro" no catálogo de divergências (RN-003).
+**Critérios:** validação ocorre durante o status "Resposta Financeiro"
+(RN-001, RN-016 — mesmo status antes chamado "Aguardando Anexo portal
+EACE"); encontrar divergência classifica como o tipo "NF × financeiro" no
+catálogo de divergências (RN-003).
 
 **Exceções:** e-mail de resposta fora do padrão (sem 1 PDF + 1 XML, ou sem
-INEP identificável) não bloqueia o fluxo, só gera alerta no log de e-mail.
+INEP identificável) não bloqueia o fluxo, só gera alerta no log de e-mail —
+mas, a partir da RN-016, também muda o status para "Resposta Financeiro".
 
 **Impacto técnico:** tabelas `email_financeiro_log` e `documento`
 (`modelo-dados.md`).
 
-**Features relacionadas:** FEAT-009.
+**Features relacionadas:** FEAT-009, FEAT-020.
 
 **Status:** Ativa
 
@@ -226,8 +716,10 @@ alteração de campo/transição de status é decisão de implementação do Dev
 **Descrição:** Cada RI tem uma linha do tempo própria, visível na tela do
 RI (FEAT-004), com três tipos de registro: mensagem escrita pelo usuário
 (comentário livre, com anexo opcional), anexo isolado, e log automático do
-sistema — mudança de status (FEAT-006), mudança de campo relevante, e
-envio/recebimento de e-mail. Mais recente primeiro.
+sistema — mudança de status (FEAT-006), atribuição/troca de responsável
+(RN-012), cadastro e alteração dos itens do Lado IXC e do Relatório EACE
+(2º e 3º lado, FEAT-004), e envio/recebimento de e-mail. Mais recente
+primeiro.
 
 **Contexto:** pedido do usuário em 2026-08-22, para reaproveitar o padrão
 de `RegistroHistorico` do `modulo-posVenda` (lá documentado como RN-029/
@@ -238,7 +730,14 @@ num único feed por entidade.
 campo e valor anterior/novo, em vez de só uma frase livre; envio de e-mail
 (FEAT-008) e recebimento (FEAT-009) também geram entrada nesta linha do
 tempo, além do que já é registrado em `email_financeiro_log`; anexo fica
-disponível para download.
+disponível para download. **Esclarecimento (2026-08-26):** "campo
+relevante" cobre também o **cadastro** de um dado, não só a alteração de
+um valor já existente — todo lançamento novo no Lado IXC (KIT Instalado,
+Produto avulso, Data de Ativação, Município/Estado) e no Relatório EACE
+gera entrada própria na linha do tempo com o valor cadastrado; edição e
+exclusão de item do Lado IXC também geram entrada, com valor anterior e
+novo (exclusão grava o valor removido). Kit Declarado (1º lado) fica de
+fora: não é cadastrado nesta tela, vem pronto da EACE (RN-010).
 
 **Exceções:** distinto do Auditoria/RN-006 — aquele continua sem tela
 própria, só trilha técnica; este histórico é a tela do usuário. Pode haver
@@ -286,12 +785,696 @@ das duas datas.
 
 **Status:** Ativa
 
+## Kit Declarado e Catálogo de Valores
+
+### RN-010 — Kit Declarado: origem automática e catálogo de valores padrão
+**Descrição:** O Kit Declarado (1º lado do RI, RN-002) não é digitado
+livremente pelo usuário. A descrição do item vem do dado que a EACE já
+informou antes do início do projeto — o mesmo texto da coluna H do
+`CONSOLIDADO EACE.xlsx` (cabeçalho "KIT WIFI ESTIMADO"), já importado em
+`Escola.kit_inicial` (FEAT-002). Quantidade e Valor Unitário nunca são
+digitados: vêm de um catálogo próprio, com os valores padrão de cada tipo
+de kit, cruzado pela descrição do kit. Isso vale tanto para o item inicial
+quanto para qualquer item lançado depois para corrigi-lo (RN-002: "não
+editável após lançado, para corrigir lance um novo item").
+
+**Contexto:** Usuário revisou a tela do Kit Declarado (card "1º Lado") e
+apontou que o formulário atual ("Lançar item do Kit Declarado") deixa
+digitar Quantidade e Valor Unitário livremente — isso não deveria
+acontecer, pois esses valores são padronizados por tipo de kit, não
+informados manualmente a cada lançamento.
+
+**Critérios:**
+- Descrição do item = texto de `Escola.kit_inicial` (mesma fonte da coluna
+  H do `CONSOLIDADO EACE.xlsx`, já mapeada na FEAT-002) — não é campo de
+  texto livre para o usuário.
+- Quantidade e Valor Unitário = busca no catálogo de valores padrão pelo
+  tipo/descrição do kit — nunca digitados à mão, nem no lançamento inicial
+  nem numa correção (novo item lançado sobre o Kit Declarado).
+- O valor de cada kit é fixo por Lote: a mesma descrição de kit tem preço
+  diferente em lotes diferentes (confirmado com `LOTE 9` e `LOTE 11` na
+  planilha). O cruzamento com o catálogo passa a usar `Escola.kit_inicial`
+  **junto com** `Escola.lote` — não só a descrição.
+- **Ampliação (2026-08-24):** em parte das escolas, `Escola.kit_inicial`
+  não traz o texto completo do kit, só o número informado pela EACE (ex.:
+  `4`) — o usuário chamou informalmente essas duas situações de "lote 1"/
+  "lote 2", mas o termo já usado no projeto é **1º lado**/**2º lado**
+  (RN-002), não o campo `Escola.lote`. Esse número sempre corresponde à
+  quantidade de Access Points do kit (regra fixa, confirmada pelo
+  usuário) — o mesmo conceito já usado no campo "Número de Access Points"
+  da opção "Outro" do Lado IXC (RN-011). Quando `Escola.kit_inicial` for
+  só um número, o cruzamento com o catálogo passa a usar a nova coluna
+  `KitPadrao.numero_access_points` (inteiro, derivado automaticamente da
+  Descrição — mesmo padrão de `descricao_curta`/RN-011) em vez do texto
+  completo.
+- O catálogo guarda o valor de Equipamento e o valor de Serviço separados
+  (não um valor único), conforme as colunas da planilha de origem.
+- A coluna "Unidade" da planilha define o tipo do valor: quando é `Escola`
+  ou `Escola/Mês`, o valor da linha é o preço fechado do KIT completo
+  daquela escola (quantidade = 1); quando não é `Escola` (`Unidade`, `km`,
+  `enlace`, `metro`, `par`), o valor é preço unitário de item avulso/
+  complementar — essas linhas entram no catálogo como referência de preço,
+  mas não são resolvidas automaticamente pelo Kit Declarado (fora do
+  escopo desta regra, que cobre só o kit fechado da escola).
+- Regra vale só para o Kit Declarado (1º lado). Não altera IXC (2º lado)
+  nem Relatório EACE (3º lado), que continuam com lançamento manual.
+
+**Exceções:** kit sem correspondência no catálogo — comportamento (bloquear
+lançamento vs. permitir sem valor padrão) ainda não definido pelo usuário;
+**pendência de decisão**.
+
+**Impacto técnico:** novo model de catálogo (tipo/descrição do kit →
+quantidade padrão + valor unitário padrão); ajuste em `RiItemEace`
+(`apps/ri/models.py`) e no formulário "Lançar item do Kit Declarado"
+(`apps/ri/forms.py`, `ri_detail.html`) para que Quantidade e Valor Unitário
+deixem de ser campos digitáveis e passem a ser resolvidos pelo cruzamento
+com o catálogo; feature já entregue pelo Dev e hoje `🔍 Aguardando QA`
+(FEAT-004) — mudança exige correção antes da validação do QA nessa parte.
+**Fonte de carga do catálogo resolvida (2026-08-24):** aba `LPU` de
+`CONSOLIDADO EACE.xlsx` ("TABELA 1 - LISTA DE PREÇOS UNITÁRIOS"), mesmo
+padrão de importação em lote já usado por `Escola` (FEAT-002). O model
+`KitPadrao` existente precisa evoluir para guardar `lote`, `unidade` e os
+valores de Equipamento/Serviço separados (hoje só tem um valor único, sem
+lote) — ver FEAT-015 (entregue pelo Dev em 2026-08-24). **Decidido
+(2026-08-24):** `RiItemEace` continua com um único Valor Unitário — não
+discrimina Equipamento/Serviço. Usuário optou pela opção de menor risco
+(sem migração de dado existente, sem impacto no confronto RN-002/RN-003
+nem no financeiro); pode ser revisto no futuro se surgir necessidade
+concreta.
+**Cruzamento por número de Access Points (2026-08-24):** requer novo
+campo `KitPadrao.numero_access_points`, derivado automaticamente da
+Descrição — ver FEAT-016 (`⬜ Pendente`; não altera a FEAT-015, já
+entregue e em QA).
+
+**Features relacionadas:** FEAT-002, FEAT-004, FEAT-015, FEAT-016.
+
+**Status:** Ativa (pendências de decisão registradas acima)
+
+### RN-017 — Nobreak declarado (1º lado): item padrão para toda escola
+**Descrição:** Toda Escola (INEP) nasce, ao lado do Kit Declarado (RN-002/
+RN-010), também com um Nobreak declarado — um item padrão único, igual
+para todas as escolas, sem variação por escola ou lote e sem valor
+financeiro. É só informativo, exibido junto do Kit no card "Kit declarado
+(1º lado)".
+
+**Contexto:** Usuário identificou que o cadastro de Escola só guarda o Kit
+declarado (`Escola.kit_inicial`), mas todo INEP também já é definido com
+um Nobreak — informação hoje ausente do sistema, que precisa ser
+preenchida retroativamente nas 2.622 escolas já migradas (FEAT-002) e
+entrar por padrão em toda escola nova. Confirmado com o usuário: o Nobreak
+é o mesmo para todas as escolas (sem variação por lote, ao contrário do
+Kit) e não entra no cálculo financeiro.
+
+**Critérios:**
+- Nobreak é um único valor padrão, igual para todas as escolas — não
+  varia por escola, lote ou tipo de Kit.
+- Não tem quantidade nem valor unitário; não entra no catálogo
+  `KitPadrao` (RN-010) nem no cálculo financeiro do RI — é só informativo.
+- Dado persistido em cada Escola (não um texto fixo só na tela): backfill
+  aplicado às 2.622 escolas já migradas (FEAT-002) e valor padrão aplicado
+  a toda escola nova.
+- Exibido junto ao Kit Declarado, no mesmo card "Kit declarado (1º lado)"
+  onde o Kit já aparece hoje: tela do RI (`ri_detail.html`) e drill-down do
+  grid (`grid_inep.html`, FEAT-007).
+- Não altera IXC (2º lado) nem Relatório EACE (3º lado) — mesmo escopo
+  restrito já usado em RN-010/RN-011.
+- **Correção (2026-08-27):** o trecho acima ("sem valor financeiro... não
+  entra no catálogo `KitPadrao` nem no cálculo financeiro") está
+  **superado**. Usuário confirmou que o Nobreak inicial tem sim valor
+  cadastrado no catálogo `KitPadrao`, pelo mesmo mecanismo do Kit
+  Declarado (RN-010): item "Nobreak (serviço, material, equipamento)" na
+  aba LPU do `CONSOLIDADO EACE.xlsx`, com valor de Equipamento/Serviço por
+  Lote (confirmado nas colunas do LOTE 9 e do LOTE 11). A partir de agora,
+  o valor do Nobreak inicial é resolvido pelo catálogo (descrição fixa do
+  Nobreak + `Escola.lote`, mesmo cruzamento da RN-010) e usado no cálculo
+  do dashboard/relatórios financeiros (RN-025). Continua **sem mudança
+  visual** nas telas onde já aparece hoje — `ri_detail.html` e
+  `grid_inep.html` (card "Kit declarado (1º lado)") seguem mostrando só a
+  descrição, sem exibir valor ali.
+
+**Exceções:** nenhuma — regra fixa para 100% das escolas.
+
+**Impacto técnico:** novo campo em `Escola` (`apps/escolas/models.py`),
+análogo a `kit_inicial`; migration de dados para preencher o valor padrão
+nas 2.622 escolas já existentes; `ri_detail.html` e `grid_inep.html`
+passam a exibir o valor junto ao card do 1º lado. **Correção
+(2026-08-27):** conferir se o catálogo `KitPadrao` já tem a entrada do
+Nobreak para os lotes existentes (reimportar `importar_catalogo_lpu`,
+FEAT-015, se faltar) antes de implementar a RN-025.
+
+**Features relacionadas:** FEAT-002, FEAT-004, FEAT-007, FEAT-021, FEAT-026.
+
+**Status:** Ativa — correção 2026-08-27 (Nobreak passa a ter valor
+financeiro, usado só no dashboard/relatórios; ver RN-025)
+
+### RN-011 — Lado IXC: formulário único (KIT Instalado + Produtos + Data Ativação)
+**Descrição:** O lançamento do Lado IXC (2º lado do RI) usa um único
+formulário com um único botão "Salvar" (ação `salvar_ixc`), que grava, na
+mesma submissão, até três coisas independentes e opcionais: (1) um "KIT
+Instalado" (no máximo um por submissão — e no máximo um por RI/INEP no
+total, RN-015, criada em 2026-08-26: com um já lançado, o campo some da
+tela), (2) 0 ou mais "Produtos" individuais abertos pelo botão "+", e (3)
+a "Data Ativação" do RI. A
+Descrição livre que existia antes deixou de existir para lançamento
+novo — a descrição do KIT/Produto vem sempre de uma lista (catálogo ou
+"Outro"). Texto consolidado em 2026-08-24 depois de 8 entregas do Dev no
+mesmo dia; substitui a versão anterior desta regra (KIT obrigatório com
+Valor Unitário digitado, dois botões separados), que não refletia mais o
+que está implementado.
+
+**Contexto:** Usuário pediu, para o Lado IXC, um input "KIT Instalado"
+com valor unitário e um "+" para lançar itens individuais instalados além
+do kit; ao longo do mesmo dia, testando a tela real, pediu para tirar o
+campo de valor, unificar num só botão de salvar, acrescentar um campo
+"Data Ativação", uma opção "Outro" para kit fora do catálogo, e um jeito
+de remover uma linha de produto aberta por engano.
+
+**Critérios:**
+- Formulário único, botão único "Salvar". Submissão sem nada preenchido
+  (nenhum KIT, nenhum produto, Data Ativação sem mudança) mostra erro
+  ("Selecione um KIT, um produto ou informe a Data de Ativação.") e não
+  grava nada.
+- "KIT Instalado": opcional a cada submissão (não trava o "Salvar" quando
+  em branco). Quando selecionado, Quantidade é sempre 1 e a descrição vem
+  de uma lista — catálogo `KitPadrao` (LPU) filtrado à Unidade
+  "Escola"/"Escola-Mês" (mesmo critério de
+  `KitPadrao.kit_fechado_por_escola`, RN-010) e ao Lote da escola quando
+  ela tiver um valor definido. A lista sempre inclui "Outro — kit não
+  cadastrado": ao escolher, abre o campo "Número de Access Points" e a
+  descrição gravada segue o padrão "Kit Cobertura Wi-Fi - N Access
+  Points". Sem nenhuma entrada de KIT no catálogo para o Lote da escola,
+  o painel avisa, mas "Outro" continua disponível.
+- "Produtos": 0 ou mais linhas por submissão, abertas pelo botão "+" — a
+  lista nasce vazia, nenhuma linha visível até o primeiro clique. Cada
+  linha tem "Produto" (mesmo catálogo `KitPadrao`, excluída a Unidade
+  "Escola"/"Escola-Mês", também filtrado por Lote) e "Quantidade" digitada
+  manualmente. Cada linha aberta pode ser removida (botão "x") antes de
+  enviar. Lista com altura travada e rolagem própria — não estica o
+  painel indefinidamente conforme produtos são adicionados.
+- "Data Ativação": campo de data novo, valor único por RI — não por item
+  nem por produto (`Ri.data_ativacao`). Fica no mesmo formulário do bloco
+  Produtos, mas é salvo independente de haver ou não produto lançado
+  junto na mesma submissão.
+- Valor Unitário deixou de ser digitado pelo usuário, tanto no KIT quanto
+  em cada Produto — decisão do usuário (2026-08-24): "não é informação
+  necessária agora". Todo item lançado por este fluxo nasce com Valor
+  Unitário 0,00; correção posterior é feita editando o item já lançado
+  (RN-004), que continua com o campo de valor, sem mudança.
+- Descrição do KIT/Produto nunca é texto livre — sempre escolhida numa
+  lista (catálogo `KitPadrao`, ou "Outro" para o KIT). Edição de item já
+  lançado (RN-004) continua com Descrição livre, sem mudança — a regra
+  acima vale só para o lançamento novo.
+- Regra vale só para o Lado IXC (2º lado). Não altera Kit Declarado (1º
+  lado, RN-010) nem Relatório EACE (3º lado), que continuam como estão.
+  **Extensão (RN-018, 2026-08-26):** o mesmo mecanismo (KIT Instalado +
+  Produtos) passa a valer também para o Relatório EACE (3º lado), sem
+  Data Ativação/Município/Estado — ver RN-018.
+
+**Exceções:** catálogo `KitPadrao` sem entrada correspondente ao Lote da
+escola — "Outro" cobre o caso do KIT; "Produtos" fica só com a lista
+vazia até existir entrada no catálogo para aquele Lote (sem aviso
+dedicado, diferente do KIT).
+
+**Impacto técnico:** `apps/ri/forms.py` (`RiItemIxcKitForm`,
+`RiItemIxcProdutoForm`/`RiItemIxcProdutoFormSet`, `RiDataAtivacaoForm`,
+`_CatalogoIxcChoiceField`); `apps/ri/views.py` (`ri_detail_view`, ação
+`salvar_ixc`); `apps/ri/templates/ri/ri_detail.html` (bloco único do
+Lado IXC, JS do "+"/"x" e do campo condicional "Outro");
+`apps/ri/models.py` — `Ri.data_ativacao` (migration `0008`) e
+`KitPadrao.descricao_curta` (migration `0007`, preenchida
+automaticamente ao salvar a partir da Descrição completa, usada como
+rótulo nos selects em vez dela).
+
+**Features relacionadas:** FEAT-004.
+
+**Status:** Ativa
+
+### RN-015 — Um KIT por INEP
+**Descrição:** Cada RI (INEP) só pode ter 1 "KIT Instalado" lançado no
+Lado IXC (RN-011) — do catálogo ou pela opção "Outro". Com um já lançado,
+o formulário deixa de oferecer o campo "Kit" (select + "Outro") e mostra
+só um aviso; para trocar, o usuário edita ou exclui o item já lançado
+(RN-004, mesmos ícones já usados na lista de itens). Não afeta
+"Produtos" — continuam sem limite de quantidade de linhas.
+
+**Contexto:** Usuário pediu, em 2026-08-26: "cada INEP só pode ter um
+KIT... não pode adicionar outro caso já tenha escolhido um".
+
+**Critérios:**
+- RI com pelo menos 1 `RiItemIxc.eh_kit=True` não pode lançar outro KIT —
+  bloqueado na tela (campo escondido, substituído pelo aviso) e no
+  servidor (submissão direta com um KIT selecionado é rejeitada com
+  mensagem objetiva, mesmo que o campo não devesse existir na tela).
+- Bloqueio vale tanto para KIT escolhido do catálogo quanto para "Outro".
+- Lançar Produto, e editar/excluir o KIT já lançado, continuam liberados
+  normalmente.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** `apps/ri/views.py` (`ri_detail_view` — variável
+`kit_ja_lancado`, checagem antes de criar o item na ação `salvar_ixc`);
+`apps/ri/templates/ri/ri_detail.html` (campo "Kit" condicional).
+
+**Features relacionadas:** FEAT-004, FEAT-017, FEAT-018 (mesma tela/
+formulário do Lado IXC).
+
+**Status:** Ativa — **extensão (RN-018, 2026-08-26):** mesmo limite passa a
+valer também para o Lado Relatório EACE (3º lado), com uma diferença: lá o
+item marcado como KIT pode ser editado/excluído (exceção à imutabilidade da
+RN-003) para permitir correção — ver RN-018.
+
+### RN-014 — Município/Estado do Lado IXC e divergência com o cadastro da Escola
+**Descrição:** O Lado IXC (RN-011) ganha dois campos manuais — Município e
+Estado (UF, 2 letras) — usados na planilha de faturamento (RN-013). Não
+reaproveitam direto `Escola.municipio`/`Escola.estado`: são digitados à
+parte e comparados contra o cadastro da Escola; quando os dois lados têm
+valor e divergem, o campo fica com alerta visual (borda vermelha), sem
+bloquear o RI.
+
+**Contexto:** Usuário pediu, em 2026-08-26, um jeito de conferir se o
+Município/Estado usados no faturamento batem com o cadastro oficial da
+Escola, sem travar o processo quando não baterem — mesmo princípio já
+usado no alerta de KIT divergente (RN-002, informal, não bloqueia).
+
+**Critérios:**
+- Campos opcionais a cada submissão do formulário único do Lado IXC
+  (RN-011) — não travam o "Salvar" quando vazios. Chegou a existir uma
+  versão que travava (com 3 correções no meio do caminho: idioma da
+  mensagem nativa do navegador, depois mensagem duplicada), revertida no
+  mesmo dia (2026-08-26) quando o usuário esclareceu que a exigência real
+  é só na hora de enviar o e-mail/baixar a planilha, não a cada "Salvar"
+  — ver RN-013, que passa a ser quem efetivamente exige Município/Estado
+  preenchidos (junto com KIT e Data de Ativação) para gerar a planilha.
+- Alerta visual só aparece quando os dois lados (Lado IXC ×
+  `Escola.municipio`/`Escola.estado`) têm valor preenchido e são
+  diferentes; campo vazio de qualquer um dos lados não gera alerta.
+- Alerta é só visual — não bloqueia o avanço de status do RI. Não bloqueia
+  a geração/envio da planilha de faturamento por divergência (só por
+  campo vazio, RN-013).
+
+**Exceções:** nenhuma além do critério acima.
+
+**Impacto técnico:** novos campos no Lado IXC (mesmo formulário/model de
+`Ri.data_ativacao`, RN-011); comparação contra `Escola.municipio`/
+`Escola.estado` (`apps/escolas/models.py`).
+
+**Features relacionadas:** FEAT-017, FEAT-018.
+
+**Status:** Ativa
+
+### RN-018 — Lado Relatório EACE: mesmo formulário do Lado IXC (KIT Instalado + Produtos)
+**Descrição:** O lançamento do Lado Relatório EACE (3º lado do RI) passa a
+usar o mesmo mecanismo já implementado no Lado IXC (RN-011): "KIT
+Instalado" (catálogo `KitPadrao`, Unidade "Escola"/"Escola-Mês", + opção
+"Outro") e "Produtos" individuais via botão "+" (catálogo `KitPadrao`
+excluída a Unidade "Escola"/"Escola-Mês"), ambos filtrados pelo Lote da
+escola quando ela tiver um valor definido. Não ganha Data Ativação,
+Município nem Estado — campos exclusivos do Lado IXC (RN-011/RN-014), sem
+uso no Relatório EACE.
+
+**Contexto:** Usuário pediu, em 2026-08-26, que o Lado 3 (Relatório EACE)
+tenha os mesmos campos do Lado 2 (IXC), exceto Data de Ativação, Município
+e Estado.
+
+**Critérios:**
+- Descrição livre deixa de existir para lançamento novo no Lado Relatório
+  EACE — mesma mudança que a RN-011 já fez no Lado IXC; cada opção mostra a
+  Descrição curta do catálogo (RN-011).
+- Valor Unitário do KIT/Produto do Lado Relatório EACE é preenchido
+  automaticamente a partir do `KitPadrao` (mesmo preço cadastrado por
+  Lote) — diferente do Lado IXC (RN-011), que nasce com R$ 0,00. Decisão
+  do usuário (2026-08-26): "o valor unitário é o mesmo do kit já
+  cadastrado no sistema". Quantidade do KIT é sempre 1 (mesmo critério do
+  Lado IXC); Quantidade dos Produtos é digitada manualmente.
+- Limite de 1 KIT por INEP (RN-015) passa a valer também para o Lado
+  Relatório EACE — campo "KIT" some da tela quando já existe um item
+  marcado como KIT nesse lado.
+- Exceção à imutabilidade da RN-003: o item marcado como KIT desse lado
+  pode ser editado/excluído (mesma permissão da RN-004 já usada no Lado
+  IXC — exclusão só para Administrador). Sem essa exceção, o limite de 1
+  KIT tornaria qualquer correção impossível pela tela, já que o campo
+  desaparece depois do 1º lançamento. Decisão do usuário (2026-08-26).
+- **Ampliação (2026-08-27):** a mesma exceção passa a valer também para
+  os itens "Produtos" desse lado — editar/excluir liberado, exclusão só
+  Administrador. Usuário pediu depois de sincronizar a Planilha EACE
+  (FEAT-024/RN-022) e não conseguir corrigir um Produto casado errado
+  (ex.: "Nobreak") pela tela — o mesmo problema vale para qualquer
+  Produto lançado manualmente, não só os vindos do Sincronizador.
+- Regra vale só para o Lado Relatório EACE (3º lado). Não altera Kit
+  Declarado (1º lado, RN-010) nem o próprio Lado IXC (RN-011), que
+  continuam como estão.
+
+**Exceções:** a edição/exclusão de qualquer item (KIT ou Produto) descrita
+acima é a única exceção à imutabilidade geral da RN-003 para este lado.
+
+**Impacto técnico:** `RiItemRelatorioEace` precisa de um campo equivalente
+a `RiItemIxc.eh_kit` para identificar o item KIT desse lado (pendência
+técnica já antecipada na RN-003); reaproveita o padrão de
+`RiItemIxcKitForm`/`RiItemIxcProdutoForm`/`_catalogo_ixc` (ou equivalente)
+e a view `ri_detail_view`; `ri_detail.html` (bloco do Lado Relatório EACE)
+e `grid_inep.html` (card "Relatório EACE (3º)") passam a exibir o Valor
+Unitário resolvido do catálogo em vez de um valor digitado manualmente.
+
+**Features relacionadas:** FEAT-004, FEAT-022, FEAT-024.
+
+**Status:** Ativa — **ampliação (2026-08-27):** editar/excluir passa a
+valer também para Produtos, não só o KIT (ver Critérios).
+
+### RN-021 — Importação da Planilha EACE (upload, Administrador)
+**Descrição:** A tela "Administrador > Planilha EACE" permite upload de um
+arquivo `.csv` (mesmo layout do `doc/EACE.csv` real: colunas "Projeto",
+"Descrição do Item", "Qtde Produto", "Valor Unit UR", entre outras), que
+substitui o arquivo ativo anterior. O sistema não copia as linhas para uma
+tabela própria — guarda só o arquivo enviado; a leitura acontece sob
+demanda, no momento do Sincronizador (RN-022).
+
+**Contexto:** Usuário pediu, em 2026-08-27, para trazer a planilha real de
+faturamento por INEP (`doc/EACE.csv`) para dentro do sistema. Confirmado
+com o usuário (CLAUDE.md §9): upload pela tela (não comando de servidor
+lendo caminho fixo) e sem tabela intermediária — só o arquivo é guardado,
+reprocessado a cada sincronização.
+
+**Critérios:**
+- Upload aceita só `.csv` com as colunas mínimas esperadas (Projeto,
+  Descrição do Item, Qtde Produto, Valor Unit UR); arquivo sem essas
+  colunas é rejeitado com mensagem objetiva, sem gravar.
+- Cada novo upload bem-sucedido substitui o arquivo ativo anterior — existe
+  no máximo 1 arquivo ativo por vez.
+- Tela exibe nome do arquivo ativo, data/hora e usuário do último upload.
+- Ação de upload restrita a Administrador (extensão da RN-004).
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** novo model de metadado do arquivo ativo (nome,
+caminho, enviado_por, enviado_em) — sem tabela de linhas da planilha; nova
+rota/tela sob o grupo de menu "Administrador".
+
+**Features relacionadas:** FEAT-023.
+
+**Status:** Ativa
+
+### RN-022 — Sincronizador do Lado Relatório EACE a partir da Planilha EACE
+**Descrição:** No painel "Relatório EACE (3º lado)" da tela do RI, um botão
+"Sincronizador" reprocessa o arquivo ativo da Planilha EACE (RN-021),
+filtra as linhas cujo "Projeto" seja igual ao INEP da escola do RI atual
+e, para cada linha, casa a "Descrição do Item" com o catálogo `KitPadrao`:
+KIT pelo número de Access Points (reaproveita `numero_access_points`/
+`resolver_kit_declarado`, RN-010 ampliada/FEAT-016); produto avulso por
+palavra-chave. Quantidade vem da planilha (coluna "Qtde Produto"); Valor
+Unitário vem do catálogo (RN-018), não da planilha — a coluna "Valor Unit
+UR" é só conferência (o valor já deve bater com o do catálogo, como o
+próprio usuário observou ao descrever a coluna). Item sem correspondência
+não é lançado automaticamente. Itens sincronizados são gravados como
+`RiItemRelatorioEace` normal — aparecem e se comportam exatamente como um
+item lançado manualmente da lista (RN-018), inclusive as regras de 1 KIT
+por INEP (RN-015) e edição/exclusão restrita a Administrador (RN-004).
+Lançamento manual continua disponível, antes ou depois de sincronizar.
+
+**Contexto:** Usuário pediu, em 2026-08-27, para o Lado 3 buscar
+automaticamente os dados "pelo INEP" a partir da planilha, sem substituir
+a opção de preenchimento manual. Confirmado com o usuário (CLAUDE.md §9)
+que a busca é sempre na planilha ativa local (RN-021), sem integração
+externa nem tabela intermediária, e que a estratégia de casamento de texto
+fica a critério do Dev/Orquestrador ("do jeito que ficar melhor e mais
+assertível") — adotado o mesmo padrão já usado na RN-010 ampliada (Access
+Points) para reduzir falso-negativo, já que a Descrição real da planilha
+traz sufixos que o texto limpo do catálogo não tem (ex.: "Kit Cobertura
+Wi-Fi - 12 Access Points - Equip - MEGA - CO").
+
+**Critérios:**
+- Botão "Sincronizador" avisa, sem travar a tela, quando não há Planilha
+  EACE ativa (RN-021) ou quando não há linha para o INEP do RI.
+- Item da planilha casado com o catálogo é gravado com a Descrição curta
+  do catálogo (RN-011), Quantidade da planilha e Valor Unitário do
+  catálogo (RN-018) — nunca o valor bruto da planilha.
+- Item sem correspondência no catálogo não é lançado automaticamente; fica
+  listado para o usuário decidir/lançar manualmente.
+- Itens sincronizados respeitam RN-015 (1 KIT por INEP) e RN-004 (exclusão
+  só Administrador).
+- Sincronizar de novo não duplica item já lançado idêntico (mesma
+  descrição + quantidade já existente no Lado 3 para aquele INEP).
+- **Ampliação (2026-08-27):** cada item sincronizado (KIT ou Produto)
+  também guarda, só para exibição, 3 dados adicionais lidos da mesma
+  linha da planilha que o originou: Num OSP (coluna "Num OSP"), Validação
+  OSP (coluna "Validação OSP") e Nota Fiscal (coluna "Nota Fiscal"). São
+  campos fechados — nunca digitados nem editados manualmente, mesmo com a
+  exceção de edição já valendo para o item (RN-003/RN-018 ampliada); só o
+  Sincronizador os preenche. 1 Nota Fiscal cobre a Quantidade inteira
+  daquele item (mesma linha da planilha já soma as unidades) — não é por
+  unidade. Item lançado manualmente (fora do Sincronizador) nasce sem
+  esses 3 dados (em branco). Exibidos na lista do Lado 3 como rótulo,
+  valor em destaque verde.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** leitura sob demanda do arquivo ativo (RN-021) na view
+do RI; reaproveita `KitPadrao.resolver_kit_declarado`/
+`numero_access_points` (FEAT-016) e o fluxo de gravação já existente do
+Lado Relatório EACE (FEAT-022); `RiItemRelatorioEace` ganha 3 campos novos
+(Num OSP, Validação OSP, Nota Fiscal), opcionais, preenchidos só pelo
+Sincronizador.
+
+**Features relacionadas:** FEAT-024.
+
+**Status:** Ativa — **ampliação (2026-08-27):** 3 campos de exibição
+(Num OSP, Validação OSP, Nota Fiscal) adicionados ao item sincronizado.
+
+### RN-023 — Sincronização em lote do Relatório EACE (todas as RI) a partir da tela Planilha EACE
+
+**Descrição:** O card "Arquivo ativo" da tela "Administrador > Planilha
+EACE" (RN-021) ganha um botão "Sincronizar todas as RI", que aplica a
+mesma lógica do Sincronizador individual (RN-022) a cada RI existente no
+sistema, sem precisar abrir RI por RI. Reaproveita a mesma função de
+casamento e gravação já usada pelo Lado Relatório EACE do RI — não é uma
+lógica nova. Ao final, mostra um resumo agregado (RIs com item novo
+lançado, RIs já sincronizados sem novidade, RIs sem correspondência no
+catálogo, RIs sem linha na planilha para o INEP, RIs bloqueados pelo
+status "Faturamento Concluído") e lista, à parte, os INEPs que precisam de
+atenção manual (sem correspondência ou sem linha na planilha).
+
+**Contexto:** Usuário pediu, em 2026-08-27, um botão dentro do card
+"Arquivo ativo" para sincronizar todas as RI de uma vez, sem precisar
+entrar RI por RI — hoje o Sincronizador (RN-022/FEAT-024) só roda por RI,
+dentro da tela de cada RI. Escopo do lote (todas as RI existentes, sem
+filtro) e nível de resumo (agregado + lista de pendências) definidos pelo
+Orquestrador como opção mais simples e conservadora (CLAUDE.md §9): a
+lógica de casamento por INEP já ignora RI sem linha correspondente, então
+"todas as RI" e "só as RI com INEP na planilha" produzem o mesmo
+resultado; sujeito a ajuste do usuário após validação.
+
+**Critérios:**
+- Botão "Sincronizar todas as RI" visível só para Administrador (mesma
+  restrição da tela, RN-021), aparece só quando há Planilha EACE ativa.
+- Roda a mesma lógica de casamento e gravação da RN-022 (KIT por número de
+  Access Points, produto avulso por palavra-chave, Valor Unitário sempre
+  do catálogo, Num OSP/Validação OSP/Nota Fiscal só do Sincronizador) para
+  cada RI existente, sem alterar o comportamento já validado por RI.
+- RI sem linha na planilha para o INEP dele entra no resumo como "sem
+  linha na planilha", sem interromper o processamento dos demais.
+- RI bloqueado pelo status "Faturamento Concluído" (RN-020) entra no
+  resumo como "bloqueado pelo status", sem tentar gravar.
+- Sincronizar de novo não duplica item já lançado (mesma regra da RN-022).
+- Resultado final mostra resumo agregado com as contagens acima e a lista
+  dos INEPs que precisam de atenção manual (sem correspondência no
+  catálogo ou sem linha na planilha).
+- Cada item lançado pelo lote é registrado no histórico do RI
+  correspondente (RN-008), igual ao Sincronizador individual.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** nova ação na view `planilha_eace_view`; reaproveita
+`sincronizar_relatorio_eace_da_planilha` (FEAT-024) em laço sobre os RIs
+existentes, sem duplicar a lógica de casamento; usar `select_related`/
+`prefetch_related` ao carregar RIs/escolas/itens existentes para evitar
+N+1 (mesmo padrão do grid, FEAT-007).
+
+**Features relacionadas:** FEAT-025.
+
+**Status:** Ativa
+
+### RN-024 — Conclusão automática do RI pela coluna "Status escola" da Planilha EACE
+
+**Descrição:** O Sincronizador individual (RN-022/FEAT-024) e o
+Sincronizador em lote (RN-023/FEAT-025) passam a ler também a coluna
+"Status escola" (coluna T) do arquivo ativo da Planilha EACE (RN-021).
+Quando o valor dessa coluna for exatamente "Conectada" para o INEP do RI,
+o sistema muda automaticamente o status do RI para "Faturamento Concluído"
+(RN-001, status 7) e grava a data/hora da sincronização em
+`Ri.concluido_em` — mesmo efeito de uma conclusão manual.
+
+**Contexto:** Usuário pediu, em 2026-08-27, que a conclusão do faturamento
+deixe de depender só da confirmação manual (RN-001) quando a própria EACE
+já sinaliza a escola como conectada na planilha usada pelo Sincronizador.
+Confirmado com o usuário (CLAUDE.md §9) que a troca vale a partir de
+qualquer status atual do RI — inclusive pulando etapas da sequência
+principal — e mesmo quando o RI está em "Correção MEGA" (status 8), caso
+em que a correção pendente é encerrada automaticamente, sem exigir o
+retorno manual para "Andamento".
+
+**Critérios:**
+- A troca vale a partir de qualquer status atual do RI (RN-001), inclusive
+  "Correção MEGA" — decisão explícita do usuário, que aceitou pular etapas
+  intermediárias e encerrar uma correção em aberto quando a EACE já
+  sinaliza a escola conectada.
+- RI já em "Faturamento Concluído" não é afetado — mesmo bloqueio já
+  existente na RN-020/`RI_BLOQUEADO_FATURAMENTO_CONCLUIDO` (nada muda).
+- Comparação exata com "Conectada"; qualquer outro valor ("Em
+  planejamento", "Em implantação", vazio ou variação de texto) não aciona
+  a troca e não bloqueia o restante do Sincronizador (lançamento de itens
+  continua normalmente).
+- Vale para os dois botões — Sincronizador individual (FEAT-024) e
+  Sincronizador em lote "Sincronizar todas as RI" (FEAT-025) — mesma
+  verificação, sem duplicar lógica entre os dois.
+- Independe do resultado do lançamento de itens da mesma sincronização
+  (item sem correspondência no catálogo ou quantidade inválida não impede
+  a troca de status) — são duas verificações independentes sobre a mesma
+  linha da planilha.
+- Cada troca automática é registrada no histórico do RI (RN-008), igual a
+  uma troca manual de status.
+
+**Exceções:** nenhuma — a troca é incondicional quando a coluna indica
+"Conectada" para o INEP, inclusive sobrepondo o bloqueio manual de saída de
+"Correção MEGA" (decisão explícita do usuário, ver Contexto).
+
+**Impacto técnico:** leitura da coluna "Status escola" na mesma passada que
+já agrupa as linhas da Planilha EACE por INEP
+(`_agrupar_linhas_planilha_eace_por_inep`); nova escrita em `Ri.status` e
+`Ri.concluido_em` dentro de `sincronizar_relatorio_eace_da_planilha`. Não
+confundir com `Escola.status_conexao` (RN-007) — campo homônimo
+("status de conexão" vs. "Status escola"), mas de origem e regra
+totalmente diferentes (RN-007 é manual, a partir das datas de instalação
+RE/RI; RN-024 é automático, a partir da planilha).
+
+**Features relacionadas:** FEAT-024, FEAT-025.
+
+**Status:** Ativa
+
+## Dashboard e Relatórios Financeiros
+
+### RN-025 — Card "Valor Total do Projeto" (Kit + Nobreak inicial, 1º lado)
+**Descrição:** O dashboard (tela inicial, `core/home.html`) exibe um card
+com o valor total que a empresa vai faturar com o projeto inteiro: soma,
+para todas as Escolas cadastradas no sistema (visão global, sem filtro de
+período/lote/status), o valor do Kit Declarado (RN-010) mais o valor do
+Nobreak inicial (RN-017, correção 2026-08-27) — os dois resolvidos pelo
+catálogo `KitPadrao`, cruzando descrição + `Escola.lote`. É o valor-alvo
+do projeto, usado como referência do card "Valor já faturado" (RN-026).
+
+**Contexto:** Usuário pediu, em 2026-08-27, um dashboard com cards
+contando "a história" do projeto; o primeiro card é este valor total,
+juntando Kit inicial e Nobreak inicial (1º lado). Confirmado com o
+usuário (CLAUDE.md §9) que o Nobreak, apesar de a RN-017 dizer "sem valor
+financeiro", tem valor cadastrado no mesmo catálogo do Kit — só não é
+exibido nas telas onde já aparece hoje (correção da RN-017).
+
+**Critérios:**
+- Soma percorre todas as Escolas do sistema — visão global, sem filtro de
+  período, lote ou status de RI.
+- Cada Escola contribui com: valor do Kit Declarado (RN-010) + valor do
+  Nobreak inicial (RN-017 corrigida), ambos via `KitPadrao` (descrição +
+  `Escola.lote`).
+- Escola cujo Kit ou Nobreak não tem correspondência no catálogo contribui
+  com R$ 0,00 nessa parte do total — opção mais simples e conservadora
+  (CLAUDE.md §9), mesma pendência de decisão ainda aberta na RN-010
+  ("bloquear vs. permitir sem valor"); não trava o dashboard.
+- Card mostra só o valor total consolidado (sem abrir por escola) — o
+  detalhamento por escola já existe no grid de INEPs (FEAT-007).
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** consulta agregada em `apps/escolas`/`apps/ri` (soma
+de `KitPadrao.valor_total` por Escola, sem N+1); nova seção em
+`apps/core` (view/template de `home.html`); depende de o catálogo
+`KitPadrao` já ter a entrada do Nobreak (ver correção da RN-017).
+
+**Features relacionadas:** FEAT-026, FEAT-010, FEAT-015.
+
+**Status:** Ativa (pendência herdada da RN-010: comportamento de kit/
+nobreak sem correspondência no catálogo)
+
+### RN-026 — Card "Valor já faturado" e diferença para a meta
+**Descrição:** Segundo card do dashboard: soma o valor dos itens do Lado
+Relatório EACE (3º lado, `RiItemRelatorioEace`, quantidade × valor
+unitário) de todo RI cujo status é "Faturamento Concluído" (RN-001,
+status 7) — visão global, todos os RIs do sistema. Item do Lado 3 de um
+RI que não está em "Faturamento Concluído" não entra na soma. Dentro do
+mesmo card, mostra a diferença entre esse valor e a meta do card "Valor
+Total do Projeto" (RN-025): valor faturado menor que a meta mostra
+"quanto falta" em vermelho; valor igual ou maior que a meta deixa o
+indicador verde (sem "falta" a mostrar). O card usa uma divisão visual
+proporcional à razão faturado/meta: parte verde (valor já faturado) na
+fração de cima, parte vermelha (o que falta) na fração de baixo; ao
+atingir ou ultrapassar a meta, o card fica inteiramente verde.
+
+**Contexto:** Usuário pediu, em 2026-08-27, o segundo card do dashboard:
+valor já ganho (produtos aprovados pela EACE, Lado 3, com RI em
+Faturamento Concluído) e a diferença para a meta do primeiro card, com
+cor indicando se falta ou já bateu a meta. Confirmado com o usuário
+(CLAUDE.md §9) que "aprovado pela EACE" = item lançado no Lado 3 **e** a
+RI daquele item estar em "Faturamento Concluído" — hoje não existe campo
+de aprovação separado; item do Lado 3 de RI que não chegou nesse status
+não conta, mesmo que o item já exista.
+
+**Critérios:**
+- Soma percorre todos os RIs do sistema com status "Faturamento
+  Concluído" — visão global, sem filtro de período ou lote.
+- Para cada um desses RIs, soma `quantidade × valor_unitario` de cada
+  `RiItemRelatorioEace` vinculado.
+- RI com item no Lado 3 mas status diferente de "Faturamento Concluído"
+  não contribui para a soma, nem parcialmente.
+- Diferença = valor do card "Valor Total do Projeto" (RN-025) menos o
+  valor faturado deste card. Diferença positiva (falta faturar) em
+  vermelho; diferença zero ou negativa (meta atingida/ultrapassada) —
+  card fica verde, sem mostrar valor negativo de "falta".
+- Divisão visual proporcional dentro do card: área verde proporcional ao
+  valor faturado sobre a meta, área vermelha proporcional ao que falta;
+  verde sempre posicionado acima, vermelho abaixo.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** consulta agregada em `apps/ri` (soma de
+`RiItemRelatorioEace.quantidade * valor_unitario` filtrada por
+`Ri.status == Ri.FATURAMENTO_CONCLUIDO`, sem N+1); mesma
+view/seção do dashboard da RN-025 (`apps/core`, `home.html`).
+
+**Features relacionadas:** FEAT-026, FEAT-006, FEAT-022.
+
+**Status:** Ativa
+
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-08-28 | RN-045 criada (liberação de acesso aos dados — todo usuário tem um controle Ligado/Desligado, independente do perfil; Desligado vê o menu mas nenhuma tela com dado, com aviso de "aguardando liberação"); RN-043 recebe ampliação (conta criada via AD também nasce Desligada) | Usuário pediu que toda conta nova (login solto ou via AD) entre no sistema sem ver nenhuma informação até o Administrador liberar manualmente; confirmado com o usuário (CLAUDE.md §9, 3 perguntas): vale para Administrador também, não só Analista; só conta criada a partir de agora nasce desligada — quem já usa o sistema hoje não é afetado; tela mostra aviso claro, não fica vazia sem explicação; gera `FEAT-029` |
+| 2026-08-28 | RN-004 ampliada — tela interna "Administrador > Usuários" pode trocar perfil (Administrador ↔ Analista) de outro usuário, sem precisar do `/admin/` do Django; Administrador não pode trocar o próprio perfil por essa tela | Usuário pediu, depois de descobrir que a troca de perfil só existia pelo `/admin/` do Django, uma opção equivalente dentro do próprio menu Administrador; confirmado com o usuário (CLAUDE.md §9): escopo mínimo — só listar usuário e trocar perfil, sem criar/editar outros campos/desativar (isso continua só pelo `/admin/`); bloqueio de autotroca é decisão do Orquestrador (opção mais simples e conservadora, evita lockout acidental), a confirmar na validação; gera `FEAT-028` |
+| 2026-08-28 | RN-043 e RN-044 criadas (autenticação via Active Directory e sincronização pós-login de e-mail/nome); RN-004 recebe exceção (criação automática de usuário via login AD, perfil Analista) | Usuário pediu a integração com AD; resolve pendência aberta em `lixo.md` (item 7) desde 2026-08-20; decisão de reaproveitar a mesma conta de serviço/config do `modulo-posVenda` registrada em `ADR-002`; gera `FEAT-027` |
+| 2026-08-27 | RN-025 e RN-026 criadas (dashboard: card "Valor Total do Projeto" — Kit + Nobreak inicial — e card "Valor já faturado" com diferença para a meta); RN-017 corrigida (Nobreak inicial passa a ter valor financeiro, usado só no cálculo, sem mudança visual onde já aparece) | Usuário pediu cards do dashboard contando a "história" do projeto; confirmado com o usuário (CLAUDE.md §9, 3 perguntas): Nobreak tem valor no catálogo `KitPadrao` mesmo a RN-017 dizendo o contrário (só não exibe no frontend existente), "aprovado pela EACE" = item no Lado 3 com RI em Faturamento Concluído, e a soma é visão global (todas as escolas/RIs); gera FEAT-026 |
+| 2026-08-27 | RN-024 criada (conclusão automática do RI a partir da coluna "Status escola" da Planilha EACE) | Usuário pediu que INEP com "Conectada" na coluna T do `doc/EACE.csv` mude o RI para "Faturamento Concluído" ao clicar em qualquer um dos 2 botões de sincronização (individual FEAT-024, ou em lote FEAT-025); confirmado com o usuário (CLAUDE.md §9, 3 perguntas): a troca vale a partir de qualquer status atual (inclusive pulando etapas), sobrepõe "Correção MEGA" em aberto e grava `concluido_em`; ordem corrigida no documento — a "Ampliação (2026-08-27)" da RN-022 (Num OSP/Validação OSP/Nota Fiscal) estava com o rodapé (Features relacionadas/Status) deslocado para depois da RN-023 por engano; movido para o lugar certo, sem mudar o conteúdo da regra; gera critério de aceite adicional em FEAT-024 e FEAT-025 |
+| 2026-08-27 | RN-023 criada (Sincronização em lote do Relatório EACE — botão "Sincronizar todas as RI" no card "Arquivo ativo" da tela Planilha EACE) | Usuário pediu um botão dentro do card "Arquivo ativo" para sincronizar todas as RI de uma vez, sem precisar entrar RI por RI; reaproveita a lógica já existente do Sincronizador individual (RN-022/FEAT-024), rodando para cada RI e devolvendo um resumo agregado; gera FEAT-025, dependente da conclusão de FEAT-024 (hoje `🔍 Aguardando QA`) |
+| 2026-08-27 | RN-022 ampliada — item sincronizado (KIT ou Produto) passa a guardar também Num OSP, Validação OSP e Nota Fiscal (colunas N/O/Q da planilha), campos fechados só para exibição, 1 Nota Fiscal por item (cobre a Quantidade inteira, não por unidade) | Usuário pediu para trazer essas 3 colunas da planilha para o Lado 3, só como rótulo (valor em verde), preenchidas só pelo Sincronizador; confirmado com o usuário (CLAUDE.md §9) que os 3 campos ficam por item lançado (não 1 só por RI), porque a Nota Fiscal pode variar entre o KIT e cada Produto da mesma planilha/INEP; gera critério de aceite adicional na FEAT-024 |
+| 2026-08-27 | RN-003 e RN-018 ampliadas — a exceção de editar/excluir no Lado Relatório EACE, antes só do item KIT, passa a valer também para os itens "Produtos" (exclusão continua restrita a Administrador, RN-004) | Usuário testou o Sincronizador (FEAT-024) e reportou não conseguir excluir um Produto casado errado (ex.: "Nobreak"), só o KIT; confirmado com o usuário (CLAUDE.md §9) estender a mesma regra do KIT para qualquer Produto desse lado, não só os vindos do Sincronizador; Dev já entregou o código (`ri_item_relatorio_eace_update_view`/`_delete_view`, `ri_detail.html`) — este registro só formaliza a regra |
+| 2026-08-27 | RN-021 criada (upload da Planilha EACE, sem tabela intermediária — só o arquivo é guardado) e RN-022 criada (Sincronizador do Lado Relatório EACE, casa a planilha com o catálogo `KitPadrao` pelo INEP); RN-004 recebe nota de extensão | Usuário pediu para importar `doc/EACE.csv` (Projeto/INEP, Descrição do Item, Qtde Produto, Valor Unit UR) via tela "Administrador > Planilha EACE" e um botão "Sincronizador" no Lado 3 que preenche os itens a partir do INEP, sem remover o preenchimento manual; confirmado com o usuário (CLAUDE.md §9, 3 rodadas de pergunta): upload pela tela (não caminho fixo de servidor), sem tabela de linhas (só o arquivo ativo é guardado, reprocessado a cada sincronização) e sem integração externa (sempre a planilha local); estratégia de casamento de texto delegada ao Dev/Orquestrador, adotado o padrão de Access Points já usado na RN-010 ampliada; gera FEAT-023 e FEAT-024 |
+| 2026-08-27 | RN-020 criada (bloqueio dos campos do Lado IXC e do Lado Relatório EACE em "Faturamento Concluído"; troca de status nesse status passa a ser só do Administrador) | Usuário pediu que "Faturamento Concluído" vire um checkpoint: campos do 2º e 3º lado ficam bloqueados para os dois perfis enquanto o RI estiver nesse status, e só Administrador pode trocar o status a partir dele; ao trocar, os campos voltam a ficar liberados; afeta FEAT-006, ainda `🔄 Em andamento` |
+| 2026-08-26 | RN-019 criada (exceção do Administrador: saída manual de "Aguardando financeiro" para "Resposta Financeiro") | Usuário pediu que o status "Aguardando financeiro" ficasse bloqueado a alterações e só um Administrador pudesse desbloquear; levantamento mostrou que esse status já não tem transição manual para nenhum perfil hoje (100% automático, RN-001); confirmado com o usuário (CLAUDE.md §9) que é uma exceção nova só para Administrador, com destino fixo "Resposta Financeiro", e que Analista continua sem opção manual, como já é hoje; afeta FEAT-006, ainda `🔄 Em andamento` |
+| 2026-08-26 | RN-003 reescrita (confronto Relatório EACE × IXC passa a comparar Descrição + Quantidade, sem Valor Unitário); FEAT-005 atualizada com os critérios agora fechados | Usuário pediu para bloquear o envio ao financeiro quando o KIT/Produtos do Lado 3 divergem do Lado 2, com destaque vermelho no Lado IXC; confirmado com o usuário (CLAUDE.md §9): Valor Unitário sai do confronto (Lado IXC nasce sempre 0,00 desde a RN-011, criada depois desta regra — comparar valor seria sempre divergente) e Quantidade continua entrando; fecha a pendência de casamento entre itens em aberto desde 2026-08-22 |
+| 2026-08-26 | RN-018 criada (Lado Relatório EACE ganha o mesmo formulário do Lado IXC — KIT Instalado + Produtos, sem Data Ativação/Município/Estado); RN-003, RN-011 e RN-015 recebem nota de extensão | Usuário pediu paridade de campos com o Lado IXC; confirmado com o usuário: limite de 1 KIT (RN-015) também vale para este lado, com exceção pontual de editar/excluir liberada só para o item KIT (senão a correção ficaria bloqueada, já que o Lado Relatório EACE não tem editar/excluir), e Valor Unitário preenchido automaticamente pelo catálogo `KitPadrao` (não zero, diferente do Lado IXC); gera FEAT-022 |
+| 2026-08-26 | RN-017 criada (Nobreak declarado, item padrão fixo no Kit Declarado/1º lado) | Usuário pediu que toda Escola, além do Kit já declarado (RN-002/RN-010), também nasça com um Nobreak, exibido no card "Kit declarado (1º lado)"; confirmado com o usuário: mesmo Nobreak para todas as escolas (sem variação por lote) e sem valor financeiro (só informativo); gera FEAT-021 |
+| 2026-08-26 | RN-016 criada (status "Resposta Financeiro" e extensão do gatilho automático); RN-001 e RN-005 atualizadas | Usuário pediu visibilidade de quando o financeiro responde ao e-mail e um card de contagem no grid; confirmado que é renomeação do status já existente (antes "Aguardando Anexo portal EACE", posição 5 de RN-001), sem status novo, e que o gatilho automático passa a valer também para resposta fora do padrão (antes só a válida mudava o status); gera FEAT-020 |
+| 2026-08-26 | RN-002 esclarecida (alerta de campo único do KIT) | Usuário pediu, com a mesma mecânica já usada na RN-014 (município): quando o KIT declarado antes do projeto (`Escola.kit_inicial`) divergir do KIT instalado (Lado IXC), o campo do KIT fica com destaque amarelo (município usa vermelho); resolve a favor de manter os campos `Ri.kit_informado_ixc`/`Ri.divergencia_kit`, hoje sem uso; não altera o Confronto 1 item a item já documentado, só acrescenta o alerta de campo único; sem mudança de escopo na FEAT-005 |
+| 2026-08-26 | RN-008 esclarecida (log cobre cadastro, não só alteração) | Usuário reportou que a linha do tempo (FEAT-014) só mostra troca de status, sem os itens cadastrados no Lado IXC e no Relatório EACE, nem a edição/exclusão deles; critério reescrito para deixar explícito que "campo relevante" inclui o cadastro inicial desses itens, não só mudança de um valor já existente; gera correção na FEAT-014, ainda `🔍 Aguardando QA` |
+| 2026-08-26 | RN-013 revisada (2 vezes) e consolidada; RN-014 ganha nota de amendment; RN-015 criada (1 KIT por INEP) | Orquestrador consolidou o dia inteiro de ajustes reportados pelo Dev: (1) bloqueio por produto sem aba virou criação automática de aba, depois de o usuário reportar erro real em produção; (2) exigência de KIT/Data de Ativação/Município/Estado, que tentou travar o "Salvar" do Lado IXC (com 2 correções no meio), passou a travar só o envio de e-mail/download da planilha, por esclarecimento direto do usuário; (3) novo limite de 1 KIT por INEP, pedido separado do usuário no mesmo dia — texto de RN-013 reescrito para refletir o estado final, sem manter as versões abandonadas |
+| 2026-08-26 | RN-013 criada (Anexo do financeiro em planilha, substitui PDF) | Usuário pediu que o e-mail ao financeiro leve a planilha-modelo `doc/FATURAMENTO MATERIAS EACE.xlsx` preenchida, em vez do PDF; mapeamento de células e regra de aba por produto confirmados contra a planilha real; produto sem aba correspondente bloqueia o envio (decisão do usuário, **revista no mesmo dia** — ver entrada acima); gera FEAT-017 |
+| 2026-08-26 | RN-014 criada (Município/Estado do Lado IXC, com alerta de divergência contra o cadastro da Escola) | Usuário pediu 2 campos manuais no Lado IXC para conferência contra `Escola.municipio`/`Escola.estado`; decisão explícita: divergência é só alerta visual, não bloqueia; gera FEAT-018 |
+| 2026-08-25 | RN-012 corrigida: exceção reescrita — RI criado fora da tela do sistema (admin/fixture) pode ficar sem responsável ("Não atribuído"); atribuição automática ao criador vale só para o fluxo `ri_iniciar` | Dev reportou, na entrega, que o texto original ("não há RI sem responsável") não correspondia ao comportamento real (`Ri.responsavel` é `null=True`); corrigido a regra para refletir o código, sem mudança de comportamento |
+| 2026-08-25 | RN-012 criada (Responsável do RI: sai da tabela principal do grid, vira campo editável dentro do RI) | Usuário apontou que "Responsável" estava exibido como coluna do grid (FEAT-007) e pediu que passe a viver dentro das informações do RI (drill-down e `ri_detail`), editável por meio de lista dos usuários do sistema; reabre a discussão já registrada em FEAT-007 sobre onde essa coluna deveria viver, agora com uma decisão explícita do usuário |
+| 2026-08-24 | RN-010 ampliada (cruzamento por número de Access Points) | Usuário identificou que, para parte das escolas, `Escola.kit_inicial` traz só o número do KIT (ex.: `4`) em vez do texto completo do catálogo `KitPadrao`; número sempre corresponde à quantidade de Access Points; proposto novo campo `KitPadrao.numero_access_points` para o cruzamento; confirmado que "lote 1"/"lote 2" citados pelo usuário são o 1º e 2º lado (RN-002), não `Escola.lote`; implementação pendente de autorização de feature |
+| 2026-08-24 | RN-011 criada (Lado IXC: KIT Instalado + itens individuais via catálogo) | Usuário pediu, no Lado IXC, um input "KIT Instalado" (com valor unitário) e um "+" para lançar serviços individuais (serviço, quantidade, valor unitário); decisões confirmadas com o usuário: catálogo reaproveitado é o `KitPadrao` (RN-010), valor unitário digitado manualmente (não vem do catálogo) e o novo formato substitui o formulário de Descrição livre atual; afeta FEAT-004 |
+| 2026-08-24 | RN-010 resolvida | Usuário decidiu manter `RiItemEace` com Valor Unitário único, sem discriminar Equipamento/Serviço como o catálogo `KitPadrao` — menor risco, sem migração de dado existente nem impacto no confronto RN-002/RN-003 ou no financeiro |
+| 2026-08-24 | RN-010 ampliada | Fonte de carga do catálogo definida (aba `LPU` de `CONSOLIDADO EACE.xlsx`); cruzamento passa a considerar `Escola.lote` além da descrição; catálogo guarda valor de Equipamento e de Serviço separados; nova pendência sobre `RiItemEace` discriminar ou não os dois valores; gera FEAT-015 |
 | 2026-08-20 | RN-001, RN-002 criadas | Usuário detalhou o ciclo de vida completo de status do RI; confirmado que o confronto de quantidade/valor (RF-04) acontece durante "Andamento" e bloqueia a transição para "Envio de Email para faturamento" |
 | 2026-08-21 | RN-001 ampliada (8º status "Correção MEGA") | Usuário pediu um status para sinalizar RI com divergência EACE×IXC devolvido à MEGA para correção; confirmado como status oficial (não flag), retorno manual para "Andamento", permissão de Analista e Administrador |
 | 2026-08-21 | RN-003, RN-004, RN-005, RN-006 criadas | Orquestrador formalizou como regra de negócio decisões já registradas em `requisitos.md` (confronto RF-04, permissões RF-13, segunda validação RF-09, auditoria RF-12), para vincular ao `checklist.md` recém-criado |
 | 2026-08-21 | RN-007 criada | Usuário respondeu a pendência de campos adicionais de `Escola` (requisitos.md, ITEM 11) com a regra de status de conexão (desconectado/parcialmente conectado/conectado) |
 | 2026-08-21 | RN-003 e RN-005 perdem a pendência do catálogo de divergência; RN-003 mantém só a pendência do critério de casamento entre itens | Cliente confirmou o catálogo (P-03: `valor`, `quantidade`, `kit_relatorio`, `nf_financeiro`), podendo ajustar ao longo do projeto se necessário |
 | 2026-08-22 | RN-002 e RN-003 reescritas: RI passa de 2 para 3 "lados" — "Kit declarado" (1º, dado da EACE antes do projeto), "IXC" (2º) e "Relatório EACE" (3º, novo, baixado depois da instalação); RN-002 vira confronto informal 1º×2º (amarelo, não bloqueia); RN-003 vira confronto formal 3º×2º (vermelho do lado do IXC, bloqueia) | Usuário esclareceu que o model já implementado na FEAT-004 (`RiItemEace`) representa o 1º lado, não "o relatório" como estava documentado; confirmado que as duas comparações usam a mesma mecânica item a item; falta o Dev implementar o 3º lado (model novo) e ajustar FEAT-004/FEAT-007 |
+| 2026-08-23 | RN-009 criada (código de rastreio do e-mail do RI) | Usuário pediu para trazer ao `Sistema_posvenda` a funcionalidade de e-mail do `modulo-posVenda`; formaliza o mecanismo de rastreio (RN-042 original de lá) adaptado para tratar só RI, vinculado a FEAT-008/FEAT-009 |
+| 2026-08-24 | RN-010 criada (Kit Declarado: origem automática + catálogo de valores padrão) | Usuário apontou que o formulário do Kit Declarado não deve deixar digitar Quantidade/Valor Unitário; confirmado que a descrição vem da coluna H do `CONSOLIDADO EACE.xlsx` (mesma fonte de `Escola.kit_inicial`, FEAT-002) e que a regra vale também para itens de correção, não só o lançamento inicial; afeta FEAT-004, já `🔍 Aguardando QA` |

@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.humanize",  # FEAT-026: separador de milhar em R$ (filtro intcomma)
 
     # Apps do Gerenciador Pos-Venda
     "apps.core",
@@ -54,6 +55,9 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # FEAT-029/RN-045: precisa vir depois de AuthenticationMiddleware
+    # (usa request.user).
+    "apps.core.middleware.AcessoLiberadoMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -117,6 +121,72 @@ LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "home"
 LOGOUT_REDIRECT_URL = "login"
 
+# ==========================================
+# AUTENTICACAO VIA ACTIVE DIRECTORY (RN-043, FEAT-027)
+# ==========================================
+# `django_auth_ldap`/`python-ldap` reaproveitados do `modulo-posVenda`
+# (ADR-002), com `ModelBackend` como fallback. `USE_AD_AUTH=false`
+# (padrao) mantem 100% login local, sem nenhuma chamada ao AD. Import
+# feito dentro do `if` (nao no topo do arquivo) para nao quebrar o projeto
+# enquanto as libs de sistema/pip ainda nao forem reintroduzidas pelo
+# DevOps (`requirements.txt`/`Dockerfile`, pendencia registrada na
+# ADR-002/checklist FEAT-027).
+USE_AD_AUTH = config("USE_AD_AUTH", default=False, cast=bool)
+
+if USE_AD_AUTH:
+    try:
+        import ldap
+        from django_auth_ldap.config import LDAPSearch
+
+        # Certificado do AD e emitido por CA interna, ausente na cadeia de
+        # confianca do container (confirmado em 2026-08-28: bind falhava com
+        # "certificate verify failed (unable to get local issuer
+        # certificate)"). Para URI ldaps://, o handshake TLS ocorre dentro
+        # de ldap.initialize(), antes de AUTH_LDAP_CONNECTION_OPTIONS ser
+        # aplicado na conexao - por isso a verificacao precisa ser
+        # desativada aqui tambem, como opcao global do modulo ldap (mesma
+        # solucao ja usada em producao no modulo-posVenda, decisao
+        # confirmada pelo usuario - mantem a conexao criptografada via
+        # LDAPS, so nao valida a cadeia do certificado).
+        ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_NEVER)
+        ldap.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
+
+        AUTHENTICATION_BACKENDS = [
+            "django_auth_ldap.backend.LDAPBackend",
+            "django.contrib.auth.backends.ModelBackend",
+        ]
+
+        AUTH_LDAP_SERVER_URI = config("AD_SERVER_URI", default="")
+        AUTH_LDAP_BIND_DN = config("AD_BIND_DN", default="")
+        AUTH_LDAP_BIND_PASSWORD = config("AD_BIND_PASSWORD", default="")
+        AUTH_LDAP_USER_SEARCH = LDAPSearch(
+            config("AD_USER_SEARCH_BASE", default=""),
+            ldap.SCOPE_SUBTREE,
+            "(sAMAccountName=%(user)s)",
+        )
+        AUTH_LDAP_USER_DOMAIN = config("AD_DEFAULT_DOMAIN", default="")
+
+        # A sincronizacao de e-mail/nome pos-login e feita pela RN-044
+        # (apps/integracoes/ad/ad_sync.py), nao pelo mapeamento automatico
+        # do django-auth-ldap - por isso nao atualiza o usuario a cada
+        # autenticacao aqui. O perfil (RN-004/RN-043) nao vem do AD: o
+        # usuario criado automaticamente recebe o valor padrao do campo
+        # `perfil` (Analista, apps/core/models.py), nunca Administrador.
+        AUTH_LDAP_ALWAYS_UPDATE_USER = False
+        AUTH_LDAP_MIRROR_GROUPS = False
+        AUTH_LDAP_CONNECTION_OPTIONS = {
+            ldap.OPT_REFERRALS: 0,
+            ldap.OPT_X_TLS_REQUIRE_CERT: ldap.OPT_X_TLS_NEVER,
+            ldap.OPT_X_TLS_NEWCTX: 0,
+        }
+    except ImportError:
+        # Bibliotecas ainda nao instaladas (pendencia de DevOps) - degrada
+        # para login local, sem erro visivel ao usuario.
+        USE_AD_AUTH = False
+        AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
+else:
+    AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
+
 LANGUAGE_CODE = "pt-br"
 TIME_ZONE = "America/Fortaleza"
 USE_I18N = True
@@ -146,6 +216,23 @@ EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="posvendas@megainfraestrutura.com.br")
+
+# FEAT-009 (RF-08/RF-19): leitura da resposta do financeiro na mesma caixa,
+# por polling (~5 min, architecture.md) via Microsoft Graph — IMAP com
+# usuário/senha não funciona mais nessa caixa (Basic Auth aposentada pela
+# Microsoft; confirmado em 2026-08-25 com a caixa real). Reaproveita só o
+# *padrão* de código do modulo-posVenda; app do Azure é exclusivo deste
+# sistema — nunca as credenciais de GRAPH_EMAIL_REPLIES_* (aquelas são do
+# modulo-posVenda; usar as duas juntas violaria a independência entre os
+# dois sistemas, decisão confirmada pelo usuário).
+GRAPH_FINANCEIRO_ENABLED = config("GRAPH_FINANCEIRO_ENABLED", default=False, cast=bool)
+GRAPH_FINANCEIRO_CLIENT_ID = config("GRAPH_FINANCEIRO_CLIENT_ID", default="")
+GRAPH_FINANCEIRO_CLIENT_SECRET = config("GRAPH_FINANCEIRO_CLIENT_SECRET", default="")
+GRAPH_FINANCEIRO_TENANT_ID = config("GRAPH_FINANCEIRO_TENANT_ID", default="")
+GRAPH_FINANCEIRO_MAILBOX = config("GRAPH_FINANCEIRO_MAILBOX", default="")
+GRAPH_FINANCEIRO_TIMEOUT = config("GRAPH_FINANCEIRO_TIMEOUT", default=30, cast=int)
+GRAPH_FINANCEIRO_INITIAL_LOOKBACK_DAYS = config("GRAPH_FINANCEIRO_INITIAL_LOOKBACK_DAYS", default=15, cast=int)
+GRAPH_FINANCEIRO_MAX_PAGES_PER_RUN = config("GRAPH_FINANCEIRO_MAX_PAGES_PER_RUN", default=20, cast=int)
 
 LOGGING = {
     "version": 1,

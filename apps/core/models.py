@@ -4,6 +4,14 @@ from django.db import models
 
 class UserManager(BaseUserManager):
     def create_user(self, username, email=None, password=None, **extra_fields):
+        # RN-045/FEAT-029: `create_user` é sempre criação direta e
+        # deliberada (bootstrap via `createsuperuser`, scripts, testes) —
+        # nunca as 2 formas que a regra mira (painel `/admin/` do Django e
+        # login automático via AD), que não passam por este método e por
+        # isso continuam pegando o `default=False` do campo no model.
+        # Sem essa exceção, nem o primeiro superusuário nasceria Ligado
+        # para liberar os próximos.
+        extra_fields.setdefault("acesso_liberado", True)
         if not username:
             raise ValueError("O nome de usuario e obrigatorio")
         email = self.normalize_email(email)
@@ -36,6 +44,12 @@ class User(AbstractUser):
     perfil = models.CharField(
         "Perfil", max_length=20, choices=PERFIL_CHOICES, default=PERFIL_ANALISTA
     )
+    # RN-045/FEAT-029: controle de acesso aos dados, independente do
+    # perfil — vale também para Administrador. Só usuário já existente
+    # antes desta feature é ligado automaticamente (migration de dado);
+    # conta criada a partir de agora (inclusive via login AD, RN-043)
+    # nasce Desligada, aguardando um Administrador já Ligado liberar.
+    acesso_liberado = models.BooleanField("Acesso liberado", default=False)
 
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS = ["email"]

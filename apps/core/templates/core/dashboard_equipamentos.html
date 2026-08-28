@@ -1,0 +1,248 @@
+{% extends "core/base.html" %}
+{% load humanize %}
+
+{% block title %}Equipamentos{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Dashboard</p>
+    <h1 class="text-2xl font-black text-gray-900 dark:text-gray-100 tracking-tight">Equipamentos</h1>
+</div>
+
+{% if estado_filtrado or kit_filtrado or produto_filtrado %}
+<div class="mb-4 flex flex-wrap items-center gap-3">
+    {% if estado_filtrado %}
+    <span class="inline-flex items-center gap-2 text-xs font-black uppercase tracking-widest text-pv-yellow bg-pv-yellow/10 px-3 py-1.5 rounded-full">
+        <i data-lucide="map-pin" class="w-3.5 h-3.5"></i> Filtrado por {{ estado_filtrado }}
+    </span>
+    <a href="{{ limpar_estado_href }}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2">
+        Ver todos os estados
+    </a>
+    <!-- Ampliação (2026-08-28, pedido do usuário): navegação cruzada entre os
+         dashboards Equipamentos/Faturamento, mantendo o estado filtrado — e
+         agora também o Kit/Equipamento, pra Faturamento mostrar o valor
+         daquele filtro específico (pedido do usuário: "o financeiro tem que
+         trazer os valores referente aquele filtro"), não o valor geral do
+         estado. Href montado na view (urlencode correto do Kit/Equipamento,
+         que tem espaço no texto). -->
+    <a href="{% url 'home' %}?{{ ver_faturamento_href }}" class="inline-flex items-center gap-1.5 text-xs font-bold text-pv-yellow hover:text-pv-yellow/80 underline underline-offset-2">
+        <i data-lucide="arrow-right-left" class="w-3.5 h-3.5"></i>
+        Ver Faturamento de {{ estado_filtrado }}{% if kit_filtrado %} — Kit "{{ kit_filtrado }}"{% elif produto_filtrado %} — "{{ produto_filtrado }}"{% endif %}
+    </a>
+    {% endif %}
+    {% if kit_filtrado %}
+    <span class="inline-flex items-center gap-2 text-xs font-black uppercase tracking-widest text-pv-yellow bg-pv-yellow/10 px-3 py-1.5 rounded-full">
+        <i data-lucide="wifi" class="w-3.5 h-3.5"></i> Kit: {{ kit_filtrado }}
+    </span>
+    <a href="{{ limpar_kit_href }}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2">
+        Ver todos os Kits
+    </a>
+    {% endif %}
+    {% if produto_filtrado %}
+    <span class="inline-flex items-center gap-2 text-xs font-black uppercase tracking-widest text-pv-yellow bg-pv-yellow/10 px-3 py-1.5 rounded-full">
+        <i data-lucide="package-plus" class="w-3.5 h-3.5"></i> Equipamento: {{ produto_filtrado }}
+    </span>
+    <a href="{{ limpar_produto_href }}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2">
+        Ver todos os Equipamentos Complementares
+    </a>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- FEAT-026 (pedido do usuário, 2026-08-28): Kit e Nobreak em cards separados —
+     natureza diferente (Kit de rede Wi-Fi x equipamento de energia). "Kits
+     Instalados" (ampliação do mesmo dia) usa o Kit do Lado Relatório EACE
+     (3º lado) de RI em Faturamento Concluído — mesma fonte do card "Valor
+     já Faturado" (RN-026). -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+                <i data-lucide="wifi" class="w-5 h-5 text-pv-yellow"></i>
+            </div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Kits Programados</p>
+        </div>
+        <p class="text-3xl font-black text-gray-900 dark:text-gray-100 tracking-tight">
+            {{ total_kits_programados|intcomma }}
+        </p>
+        <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
+            {% if kit_filtrado %}Escolas com o Kit "{{ kit_filtrado }}"{% else %}Escolas com Kit Declarado (1º lado) reconhecido no catálogo{% endif %}
+            {% if estado_filtrado %}em {{ estado_filtrado }}{% else %}de todo o projeto{% endif %} — 1 Kit por escola.
+        </p>
+    </div>
+
+    <div class="relative bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+        <!-- % de Kits Instalados sobre Kits Programados — mesmo padrão do
+             badge do card "Valor já Faturado" (RN-026, pedido do usuário). -->
+        <span class="absolute top-5 right-5 text-[11px] font-black px-2.5 py-1 rounded-full {% if kits_meta_atingida %}bg-emerald-500/10 text-emerald-600 dark:text-emerald-400{% else %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400{% endif %}">
+            {{ percentual_kits_instalados_pct|floatformat:0 }}%
+        </span>
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-2xl bg-emerald-500/10 flex items-center justify-center">
+                <i data-lucide="check-circle-2" class="w-5 h-5 text-emerald-500"></i>
+            </div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Kits Instalados</p>
+        </div>
+        <p class="text-3xl font-black text-gray-900 dark:text-gray-100 tracking-tight">
+            {{ total_kits_instalados|intcomma }}
+        </p>
+        <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
+            {% if kit_filtrado %}Kit "{{ kit_filtrado }}"{% else %}Kit{% endif %} lançado no Relatório EACE (3º lado) de RIs em Faturamento Concluído
+            {% if estado_filtrado %}em {{ estado_filtrado }}{% else %}de todo o projeto{% endif %}.
+        </p>
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+                <i data-lucide="battery-charging" class="w-5 h-5 text-pv-yellow"></i>
+            </div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Nobreaks Programados</p>
+        </div>
+        <p class="text-3xl font-black text-gray-900 dark:text-gray-100 tracking-tight">
+            {{ total_nobreaks_programados|intcomma }}
+        </p>
+        <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
+            Nobreak inicial (1º lado, RN-017)
+            {% if estado_filtrado %}em {{ estado_filtrado }}{% else %}de todo o projeto{% endif %} — 1 por escola.
+        </p>
+    </div>
+</div>
+
+<!-- Gráfico por estado (ampliação, 2026-08-28): 1 único espaço reaproveitado
+     pelos 2 tipos de equipamento (pedido do usuário — já existia esse
+     gráfico em cima, não duplicar embaixo). Mostra "Kits Instalados por
+     Estado" por padrão; quando 1 Equipamento Complementar está selecionado
+     (clique no bloco "Equipamentos Complementares" abaixo), mostra o nome
+     do equipamento por Estado no lugar. Clicar numa linha define o
+     estado, que revela o link cruzado pro Faturamento (badge acima). -->
+<div class="relative bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm mt-6">
+    {% if not produto_filtrado %}
+    <!-- Mesma % do card "Kits Instalados" acima, como referência rápida —
+         não se aplica ao Equipamento Complementar (sem "meta"/programado). -->
+    <span class="absolute top-5 right-5 text-[11px] font-black px-2.5 py-1 rounded-full {% if kits_meta_atingida %}bg-emerald-500/10 text-emerald-600 dark:text-emerald-400{% else %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400{% endif %}">
+        {{ percentual_kits_instalados_pct|floatformat:0 }}%
+    </span>
+    {% endif %}
+    <div class="flex items-center gap-3 mb-6">
+        <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+            <i data-lucide="bar-chart-3" class="w-5 h-5 text-pv-yellow"></i>
+        </div>
+        {% if produto_filtrado %}
+        <div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">"{{ produto_filtrado }}" por Estado</p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500">Clique num estado pra ver o valor faturado no Faturamento.</p>
+        </div>
+        {% else %}
+        <div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Kits Instalados por Estado</p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500">
+                Clique num estado para filtrar os cards acima{% if kit_filtrado %} — dentro do Kit "{{ kit_filtrado }}"{% endif %}.
+            </p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="space-y-4">
+        {% if produto_filtrado %}
+        {% for linha in produtos_complementares_por_estado %}
+        {% include "core/_linha_produto_estado.html" %}
+        {% empty %}
+        <p class="text-xs text-gray-400 dark:text-gray-500">Nenhuma escola com Estado cadastrado para esse equipamento.</p>
+        {% endfor %}
+        {% else %}
+        {% for linha in kits_instalados_por_estado %}
+        {% include "core/_linha_kits_instalados.html" %}
+        {% empty %}
+        <p class="text-xs text-gray-400 dark:text-gray-500">Nenhuma escola com Estado cadastrado para exibir o gráfico.</p>
+        {% endfor %}
+        {% endif %}
+    </div>
+</div>
+
+<!-- Kits detalhados por tipo — Programados x Instalados lado a lado (pedido
+     do usuário, 2026-08-28): ao filtrar por estado no gráfico acima, esta
+     lista mostra quais tipos de Kit formam o total instalado daquele
+     recorte. Nobreak entra como 1 linha à parte, com "+" (ampliação do
+     mesmo dia, pedido do usuário) — não é um tipo de Kit, é um item fixo
+     (RN-017), por isso a legenda abaixo explica o valor. Cada linha de
+     Kit é clicável (ampliação, 2026-08-28, pedido do usuário): filtra a
+     página inteira por aquele tipo de Kit, combinável com o estado. -->
+<div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm mt-6">
+    <div class="flex items-center gap-3 mb-6">
+        <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+            <i data-lucide="list" class="w-5 h-5 text-pv-yellow"></i>
+        </div>
+        <div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Kits por Equipamento</p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500">
+                Programados x Instalados — clique num Kit pra filtrar a página
+                {% if estado_filtrado %}em {{ estado_filtrado }}{% endif %}.
+            </p>
+        </div>
+    </div>
+
+    <div class="space-y-3">
+        {% for item in kits_por_produto %}
+        <a href="{{ item.href }}" class="flex items-center justify-between gap-4 py-2 border-b border-gray-100 dark:border-gray-800 group">
+            <p class="text-sm font-semibold truncate {% if item.selecionado %}text-pv-yellow{% else %}text-gray-700 dark:text-gray-200 group-hover:text-pv-yellow{% endif %}">{{ item.descricao_item }}</p>
+            <div class="flex items-center gap-4 text-right shrink-0">
+                <span class="text-sm font-black text-gray-900 dark:text-gray-100">{{ item.quantidade_total|intcomma }} programado{{ item.quantidade_total|pluralize }}</span>
+                <span class="text-sm font-black text-emerald-600 dark:text-emerald-400">{{ item.instalados_total|intcomma }} instalado{{ item.instalados_total|pluralize }}</span>
+            </div>
+        </a>
+        {% empty %}
+        <p class="text-xs text-gray-400 dark:text-gray-500">Nenhuma escola com Kit declarado ainda.</p>
+        {% endfor %}
+
+        <!-- Nobreak à parte (não é um tipo de Kit) — mesmo total do card
+             "Nobreaks Programados" acima, já dentro do recorte de estado. -->
+        <div class="flex items-center justify-between gap-4 py-2">
+            <p class="text-sm font-semibold text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                <i data-lucide="battery-charging" class="w-4 h-4"></i> Nobreak
+            </p>
+            <span class="text-sm font-black text-gray-500 dark:text-gray-400 shrink-0">+ {{ total_nobreaks_programados|intcomma }}</span>
+        </div>
+    </div>
+    <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-4 pt-4 border-t border-dashed border-gray-200 dark:border-gray-700">
+        <span class="font-bold">+ Nobreak</span> soma à parte: não é um tipo de Kit, é o item fixo do 1º lado (RN-017, 1 por escola) — mesmo total do card "Nobreaks Programados" acima.
+    </p>
+</div>
+
+<!-- Equipamentos Complementares (ampliação, 2026-08-28, pedido do usuário):
+     equipamento avulso lançado no Lado Relatório EACE (3º lado) além do Kit
+     e do Nobreak — nunca é programado antes do projeto (sem origem em
+     Escola.kit_inicial/nobreak_inicial), só aparece depois que alguém
+     lança/confirma a instalação. Por isso não tem par "Programado". Cada
+     linha é clicável: filtra este bloco e troca o gráfico por estado lá em
+     cima pra esse Equipamento (Kit/Nobreak são eixos independentes, não são
+     afetados). -->
+<div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm mt-6">
+    <div class="flex items-center gap-3 mb-6">
+        <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+            <i data-lucide="package-plus" class="w-5 h-5 text-pv-yellow"></i>
+        </div>
+        <div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Equipamentos Complementares</p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500">
+                Equipamento extra lançado na instalação — não programado antes do projeto
+                {% if estado_filtrado %}em {{ estado_filtrado }}{% endif %}. Clique num equipamento pra ver em quais estados ele está.
+            </p>
+        </div>
+    </div>
+
+    <div class="space-y-3">
+        {% for item in produtos_complementares %}
+        <a href="{{ item.href }}" class="flex items-center justify-between gap-4 py-2 border-b border-gray-100 dark:border-gray-800 last:border-0 group">
+            <p class="text-sm font-semibold truncate {% if item.selecionado %}text-pv-yellow{% else %}text-gray-700 dark:text-gray-200 group-hover:text-pv-yellow{% endif %}">{{ item.descricao_item }}</p>
+            <div class="text-right shrink-0">
+                <p class="text-sm font-black text-gray-900 dark:text-gray-100">{{ item.quantidade_total|intcomma }} unidade{{ item.quantidade_total|pluralize }}</p>
+                <p class="text-[11px] text-gray-400 dark:text-gray-500">{{ item.escolas_total|intcomma }} escola{{ item.escolas_total|pluralize }}</p>
+            </div>
+        </a>
+        {% empty %}
+        <p class="text-xs text-gray-400 dark:text-gray-500">Nenhum equipamento complementar lançado ainda.</p>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

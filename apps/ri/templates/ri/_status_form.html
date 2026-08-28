@@ -1,0 +1,65 @@
+{% comment %}
+Formulário de troca de status do RI (drill-down do grid, FEAT-007).
+FEAT-019: hx-post substitui o próprio formulário sem recarregar a
+página; id + hx-swap-oob permitem que a resposta de
+`ri_status_update_view` reponha este mesmo bloco (com o status real,
+inclusive quando a troca é rejeitada) onde quer que ele esteja na
+página. Sem HTMX carregado, o POST tradicional (action + next) continua
+funcionando normalmente.
+{% endcomment %}
+<form method="POST" action="{% url 'ri_status_update' pk=ri.pk %}"
+      hx-post="{% url 'ri_status_update' pk=ri.pk %}" hx-swap="none"
+      id="form-status-{{ ri.pk }}" hx-swap-oob="true"
+      data-salvar-ao-trocar
+      class="flex flex-wrap items-center gap-3 sm:flex-1 sm:min-w-[15rem] bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded-xl px-4 py-3">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <input type="hidden" name="origem" value="grid">
+    <label class="text-[10px] font-black uppercase text-amber-800 dark:text-amber-300">Status do RI</label>
+    {% comment %}
+    RN-020: com o RI em "Faturamento Concluído", só o Administrador troca o
+    status — para o Analista, o <select> trava no valor atual em vez de
+    oferecer os demais status editáveis (o backend também recusa, aqui é
+    só para não sugerir uma troca que vai ser rejeitada).
+    {% endcomment %}
+    {% if ri.status == 'faturamento_concluido' and not usuario_administrador %}
+    <select name="status" disabled title="Só Administrador altera o status a partir de &quot;Faturamento Concluído&quot; (RN-020)"
+            class="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg text-xs font-bold text-gray-500 dark:text-gray-400 cursor-not-allowed">
+        <option value="{{ ri.status }}" selected>{{ ri.get_status_display }} (só Administrador)</option>
+    </select>
+    {% else %}
+    <select name="status" class="flex-1 px-3 py-2 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+        {% if ri.status not in status_ri_manuais %}
+        <option value="{{ ri.status }}" selected>{{ ri.get_status_display }} (automático)</option>
+        {% endif %}
+        {% for valor, rotulo in status_ri_editaveis %}
+        <option value="{{ valor }}" {% if ri.status == valor %}selected{% endif %}>{{ rotulo }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+</form>
+{% if ri.status == 'aguardando_financeiro' and usuario_administrador %}
+{% comment %}
+RN-019: exceção do Administrador — força a saída de "Aguardando
+financeiro" direto para "Resposta Financeiro" (mesmo destino do gatilho
+automático), sem esperar o e-mail do financeiro chegar. Ação separada do
+<select> genérico acima (que continua sem essa opção para o Analista);
+mesmo endpoint (`ri_status_update_view`), com o destino fixo no campo
+oculto.
+{% endcomment %}
+<form method="POST" action="{% url 'ri_status_update' pk=ri.pk %}"
+      hx-post="{% url 'ri_status_update' pk=ri.pk %}" hx-swap="none"
+      id="form-status-forcar-{{ ri.pk }}" hx-swap-oob="true"
+      onsubmit="return confirm('Confirma que o financeiro já respondeu? Isso força a saída de \'Aguardando financeiro\' sem esperar o e-mail automático (RN-019).');"
+      class="flex items-center">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <input type="hidden" name="origem" value="grid">
+    <input type="hidden" name="status" value="{{ status_resposta_financeiro }}">
+    <button type="submit"
+            class="shrink-0 px-3 py-2 bg-amber-600 text-white font-black uppercase italic text-[10px] rounded-lg hover:bg-amber-700 transition"
+            title="Só Administrador — força a saída de &quot;Aguardando financeiro&quot; sem esperar a resposta automática (RN-019)">
+        Forçar Resposta Financeiro
+    </button>
+</form>
+{% endif %}

@@ -1,0 +1,593 @@
+{% extends "core/base.html" %}
+
+{% block title %}Gerenciador Pós Venda | RI {{ escola.inep }}{% endblock %}
+
+{% block content %}
+<nav class="flex mb-2" aria-label="Breadcrumb">
+    <ol class="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+        <li><a href="{% url 'grid_inep' %}" class="hover:text-gray-600 dark:hover:text-gray-300">Grid de INEPs</a></li>
+        <li>/</li>
+        <li class="text-gray-900 dark:text-gray-100">{{ escola.inep }}</li>
+    </ol>
+</nav>
+
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <h1 class="text-3xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            {{ escola.nome }}
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+            INEP {{ escola.inep }}{% if escola.municipio %} — {{ escola.municipio }}/{{ escola.estado }}{% endif %}
+        </p>
+    </div>
+
+    {% if ri %}
+    <div class="flex gap-4">
+        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Status do RI</p>
+            <p class="text-sm font-black italic text-pv-yellow">{{ ri.get_status_display }}</p>
+        </div>
+        {% include "ri/_responsavel_form_detail.html" with ri=ri next_url=request.get_full_path usuarios=usuarios %}
+    </div>
+    {% endif %}
+</div>
+
+{% if not ri %}
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm p-10 text-center">
+    <div class="flex flex-col items-center gap-4">
+        <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
+            <i data-lucide="file-plus-2" class="w-8 h-8"></i>
+        </div>
+        <div>
+            <p class="font-black italic uppercase text-gray-700 dark:text-gray-300">Nenhum RI iniciado para este INEP</p>
+            <p class="text-xs font-bold text-gray-400 dark:text-gray-500 mt-1">O RI nasce com status "Implantação EACE" (RN-001).</p>
+        </div>
+        <form method="POST" action="{% url 'ri_iniciar' inep=escola.inep %}">
+            {% csrf_token %}
+            <button type="submit" class="px-6 py-4 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg">
+                Iniciar RI
+            </button>
+        </form>
+    </div>
+</div>
+
+{% else %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6">
+        <div class="flex items-center justify-between mb-1">
+            <h2 class="text-sm font-black uppercase text-gray-800 dark:text-gray-200">Kit declarado <span class="text-gray-400 dark:text-gray-500">(1º lado)</span></h2>
+            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-002">Não editável após lançado</span>
+        </div>
+        <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold mb-4">
+            Dado informado pela EACE antes do início do projeto. Não é lançado nesta tela (RN-010).
+        </p>
+
+        <!-- Item(ns) já lançado(s) via Django admin (RN-010) — mesma fonte
+             (RiItemEace) exibida no Grid de INEPs (FEAT-007), para o card
+             não divergir do que aparece lá. -->
+        <div class="flex flex-col gap-2 mb-4">
+            {% for item in ri.itens_eace.all %}
+            <div class="flex items-center justify-between bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3">
+                <span class="text-xs font-bold text-gray-700 dark:text-gray-300">{{ item.descricao_item }}</span>
+                <span class="text-xs font-bold text-gray-500 dark:text-gray-400">{{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</span>
+            </div>
+            {% empty %}
+            <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
+            {% endfor %}
+        </div>
+
+        <div class="flex flex-col gap-3 border-t border-gray-100 dark:border-gray-800 pt-4">
+            <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400" title="RN-010">
+                Descrição do item
+                <input type="text" value="{{ kit_declarado_descricao|default:'— não cadastrado —' }}" readonly
+                    class="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none font-bold text-xs text-gray-800 dark:text-gray-100 cursor-not-allowed">
+            </label>
+            <!-- RN-017: Nobreak é item padrão, igual para todas as escolas
+                 (sem quantidade/valor) — só informativo, não passa pelo
+                 catálogo KitPadrao nem entra no financeiro. -->
+            <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400" title="RN-017">
+                Nobreak declarado <span class="text-gray-400 dark:text-gray-500">(1 un.)</span>
+                <input type="text" value="{{ escola.nobreak_inicial|default:'— não cadastrado —' }}" readonly
+                    class="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none font-bold text-xs text-gray-800 dark:text-gray-100 cursor-not-allowed">
+            </label>
+        </div>
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-black uppercase text-gray-800 dark:text-gray-200">IXC <span class="text-gray-400 dark:text-gray-500">(2º lado)</span></h2>
+            {% if ri_bloqueado_faturamento_concluido %}
+            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-020">Bloqueado (Faturamento Concluído)</span>
+            {% endif %}
+        </div>
+
+        <!-- RN-003 (2026-08-26): confronto formal contra o Lado Relatório
+             EACE — divergência aberta bloqueia o envio ao financeiro
+             (RN-001); aviso geral do painel, além do destaque em cada item
+             divergente abaixo. -->
+        {% if divergencia_kit_relatorio.diverge %}
+        <p class="text-[11px] font-bold text-red-500 dark:text-red-400 mb-4 border border-red-200 dark:border-red-800/60 bg-red-50 dark:bg-red-950/20 rounded-xl px-4 py-3">
+            KIT/Produtos diferem do Relatório EACE (destacados em vermelho abaixo) — bloqueia o envio ao financeiro (RN-003) até a correção.
+        </p>
+        {% endif %}
+
+        <div class="flex flex-col gap-2 mb-6">
+            {% for item in ri.itens_ixc.all %}
+            <div class="bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3{% if item.pk in divergencia_kit_relatorio.itens_ixc_divergentes_pks %} ring-2 ring-red-400{% elif item.eh_kit and divergencia_kit %} ring-2 ring-amber-400{% endif %}">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-gray-700 dark:text-gray-300">{{ item.descricao_item }}</span>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs font-bold text-gray-500 dark:text-gray-400">{{ item.quantidade }} un.</span>
+                        {% if not ri_bloqueado_faturamento_concluido %}
+                        <button type="button" onclick="document.getElementById('editar-ixc-{{ item.pk }}').classList.toggle('hidden')" class="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" title="Editar">
+                            <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                        </button>
+                        {% if request.user.is_administrador %}
+                        <form method="POST" action="{% url 'ri_item_ixc_delete' item_pk=item.pk %}" onsubmit="return confirm('Excluir este item do IXC?');">
+                            {% csrf_token %}
+                            <button type="submit" class="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Excluir">
+                                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                            </button>
+                        </form>
+                        {% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+                <form id="editar-ixc-{{ item.pk }}" method="POST" action="{% url 'ri_item_ixc_update' item_pk=item.pk %}" class="hidden flex-col gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                    {% csrf_token %}
+                    <input type="text" name="descricao_item" value="{{ item.descricao_item }}" class="w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+                    <div class="flex gap-2">
+                        <input type="number" name="quantidade" value="{{ item.quantidade }}" min="1" class="flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+                        <input type="number" name="valor_unitario" value="{{ item.valor_unitario|stringformat:'0.2f' }}" min="0" step="0.01" class="flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+                    </div>
+                    <button type="submit" class="self-start px-4 py-2 bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900 font-black uppercase text-[10px] rounded-lg hover:bg-black dark:hover:bg-white transition">
+                        Salvar
+                    </button>
+                </form>
+                <!-- RN-003 (2026-08-26): comparação formal contra o Lado
+                     Relatório EACE — vermelho, bloqueia (diferente da
+                     RN-002 abaixo, amarelo, só conferência). -->
+                {% if item.pk in divergencia_kit_relatorio.itens_ixc_divergentes_pks %}
+                <p class="text-[11px] font-bold text-red-500 dark:text-red-400 mt-2">
+                    Diverge do Relatório EACE — bloqueia o envio ao financeiro (RN-003).
+                </p>
+                {% endif %}
+                <!-- RN-002 (esclarecida em 2026-08-26): mesma mecânica visual
+                     da RN-014 (município), amarelo em vez de vermelho — só
+                     quando Kit declarado (1º lado) e KIT Instalado têm valor
+                     e divergem; não bloqueia. -->
+                {% if item.eh_kit and divergencia_kit %}
+                <p class="text-[11px] font-bold text-amber-600 dark:text-amber-400 mt-2">
+                    KIT instalado difere do Kit declarado ({{ kit_declarado_descricao }}) — não bloqueia, só conferência (RN-002).
+                </p>
+                {% endif %}
+            </div>
+            {% empty %}
+            <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
+            {% endfor %}
+        </div>
+
+        <!-- RN-020 (2026-08-27): com o RI em "Faturamento Concluído", o
+             formulário de lançamento/edição deste lado some — só o
+             Administrador troca o status para liberar de novo. -->
+        {% if ri_bloqueado_faturamento_concluido %}
+        <p class="text-[11px] font-bold text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-800 pt-4">
+            RI em "Faturamento Concluído" — lançamento bloqueado até o Administrador trocar o status (RN-020).
+        </p>
+        {% else %}
+        <!-- RN-011 (formulário único, 2026-08-24): KIT Instalado (Unidade
+             "Escola" do catálogo KitPadrao, + opção "Outro"), Produtos via
+             "+" e Data Ativação — um só formulário, um só botão de salvar.
+             RN-011 (ajuste, 2026-08-26): 1 KIT por INEP — com um já
+             lançado, o seletor some (só edita/exclui o item lançado
+             acima, mesmo padrão de RN-004). -->
+        {% if not kit_ja_lancado and not kit_form.tem_catalogo %}
+        <p class="text-[11px] font-bold text-amber-600 dark:text-amber-400 border-t border-gray-100 dark:border-gray-800 pt-4">
+            Nenhum KIT (Unidade "Escola") cadastrado no catálogo para o Lote desta escola ainda — use "Outro".
+        </p>
+        {% endif %}
+        <!-- novalidate: mensagem nativa do navegador ("Please fill out this
+             field") vem no idioma do navegador, não em português — desativa
+             a validação nativa para o Django validar no servidor e mostrar
+             as mensagens em português já preparadas abaixo (Município/
+             Estado, RN-014, e as demais deste formulário). -->
+        <form method="POST" novalidate class="flex flex-col gap-3 border-t border-gray-100 dark:border-gray-800 pt-4">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="salvar_ixc">
+
+            <h3 class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">KIT Instalado</h3>
+            {% if kit_ja_lancado %}
+            <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold">
+                Este RI já tem um KIT lançado — só é permitido 1 por INEP.
+                Para trocar, edite ou exclua o item já lançado acima.
+            </p>
+            {% else %}
+            <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                Kit
+                {{ kit_form.kit }}
+            </label>
+            <div id="kit-outro-wrapper" class="hidden">
+                <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                    Número de Access Points
+                    {{ kit_form.kit_outro_numero }}
+                </label>
+            </div>
+            {% if kit_form.errors %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Verifique o KIT selecionado (ou o número de Access Points, se for "Outro").</p>
+            {% endif %}
+            {% endif %}
+
+            <div class="flex items-center justify-between mt-2">
+                <h3 class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Produtos</h3>
+                <button type="button" id="btn-add-produto-ixc"
+                    class="w-6 h-6 flex items-center justify-center rounded-full bg-pv-black text-pv-yellow hover:bg-gray-800 transition"
+                    title="Adicionar produto" aria-label="Adicionar produto">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            {{ produto_formset.management_form }}
+
+            <!-- Altura travada + rolagem própria: painel não cresce sem limite
+                 conforme produtos são adicionados (ajuste pedido pelo usuário). -->
+            <div id="produto-ixc-linhas" class="flex flex-col gap-3 max-h-72 overflow-y-auto pr-1">
+                {% for produto_form in produto_formset %}
+                <div class="produto-ixc-linha flex flex-col gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 pr-6 relative">
+                    <button type="button" class="btn-remove-produto-ixc absolute top-2 right-2 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Remover produto" aria-label="Remover produto">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    </button>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Produto
+                        {{ produto_form.produto }}
+                    </label>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Quantidade
+                        {{ produto_form.quantidade }}
+                    </label>
+                </div>
+                {% endfor %}
+            </div>
+
+            <template id="produto-ixc-template">
+                <div class="produto-ixc-linha flex flex-col gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 pr-6 relative">
+                    <button type="button" class="btn-remove-produto-ixc absolute top-2 right-2 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Remover produto" aria-label="Remover produto">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    </button>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Produto
+                        {{ produto_formset.empty_form.produto }}
+                    </label>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Quantidade
+                        {{ produto_formset.empty_form.quantidade }}
+                    </label>
+                </div>
+            </template>
+            {% if produto_formset.non_form_errors %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">{{ produto_formset.non_form_errors.0 }}</p>
+            {% elif produto_formset.total_error_count %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Verifique os produtos preenchidos.</p>
+            {% endif %}
+
+            <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 mt-2">
+                Data Ativação
+                {{ data_ativacao_form.data_ativacao }}
+            </label>
+            {% if data_ativacao_form.data_ativacao.errors %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Data de Ativação inválida.</p>
+            {% endif %}
+
+            <!-- RN-014 (2026-08-26; revista no mesmo dia): Município/Estado
+                 do Lado IXC — preenchimento manual, opcional aqui (não trava
+                 o Salvar). São exigidos só na hora de enviar o e-mail/baixar
+                 a planilha (RN-013, `gerar_planilha_faturamento`), junto com
+                 KIT e Data de Ativação. Conferido contra Escola.municipio/
+                 Escola.estado; divergência é só alerta visual (borda + texto,
+                 não só cor — acessibilidade), não bloqueia. -->
+            <div class="flex gap-3">
+                <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 flex-1">
+                    Município (Lado IXC)
+                    <div class="{% if divergencia_municipio_ixc %}ring-2 ring-red-400 rounded-xl{% endif %}">
+                        {{ data_ativacao_form.municipio_ixc }}
+                    </div>
+                </label>
+                <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 w-24">
+                    Estado (UF)
+                    <div class="{% if divergencia_estado_ixc %}ring-2 ring-red-400 rounded-xl{% endif %}">
+                        {{ data_ativacao_form.estado_ixc }}
+                    </div>
+                </label>
+            </div>
+            <p class="text-[10px] text-gray-400 dark:text-gray-500 font-bold">
+                KIT, Data de Ativação, Município e Estado precisam estar
+                preenchidos para enviar o e-mail ou baixar a planilha do
+                financeiro (RN-013).
+            </p>
+            {% if divergencia_municipio_ixc or divergencia_estado_ixc %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">
+                Município/Estado do Lado IXC diferem do cadastro da Escola
+                ({{ escola.municipio }}/{{ escola.estado }}) — não bloqueia, só conferência.
+            </p>
+            {% endif %}
+            {% if data_ativacao_form.estado_ixc.errors %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">{{ data_ativacao_form.estado_ixc.errors.0 }}</p>
+            {% endif %}
+
+            <button type="submit" class="self-start px-5 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-xl hover:bg-gray-800 transition shadow mt-2">
+                Salvar
+            </button>
+        </form>
+        {% endif %}
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6">
+        <div class="flex items-center justify-between mb-1">
+            <h2 class="text-sm font-black uppercase text-gray-800 dark:text-gray-200">Relatório EACE <span class="text-gray-400 dark:text-gray-500">(3º lado)</span></h2>
+            {% if ri_bloqueado_faturamento_concluido %}
+            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-020">Bloqueado (Faturamento Concluído)</span>
+            {% endif %}
+        </div>
+        <!-- RN-018 (2026-08-26): mesmo mecanismo do Lado IXC (RN-011) —
+             "KIT Instalado" + "Produtos", ambos do catálogo `KitPadrao`,
+             sem Data Ativação/Município/Estado (exclusivos do Lado IXC).
+             Exceção pontual à imutabilidade geral deste lado (RN-003): só
+             o item marcado como KIT aceita editar/excluir (parágrafo
+             abaixo já explica; ícones só aparecem nesse item). -->
+        <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold mb-4">
+            Dado do relatório baixado no portal da EACE, depois da instalação. O KIT
+            lançado pode ser corrigido (editar/excluir); os demais produtos só
+            admitem um novo lançamento.
+        </p>
+
+        {% if not ri_bloqueado_faturamento_concluido %}
+        <!-- FEAT-024/RN-022: busca os itens da Planilha EACE (Administrador
+             > Planilha EACE) pelo INEP deste RI e lança os que casarem com
+             o catálogo — igual a um lançamento manual abaixo. Não
+             substitui o preenchimento manual, que continua disponível. -->
+        <form method="POST" class="mb-4">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="sincronizar_planilha_eace">
+            <button type="submit"
+                title="Busca os itens da Planilha EACE (Administrador) pelo INEP e lança os que casarem com o catálogo"
+                class="px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-xl hover:bg-gray-800 transition inline-flex items-center gap-2">
+                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                Sincronizador
+            </button>
+        </form>
+        {% endif %}
+
+        <div class="flex flex-col gap-2 mb-6">
+            {% for item in ri.itens_relatorio_eace.all %}
+            <div class="bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-gray-700 dark:text-gray-300">
+                        {{ item.descricao_item }}{% if item.eh_kit %} <span class="text-gray-400 dark:text-gray-500 normal-case">(KIT)</span>{% endif %}
+                    </span>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs font-bold text-gray-500 dark:text-gray-400">{{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</span>
+                        {% if not ri_bloqueado_faturamento_concluido %}
+                        <button type="button" onclick="document.getElementById('editar-relatorio-eace-{{ item.pk }}').classList.toggle('hidden')" class="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" title="Editar">
+                            <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                        </button>
+                        {% if request.user.is_administrador %}
+                        <form method="POST" action="{% url 'ri_item_relatorio_eace_delete' item_pk=item.pk %}" onsubmit="return confirm('Excluir este item do Relatório EACE?');">
+                            {% csrf_token %}
+                            <button type="submit" class="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Excluir">
+                                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                            </button>
+                        </form>
+                        {% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+                {% if item.num_osp or item.validacao_osp or item.nota_fiscal %}
+                {# RN-022 (ampliada, 2026-08-27): campos fechados, só o Sincronizador preenche — nunca aparecem no formulário de edição. #}
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+                    {% if item.num_osp %}
+                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase">Num OSP: <span class="text-green-600 dark:text-green-400">{{ item.num_osp }}</span></span>
+                    {% endif %}
+                    {% if item.validacao_osp %}
+                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase">Validação OSP: <span class="text-green-600 dark:text-green-400">{{ item.validacao_osp }}</span></span>
+                    {% endif %}
+                    {% if item.nota_fiscal %}
+                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase">Nota Fiscal: <span class="text-green-600 dark:text-green-400">{{ item.nota_fiscal }}</span></span>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% if not ri_bloqueado_faturamento_concluido %}
+                <form id="editar-relatorio-eace-{{ item.pk }}" method="POST" action="{% url 'ri_item_relatorio_eace_update' item_pk=item.pk %}" class="hidden flex-col gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                    {% csrf_token %}
+                    <input type="text" name="descricao_item" value="{{ item.descricao_item }}" class="w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+                    <div class="flex gap-2">
+                        <input type="number" name="quantidade" value="{{ item.quantidade }}" min="1" class="flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+                        <input type="number" name="valor_unitario" value="{{ item.valor_unitario|stringformat:'0.2f' }}" min="0" step="0.01" class="flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+                    </div>
+                    <button type="submit" class="self-start px-4 py-2 bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900 font-black uppercase text-[10px] rounded-lg hover:bg-black dark:hover:bg-white transition">
+                        Salvar
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            {% empty %}
+            <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
+            {% endfor %}
+        </div>
+
+        <!-- RN-020 (2026-08-27): mesmo bloqueio do Lado IXC — com o RI em
+             "Faturamento Concluído", o formulário some para os dois perfis. -->
+        {% if ri_bloqueado_faturamento_concluido %}
+        <p class="text-[11px] font-bold text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-800 pt-4">
+            RI em "Faturamento Concluído" — lançamento bloqueado até o Administrador trocar o status (RN-020).
+        </p>
+        {% else %}
+        {% if not kit_ja_lancado_eace and not kit_form_eace.tem_catalogo %}
+        <p class="text-[11px] font-bold text-amber-600 dark:text-amber-400 border-t border-gray-100 dark:border-gray-800 pt-4">
+            Nenhum KIT (Unidade "Escola") cadastrado no catálogo para o Lote desta escola ainda — use "Outro".
+        </p>
+        {% endif %}
+        <form method="POST" novalidate class="flex flex-col gap-3 border-t border-gray-100 dark:border-gray-800 pt-4">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="salvar_relatorio_eace">
+
+            <h3 class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">KIT Instalado</h3>
+            {% if kit_ja_lancado_eace %}
+            <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold">
+                Este RI já tem um KIT lançado no Relatório EACE — só é permitido 1 por
+                INEP. Para trocar, edite ou exclua o item já lançado acima.
+            </p>
+            {% else %}
+            <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                Kit
+                {{ kit_form_eace.kit }}
+            </label>
+            <div id="kit-outro-wrapper-eace" class="hidden">
+                <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                    Número de Access Points
+                    {{ kit_form_eace.kit_outro_numero }}
+                </label>
+            </div>
+            {% if kit_form_eace.errors %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Verifique o KIT selecionado (ou o número de Access Points, se for "Outro").</p>
+            {% endif %}
+            {% endif %}
+
+            <div class="flex items-center justify-between mt-2">
+                <h3 class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Produtos</h3>
+                <button type="button" id="btn-add-produto-eace"
+                    class="w-6 h-6 flex items-center justify-center rounded-full bg-pv-black text-pv-yellow hover:bg-gray-800 transition"
+                    title="Adicionar produto" aria-label="Adicionar produto">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            {{ produto_formset_eace.management_form }}
+
+            <div id="produto-eace-linhas" class="flex flex-col gap-3 max-h-72 overflow-y-auto pr-1">
+                {% for produto_form in produto_formset_eace %}
+                <div class="produto-eace-linha flex flex-col gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 pr-6 relative">
+                    <button type="button" class="btn-remove-produto-eace absolute top-2 right-2 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Remover produto" aria-label="Remover produto">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    </button>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Produto
+                        {{ produto_form.produto }}
+                    </label>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Quantidade
+                        {{ produto_form.quantidade }}
+                    </label>
+                </div>
+                {% endfor %}
+            </div>
+
+            <template id="produto-eace-template">
+                <div class="produto-eace-linha flex flex-col gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 pr-6 relative">
+                    <button type="button" class="btn-remove-produto-eace absolute top-2 right-2 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Remover produto" aria-label="Remover produto">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    </button>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Produto
+                        {{ produto_formset_eace.empty_form.produto }}
+                    </label>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Quantidade
+                        {{ produto_formset_eace.empty_form.quantidade }}
+                    </label>
+                </div>
+            </template>
+            {% if produto_formset_eace.non_form_errors %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">{{ produto_formset_eace.non_form_errors.0 }}</p>
+            {% elif produto_formset_eace.total_error_count %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Verifique os produtos preenchidos.</p>
+            {% endif %}
+
+            <button type="submit" class="self-start px-5 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-xl hover:bg-gray-800 transition shadow mt-2">
+                Salvar
+            </button>
+        </form>
+        {% endif %}
+    </div>
+
+</div>
+
+{% include "ri/_historico_panel.html" %}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// "Responsável" salva direto ao trocar a opção da lista — sem botão de
+// salvar (mesmo padrão do drill-down do grid, FEAT-007). `requestSubmit()`
+// dispara o evento "submit" que o HTMX escuta para atualizar sem
+// recarregar a página (FEAT-019); sem HTMX, o comportamento é o mesmo de
+// antes (POST tradicional).
+document.querySelectorAll('form[data-salvar-ao-trocar] select').forEach(function (select) {
+    select.addEventListener('change', function () {
+        select.form.requestSubmit();
+    });
+});
+
+// RN-011/RN-018: select "KIT Instalado" — ao escolher "Outro", revela o
+// campo "Número de Access Points"; nas demais opções, o campo fica
+// oculto. Mesma mecânica nos dois painéis (Lado IXC e Lado Relatório
+// EACE), fatorada numa função só para não duplicar o listener.
+function configurarKitOutro(idSelectKit, idWrapperOutro) {
+    var selectKit = document.getElementById(idSelectKit);
+    var wrapperOutro = document.getElementById(idWrapperOutro);
+    if (!selectKit || !wrapperOutro) return;
+    function atualizarCampoOutro() {
+        wrapperOutro.classList.toggle('hidden', selectKit.value !== 'outro');
+    }
+    selectKit.addEventListener('change', atualizarCampoOutro);
+    atualizarCampoOutro();
+}
+configurarKitOutro('id_kit', 'kit-outro-wrapper');
+configurarKitOutro('id_eace-kit', 'kit-outro-wrapper-eace');
+
+// RN-011/RN-018: botão "+" do Lado IXC e do Lado Relatório EACE — a lista
+// de Produtos nasce sem nenhuma linha (extra=0); cada clique clona a
+// linha-modelo (empty_form do formset Django) e incrementa o management
+// form (TOTAL_FORMS). Mesma mecânica nos dois painéis, fatorada numa
+// função só (cada um com seus próprios ids/classes, sem colisão).
+function configurarBlocoProdutos(config) {
+    var botaoAdicionar = document.getElementById(config.idBotaoAdicionar);
+    var linhas = document.getElementById(config.idLinhas);
+    if (!botaoAdicionar || !linhas) return;
+    botaoAdicionar.addEventListener('click', function () {
+        var totalFormsInput = document.getElementById(config.idTotalForms);
+        var indice = parseInt(totalFormsInput.value, 10);
+        var modelo = document.getElementById(config.idTemplate).innerHTML.replace(/__prefix__/g, indice);
+        var wrapper = document.createElement('div');
+        wrapper.innerHTML = modelo.trim();
+        linhas.appendChild(wrapper.firstElementChild);
+        totalFormsInput.value = indice + 1;
+        if (window.lucide) { window.lucide.createIcons(); }
+    });
+
+    // Remove uma linha de produto (servidor ou recém-clonada pelo "+") sem
+    // precisar reindexar as demais — um índice de formset ausente na
+    // submissão é tratado pelo Django como linha extra vazia, não erro.
+    linhas.addEventListener('click', function (evento) {
+        var botaoRemover = evento.target.closest(config.classeBotaoRemover);
+        if (!botaoRemover) return;
+        var linha = botaoRemover.closest(config.classeLinha);
+        if (linha) linha.remove();
+    });
+}
+configurarBlocoProdutos({
+    idBotaoAdicionar: 'btn-add-produto-ixc',
+    idLinhas: 'produto-ixc-linhas',
+    idTemplate: 'produto-ixc-template',
+    idTotalForms: 'id_form-TOTAL_FORMS',
+    classeBotaoRemover: '.btn-remove-produto-ixc',
+    classeLinha: '.produto-ixc-linha',
+});
+configurarBlocoProdutos({
+    idBotaoAdicionar: 'btn-add-produto-eace',
+    idLinhas: 'produto-eace-linhas',
+    idTemplate: 'produto-eace-template',
+    idTotalForms: 'id_eace_produto-TOTAL_FORMS',
+    classeBotaoRemover: '.btn-remove-produto-eace',
+    classeLinha: '.produto-eace-linha',
+});
+</script>
+{% endblock %}
