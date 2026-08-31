@@ -1,5 +1,5 @@
 # Checklist — Gerenciador Pós-Venda (v1 · Faturamento EACE por INEP)
-_Última atualização: 2026-08-28_
+_Última atualização: 2026-08-31_
 
 > **Versão-alvo:** 1.0.0. **Nome exibido no menu do sistema:** "Gerenciador
 > Pós Venda" (sem hífen) — ver `architecture.md`, "Identidade do Sistema e
@@ -156,24 +156,40 @@ não traz INEP novo nem diverge do que já está migrado.
 
 ### FEAT-003 — Usuários e permissões
 **Descrição:** Cadastro de usuário com dois perfis fixos (Administrador e
-Analista) e as regras de permissão da RN-004.
+Analista) e as regras de permissão da RN-004. **Fechada em 2026-08-31,
+sem tela própria de cadastro:** a RN-004 foi ampliada junto com a FEAT-028
+(28/08) para manter criar/editar/desativar usuário só pelo `/admin/` do
+Django — a tela interna "Administrador > Usuários" cobre só troca de
+perfil (FEAT-028) e liga/desliga de acesso (FEAT-029). O critério original
+desta feature (tela completa de cadastro) foi substituído por essa
+decisão.
 **Tipo:** fullstack
-**Status:** ⬜ Pendente
+**Status:** 🔍 Aguardando QA (via QA-028/QA-029 — sem código próprio)
 **Prioridade:** Alta
 **Critérios de aceite:**
-- Administrador cria/edita/desativa usuário; Analista não acessa essa tela.
-- Analista realiza CRUD de INEP/item e documentos, exceto exclusão.
+- Criar, editar e desativar usuário continuam exclusivos do `/admin/` do
+  Django (RN-004, ampliada) — não há tela própria no sistema para isso.
+- Troca de perfil (Administrador ↔ Analista) e liga/desliga de acesso são
+  feitos pela tela "Administrador > Usuários" (FEAT-028/FEAT-029), não por
+  esta feature.
+- Analista realiza CRUD de INEP/item e documentos, exceto exclusão — já
+  aplicado desde a FEAT-001 (`user.is_administrador`).
 - Tentativa de exclusão por Analista é bloqueada em qualquer tela onde
-  exclusão exista.
+  exclusão exista — já aplicado (FEAT-004/FEAT-006).
 **Regras relacionadas:** RN-004, RF-13.
 **Dependências:** FEAT-001.
-**Tipo de validação:** QA (QA-003) — inclui teste de permissão.
-**Entrega do Dev:** nenhuma ainda.
-**Pendência atual:** RN-004 recebeu uma exceção (2026-08-28, ver
-`FEAT-027`) — criação de usuário também pode acontecer automaticamente via
-login no Active Directory, sempre com perfil Analista; o critério "Analista
-não acessa essa tela" continua valendo, esse caso não é criação manual pelo
-Administrador.
+**Tipo de validação:** QA — via QA-028/QA-029; sem QA-003 separada (não há
+código próprio desta feature).
+**Entrega do Dev (2026-08-31):**
+- Investigado o que faltava — confirmado que não há mais nada a
+  implementar. RN-004 já foi ampliada (junto com a FEAT-028, 28/08) para
+  manter criação/edição/desativação de usuário só no `/admin/`.
+- Troca de perfil e liga/desliga de acesso, que cobrem o que a tela
+  interna realmente oferece, já foram entregues nas FEAT-028 e FEAT-029.
+- A regra de permissão (exclusão só para Administrador) já está ativa
+  desde a FEAT-001.
+- **Pendência:** nenhuma — nada a implementar nesta feature.
+**Pendência atual:** nenhuma.
 
 ---
 
@@ -514,16 +530,16 @@ de aceite acima — ainda não implementado pelo Dev.
 
 ### FEAT-005 — Confronto de divergências (2 confrontos: RN-002 e RN-003)
 **Descrição:** Esclarecido em 2026-08-22 que são **dois confrontos**, não
-um: (1) Kit declarado × IXC — informal, destaque amarelo, não bloqueia
-(RN-002); (2) Relatório EACE × IXC — formal, sem tolerância, destaque
-vermelho do lado do IXC, bloqueia (RN-003). Critérios do confronto 2
-fechados em 2026-08-26: compara Descrição (qual KIT/Produto do catálogo)
-e Quantidade — sem Valor Unitário.
+um: (1) Kit declarado × IXC — campo único (descrição do KIT), destaque
+amarelo, não bloqueia (RN-002); (2) Relatório EACE × IXC — formal, sem
+tolerância, destaque vermelho do lado do IXC, bloqueia (RN-003). Critérios
+do confronto 2 fechados em 2026-08-26: compara Descrição (qual KIT/Produto
+do catálogo) e Quantidade — sem Valor Unitário. Confronto 1 confirmado
+completo em 2026-08-31 — nunca foi item a item (RN-002 consolidada).
 **Tipo:** fullstack
-**Status:** 🔍 Aguardando QA (confronto 2 — RN-003; confronto 1, RN-002,
-continua fora do escopo desta entrega)
-**Prioridade:** Alta — confronto 2 é o próximo a implementar (usuário
-pediu o bloqueio do envio ao financeiro).
+**Status:** 🔍 Aguardando QA (os dois confrontos)
+**Prioridade:** Alta — confronto 2 era o próximo a implementar (usuário
+pediu o bloqueio do envio ao financeiro); ambos concluídos.
 **Critérios de aceite:**
 - Confronto 2 (Relatório EACE × IXC, RN-003 — pronto para implementar):
   compara "KIT Instalado" isoladamente (no máximo 1 de cada lado) e
@@ -543,14 +559,14 @@ pediu o bloqueio do envio ao financeiro).
 - INEP com divergência formal aberta (confronto 2) aparece destacado
   (fundo vermelho) no grid (FEAT-007) — exibição já existe, também só
   falta o gerador alimentar.
-- Confronto 1 (Kit declarado × IXC, RN-002 — ainda pendente de
-  detalhamento): item a item (Descrição, Quantidade, Valor Unitário),
-  destaque amarelo, nunca bloqueia; hoje só o alerta de campo único do KIT
-  está implementado (`divergencia_kit`, `ri_detail_view`), a comparação
-  completa dos Produtos avulsos ainda não tem critério de Valor Unitário
-  fechado (mesmo problema estrutural do confronto 2 — Lado IXC nasce em
-  R$ 0,00, RN-011) — não entra neste ciclo, decisão fica para quando for
-  priorizado.
+- Confronto 1 (Kit declarado × IXC, RN-002 — consolidada em 2026-08-31):
+  campo único — descrição do "Kit declarado" × descrição do "KIT
+  Instalado" do Lado IXC; destaque amarelo, nunca bloqueia. Já
+  implementado (`divergencia_kit`, `ri_detail_view`) e confirmado em
+  2026-08-27 (FEAT-006). Não existe "Produtos avulsos" do lado Kit
+  declarado para comparar — `RiItemEace` nunca guardou uma lista de
+  itens, só a descrição do KIT (o lançamento manual foi removido pela
+  RN-010 em 2026-08-24).
 - Comparação estrita nos dois confrontos — acentuação, espaço e caixa
   contam como divergência.
 **Regras relacionadas:** RN-002, RN-003, RN-011, RN-018, RF-04, RF-06.
@@ -572,9 +588,18 @@ Aguardando QA` — condição para o casamento por Descrição ser confiável).
   divergentes destacados em vermelho na tela do RI, tentativa de mudar
   status para "Envio de Email para faturamento" bloqueada com a mensagem
   da RN-003, e linha do INEP destacada no grid.
-- **Pendência:** confronto 1 (RN-002, item a item) continua fora desta
-  entrega — mesmo problema de Valor Unitário do Lado IXC, sem decisão
-  ainda (ver critério acima).
+- **Pendência:** nenhuma.
+
+**Entrega do Dev (2026-08-31):**
+- Investigado o que faltava do confronto 1 (RN-002) — confirmado que já
+  estava completo, sem precisar de código novo.
+- `RiItemEace` (Kit declarado) nunca guardou uma lista de produtos: desde
+  a RN-010 (24/08), o lançamento manual foi removido e o painel mostra só
+  uma descrição de KIT — não existe "Produtos avulsos" desse lado para
+  comparar.
+- O alerta de KIT (`divergencia_kit`) já estava implementado e confirmado
+  em 2026-08-27, junto com a entrega da FEAT-006.
+- **Pendência:** nenhuma — FEAT-005 completa (os dois confrontos).
 
 ---
 
@@ -1052,20 +1077,45 @@ ordem, autorizada explicitamente pelo usuário em 2026-08-25).
 **Descrição:** Marcação manual de anexo feito no portal EACE e conclusão
 manual como "Faturamento Concluído".
 **Tipo:** fullstack
-**Status:** ⬜ Pendente
+**Status:** 🔍 Aguardando QA
 **Prioridade:** Alta
 **Critérios de aceite:**
 - Botão de marcação "anexo feito no EACE" disponível para Analista e
-  Administrador, só no status "Aguardando Anexo portal EACE"; ao marcar,
+  Administrador, só no status "Resposta Financeiro" (nome atual do status
+  5, RN-001/FEAT-020 — antes "Aguardando Anexo portal EACE"); ao marcar,
   status muda para "Aguardando validação EACE".
 - Botão de conclusão "Faturamento Concluído" só habilitado depois da
-  marcação de anexo.
+  marcação de anexo (ou seja, só a partir de "Aguardando validação EACE").
 - Conclusão não dispara notificação, relatório nem fechamento automático
   adicional.
 **Regras relacionadas:** RN-001, RN-004, RF-10, RF-11.
 **Dependências:** FEAT-009.
 **Tipo de validação:** QA (QA-010).
-**Entrega do Dev:** nenhuma ainda.
+**Entrega do Dev (2026-08-31):**
+- As duas transições reaproveitam o mesmo formulário de status já usado
+  pelas demais (FEAT-006, drill-down do grid) — sem tela nova. Adicionadas
+  as duas regras que faltavam: marcar o anexo só é aceito a partir de
+  "Resposta Financeiro"; concluir só é aceito a partir de "Aguardando
+  validação EACE". Analista e Administrador têm as duas opções nos status
+  certos, igual às demais trocas manuais.
+- Administrador continua podendo voltar um RI já concluído para
+  "Aguardando validação EACE" para corrigir algo (RN-020) — a regra nova
+  não bloqueia essa exceção já existente.
+- Conclusão manual passa a gravar `concluido_em`, mesmo campo que a
+  conclusão automática (RN-024) já gravava — antes ficava vazio quando a
+  conclusão era manual.
+- Nenhuma notificação, relatório ou fechamento automático adicional é
+  disparado pela conclusão (critério de aceite já era satisfeito pela
+  troca de status simples).
+- 6 testes novos (marcar anexo permitido/bloqueado, correção do
+  Administrador, concluir permitido/bloqueado, log da conclusão); suíte
+  completa do repositório (385 testes) passando.
+- Validação visual em navegador: não executada (sem Playwright/browser
+  disponível neste ambiente) — sem tela nova nem alteração de HTML, só as
+  duas regras novas no mesmo formulário já validado visualmente na
+  FEAT-006; conferido via testes automatizados que exercitam a view e o
+  template reais.
+- **Pendência:** nenhuma.
 **Pendência atual:** nenhuma.
 
 ---
@@ -1075,7 +1125,7 @@ manual como "Faturamento Concluído".
 alteração de campo, transição de status, ação manual, envio/recebimento de
 e-mail e erros, além do login já existente.
 **Tipo:** backend-only
-**Status:** ⬜ Pendente
+**Status:** 🔍 Aguardando QA
 **Prioridade:** Média
 **Critérios de aceite:**
 - Toda transição de status do RI (FEAT-006) gera registro de auditoria.
@@ -1088,8 +1138,21 @@ e-mail e erros, além do login já existente.
 **Regras relacionadas:** RN-006, RF-12.
 **Dependências:** FEAT-001 (evolui em paralelo às demais a partir daqui).
 **Tipo de validação:** QA (QA-011).
-**Entrega do Dev:** nenhuma ainda.
-**Pendência atual:** nenhuma.
+**Entrega do Dev:**
+- Login, troca de status do RI, alteração de responsável/itens (Lado IXC
+  e Lado Relatório EACE) e envio/recebimento de e-mail com o financeiro
+  passam a gerar registro de auditoria.
+- Qualquer erro não tratado durante o uso do sistema também é registrado
+  automaticamente, sem depender de cada tela avisar.
+- Sem tela própria nesta versão, como já previsto (RN-006) — consulta só
+  por acesso direto ao banco.
+- Registros não têm expiração.
+- 12 testes automatizados novos cobrindo os pontos acima; suíte completa
+  do repositório (379 testes) passando.
+- **Pendência:** nenhuma.
+**Pendência atual:** nenhuma. **Fora do escopo do Dev:** `architecture.md`
+ainda descreve a Auditoria como "hoje só cobre login" (seção "Módulos e
+Responsabilidades") — atualização desse trecho é do Orquestrador.
 
 ---
 
@@ -2043,6 +2106,57 @@ para "Andamento"), independente do resultado do lançamento de itens da
 mesma sincronização; a troca gera entrada na linha do tempo do RI
 (RN-008), mesmo padrão da troca manual de status. 7 testes novos; suíte
 completa do app `ri` (228 testes) sem regressão.
+- **Critério adicional (2026-08-28, RN-046):** cada item sincronizado
+  passa a guardar também o valor da coluna "Status escola" (coluna T) da
+  própria linha da planilha, exibido por item no Lado 3 (mesmo padrão do
+  rótulo verde de Num OSP/Validação OSP/Nota Fiscal). Quando os itens de
+  um mesmo RI têm "Status escola" diferente entre si, o painel mostra o
+  alerta "Divergência Status EACE" e **todos** os itens do Lado 3 desse RI
+  ficam com o status em vermelho (não só os que divergem da maioria —
+  decisão do usuário, sem lado de referência nessa comparação). Não altera
+  a RN-024 (conclusão automática por "Conectada" continua incondicional).
+**Entrega do Dev (2026-08-28, RN-046):**
+- `RiItemRelatorioEace` ganhou o campo `status_escola` (migration `0022`),
+  preenchido só pelo Sincronizador com a coluna "Status escola" da mesma
+  linha da planilha; exibido por item no Lado 3 em verde (igual a Num
+  OSP/Validação OSP/Nota Fiscal), sem valor quando lançado manualmente.
+- Divergência entre itens do mesmo RI dispara o alerta "Divergência Status
+  EACE" no topo do painel e deixa todos os itens do Lado 3 com anel
+  vermelho — item sem valor (manual) não entra na comparação.
+- Vale também no Sincronizador em lote (FEAT-025) — mesma função
+  reaproveitada, sem lógica separada.
+- 9 testes novos (gravação por item, item manual sem valor, divergência
+  entre 2 produtos, sem divergência com valores iguais, item sem valor
+  ignorado na comparação, alerta e anel vermelho na tela, ausência do
+  alerta sem divergência, mesma gravação no lote); suíte completa do app
+  `ri` (262 testes) sem regressão. Migration aplicada no container real.
+- Validação visual em navegador: não executada — sem Playwright/
+  chromium-cli disponível no ambiente; confirmado via `Client` Django
+  autenticado (teste renderiza a página real e verifica o texto do alerta
+  e a classe `ring-red-400` no HTML).
+- **Pendência:** nenhuma.
+**Correção (2026-08-28):** usuário reportou item já sincronizado (INEP
+35206097) sem "Status escola" na tela, mesmo com a coluna preenchida na
+planilha ("Em planejamento") — item lançado antes deste campo existir só
+entrava em "duplicados"/"kit_ignorado" ao sincronizar de novo, sem nunca
+atualizar nada. Sincronizar de novo agora atualiza o campo em item já
+lançado (KIT ou Produto), sem duplicar e sem tocar em Num OSP/Validação
+OSP/Nota Fiscal. Confirmado no INEP real depois da correção. 2 testes
+novos (Produto e KIT já lançados); suíte completa do app `ri` (264 testes)
+sem regressão.
+**Correção (2026-08-28):** usuário pediu para estender a mesma atualização
+a Num OSP, Validação OSP e Nota Fiscal (não só "Status Equip") — cobre o
+caso real de a EACE emitir a Nota Fiscal só depois de o item já ter sido
+sincronizado sem ela. Sincronizar de novo passa a atualizar os 4 campos
+fechados de item já lançado sempre que a planilha ativa trouxer um valor
+novo e diferente; coluna vazia na planilha nunca apaga um valor já
+gravado. 2 testes novos (Nota Fiscal atualizada, coluna vazia não apaga);
+suíte completa do app `ri` (266 testes) sem regressão.
+**Nota para o Orquestrador:** este ajuste muda um critério implícito da
+RN-022 ampliada (Num OSP/Validação OSP/Nota Fiscal eram descritos como
+gravados só na criação) — os 4 campos fechados agora são atualizados a
+cada sincronização, não só na primeira; falta refletir isso no texto da
+RN-022 ampliada/RN-046 em `business_rules.md`.
 
 ---
 
@@ -2130,6 +2244,13 @@ duplicar lógica) e entra na contagem "N INEP(s) atualizado(s)" mesmo sem
 item novo lançado, já que a troca de status independe do lançamento de
 itens. 2 testes novos; suíte completa do app `ri` (228 testes) sem
 regressão.
+- **Critério adicional (2026-08-28, RN-046):** o "Status escola" por item
+  e o alerta "Divergência Status EACE" (ver FEAT-024) valem também para
+  itens lançados pelo lote, sem lógica separada — mesma
+  `sincronizar_relatorio_eace_da_planilha` reaproveitada.
+**Entrega do Dev (2026-08-28, RN-046):** confirmado que o campo
+`status_escola` é gravado igual no lote (1 teste novo); suíte completa do
+app `ri` (262 testes) sem regressão.
 
 ---
 
@@ -2609,9 +2730,45 @@ revisão ampla de todas as telas cobertas.
 
 ---
 
+### FEAT-030 — Bug: usuário autenticado vê o menu lateral sobreposto na tela de login
+**Descrição:** Usuário com sessão já ativa que acessa `/login/` continua
+vendo o formulário de login, mas como qualquer usuário autenticado enxerga
+o menu lateral (`base.html`), a tela de login aparece com o menu do sistema
+sobreposto ao fundo. A `LoginView` do Django não redireciona por padrão
+quem já está logado.
+**Tipo:** backend-only
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta — bug reportado pelo usuário, com print, na tela de
+login (fluxo entregue pela FEAT-001).
+**Critérios de aceite:**
+- Usuário autenticado que acessa `/login/` é redirecionado direto para o
+  dashboard, sem ver o formulário nem o menu simultaneamente.
+- Usuário não autenticado continua vendo somente o formulário de login,
+  sem menu lateral.
+- Login com usuário/senha inválidos continua exibindo a mensagem de erro
+  normalmente (sem regressão).
+**Regras relacionadas:** RN-047 (nova).
+**Dependências:** nenhuma.
+**Tipo de validação:** QA (QA-030).
+**Entrega do Dev (2026-08-29):**
+- `LoginView` (`apps/core/urls.py`) ganhou `redirect_authenticated_user=True`;
+  já usa `LOGIN_REDIRECT_URL = "home"` existente, sem mudança de settings.
+- Usuário autenticado que acessa `/login/` agora é redirecionado direto ao
+  dashboard, sem o formulário nem o menu aparecerem juntos.
+- 3 testes novos (`apps/core/tests.py`): redireciona autenticado, formulário
+  normal para não autenticado, erro de credencial inválida sem regressão.
+- Suíte completa (367 testes) sem regressão.
+- Não é tela nova nem alteração visual — não coube validação visual em
+  navegador (o bug era de redirecionamento, não de layout).
+**Pendência atual:** aguardando revisão do QA.
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-08-29 | FEAT-030 entregue pelo Dev, `🔍 Aguardando QA` — `LoginView` ganhou `redirect_authenticated_user=True`; 3 testes novos, suíte completa (367 testes) sem regressão | Correção de uma linha em `apps/core/urls.py`, sem tela nova; validação visual em navegador não se aplica (bug era de redirecionamento, não de layout) |
+| 2026-08-28 | Criada FEAT-030 (bug: usuário autenticado via o menu lateral sobreposto na tela de login) a partir de print enviado pelo usuário; `business_rules.md` recebe RN-047 (nova) | Causa identificada por leitura direta do template (`core/base.html` já condiciona o menu a `user.is_authenticated` corretamente) e da rota (`apps/core/urls.py` usa `LoginView` padrão do Django, que não redireciona usuário já logado); `⬜ Pendente`, sem código ainda — fora do escopo do Orquestrador corrigir |
 | 2026-08-28 | FEAT-029 entregue pelo Dev, `🔍 Aguardando QA` — bloqueio por middleware cobrindo toda tela autenticada, ação de ligar/desligar na tela "Administrador > Usuários", migração liga usuário já existente; 15 testes novos, suíte completa (352 testes) sem regressão | Validado ponta a ponta contra o servidor real (usuário criado como no `/admin/` nasceu desligado, viu o aviso, Administrador ligou, dado passou a aparecer); Dev deixou nota técnica para o Orquestrador formalizar em RN-045: criação de usuário direto por código (bootstrap/testes) nasce Ligada, para sempre existir um Administrador capaz de liberar os demais; validação visual em navegador não executada (mesma limitação da FEAT-028) |
 | 2026-08-28 | Criada FEAT-029 (liberação de acesso aos dados — controle Ligado/Desligado por usuário, separado do perfil; Desligado vê o menu mas nenhuma tela com dado, com aviso de "aguardando liberação"); `business_rules.md` recebe RN-045 (nova) e RN-043 ganha nota de ampliação; depende de FEAT-028 (tela "Administrador > Usuários") | Usuário pediu que toda conta nova entre sem ver informação nenhuma até o Administrador liberar; confirmado com o usuário (CLAUDE.md §9, 3 perguntas): vale para Administrador também, só conta nova (não afeta quem já usa o sistema hoje), aviso claro em vez de tela vazia sem explicação; `⬜ Pendente`, sem código ainda |
 | 2026-08-28 | FEAT-028 entregue pelo Dev, `🔍 Aguardando QA` — item "Usuários" no menu "Administrador", tela lista usuário/e-mail/perfil com botão para trocar perfil, bloqueado para Analista e para autotroca; 8 testes novos, suíte completa (340 testes) sem regressão | Validado ponta a ponta contra o servidor real (login, listagem, troca de perfil persistida), sem ferramenta de navegador/Playwright disponível nesta sessão — validação visual em navegador não executada, fica como pendência para o QA/usuário |

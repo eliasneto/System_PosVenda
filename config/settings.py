@@ -58,6 +58,10 @@ MIDDLEWARE = [
     # FEAT-029/RN-045: precisa vir depois de AuthenticationMiddleware
     # (usa request.user).
     "apps.core.middleware.AcessoLiberadoMiddleware",
+    # FEAT-011/RN-006: precisa vir depois de AuthenticationMiddleware
+    # (usa request.user) — registra em auditoria qualquer erro não
+    # tratado durante uma requisição.
+    "apps.auditoria.middleware.AuditoriaErroMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"

@@ -23,6 +23,8 @@ from django.core.files.base import ContentFile
 from django.db.models import Count, DecimalField, F, Prefetch, Sum
 from django.utils import timezone
 
+from apps.auditoria.models import Auditoria
+from apps.auditoria.services import registrar as auditar
 from apps.core.email_tracking import extrair_primeiro_inep_rastreio
 from apps.escolas.models import Escola
 
@@ -320,14 +322,32 @@ def trocar_status_com_log(ri, novo_status, usuario):
     down, view), pela automática de envio (RF-18) e pela automática de
     recebimento (RF-19, `sincronizar_respostas_financeiro` abaixo).
     `usuario=None` é válido (RiHistorico.autor aceita nulo) — a leitura da
-    caixa de e-mail é uma rotina automática, sem usuário logado."""
+    caixa de e-mail é uma rotina automática, sem usuário logado.
+
+    FEAT-010/RF-11: ao concluir manualmente, grava `concluido_em` — mesmo
+    carimbo já gravado na conclusão automática (RN-024,
+    `_concluir_ri_por_status_escola_conectada` abaixo), para o campo
+    refletir a conclusão real independente de como ela aconteceu."""
     status_anterior = ri.get_status_display()
     ri.status = novo_status
-    ri.save(update_fields=["status", "atualizado_em"])
+    campos_alterados = ["status", "atualizado_em"]
+    if novo_status == Ri.FATURAMENTO_CONCLUIDO:
+        ri.concluido_em = timezone.now()
+        campos_alterados.append("concluido_em")
+    ri.save(update_fields=campos_alterados)
     RiHistorico.objects.create(
         ri=ri,
         tipo=RiHistorico.LOG_STATUS,
         autor=usuario,
+        campo="Status do RI",
+        valor_anterior=status_anterior,
+        valor_novo=ri.get_status_display(),
+    )
+    auditar(
+        usuario,
+        Auditoria.TRANSICAO_STATUS,
+        entidade="Ri",
+        entidade_id=ri.pk,
         campo="Status do RI",
         valor_anterior=status_anterior,
         valor_novo=ri.get_status_display(),
@@ -392,6 +412,25 @@ def comparar_kit_e_produtos_ixc_relatorio(ri):
         "produtos_divergentes": produtos_divergentes,
         "itens_ixc_divergentes_pks": itens_ixc_divergentes_pks,
     }
+
+
+def comparar_status_escola_relatorio(ri):
+    """RN-046 (2026-08-28): compara o "Status escola" (coluna T da
+    Planilha EACE, RN-024) gravado por item no Lado Relatório EACE. Não é
+    um confronto entre lados diferentes (como a RN-002/RN-003 acima) — é
+    entre os próprios itens do Lado 3 do mesmo RI, por isso não existe um
+    lado de referência "correto": havendo qualquer divergência, todos os
+    itens ficam marcados (decisão do usuário, sem meio-termo de maioria).
+
+    Item sem valor (lançado manualmente, fora do Sincronizador) não entra
+    na comparação. Só computado na renderização (mesmo padrão de
+    `divergencia_kit`/`divergencia_municipio_ixc` em `views.py`) — é só um
+    alerta visual, não bloqueia nenhuma transição de status, então não
+    precisa de uma tabela `RiDivergencia` própria."""
+    valores = sorted(
+        {item.status_escola for item in ri.itens_relatorio_eace.all() if item.status_escola}
+    )
+    return {"diverge": len(valores) > 1, "valores": valores}
 
 
 def _descricao_divergencia_kit_relatorio(resultado):
@@ -578,7 +617,58 @@ def _concluir_ri_por_status_escola_conectada(ri, linhas):
         valor_anterior=status_anterior,
         valor_novo=ri.get_status_display(),
     )
+    auditar(
+        None,
+        Auditoria.TRANSICAO_STATUS,
+        entidade="Ri",
+        entidade_id=ri.pk,
+        campo="Status do RI (Sincronizador)",
+        valor_anterior=status_anterior,
+        valor_novo=ri.get_status_display(),
+    )
     return True
+
+
+def _valores_fechados_da_linha(linha):
+    """RN-022 (ampliada)/RN-046: os 4 campos fechados do Lado Relatório
+    EACE — só o Sincronizador preenche, nunca o formulário manual — lidos
+    direto da linha da planilha que originou o item. Centraliza a leitura
+    usada tanto na criação do item quanto na atualização de um já
+    lançado (`_atualizar_campos_fechados_item_existente`, abaixo)."""
+    return {
+        "num_osp": (linha.get("Num OSP") or "").strip(),
+        "validacao_osp": (linha.get("Validação OSP") or "").strip(),
+        "nota_fiscal": (linha.get("Nota Fiscal") or "").strip(),
+        "status_escola": (linha.get("Status escola") or "").strip(),
+    }
+
+
+def _atualizar_campos_fechados_item_existente(item_existente, linha):
+    """RN-022 (ampliada)/RN-046 (correção, 2026-08-28): item já lançado
+    (KIT ou Produto) nunca ganha outro registro ao sincronizar de novo
+    (mesma Descrição + Quantidade) — antes deste ajuste, os 4 campos
+    fechados (Num OSP, Validação OSP, Nota Fiscal, "Status Equip") só
+    eram gravados na criação; um item sincronizado antes de a EACE emitir
+    a Nota Fiscal (ou antes de "Status Equip" existir) ficava para sempre
+    sem o valor, mesmo depois de subir uma planilha nova com o dado
+    presente. Usuário confirmou (2026-08-28) que quer os 4 sempre
+    atualizados a cada nova planilha, não só na criação.
+
+    Só atualiza o campo cujo valor novo veio preenchido e é diferente do
+    já gravado — planilha com a coluna vazia nunca apaga um valor já
+    salvo (mesmo critério conservador da RN-046 original: falta de dado
+    não é tratada como "backfill negativo"). `item_existente=None` é
+    válido — cobre o caso do KIT ignorado por RN-015 quando é um KIT
+    diferente do já lançado (nenhum item para atualizar)."""
+    if item_existente is None:
+        return
+    campos_alterados = []
+    for campo, valor_novo in _valores_fechados_da_linha(linha).items():
+        if valor_novo and getattr(item_existente, campo) != valor_novo:
+            setattr(item_existente, campo, valor_novo)
+            campos_alterados.append(campo)
+    if campos_alterados:
+        item_existente.save(update_fields=campos_alterados)
 
 
 def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=None):
@@ -591,9 +681,15 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
     usuário confirmou que já deve bater com o do catálogo).
 
     Item já lançado (mesma Descrição + Quantidade) não duplica ao
-    sincronizar de novo. RI que já tem um KIT lançado nesse lado (RN-015)
-    não ganha outro — a linha da planilha some para a lista "kit_ignorado"
-    em vez de bloquear o resto da sincronização. Item sem correspondência
+    sincronizar de novo — mas os 4 campos fechados (Num OSP, Validação
+    OSP, Nota Fiscal, "Status Equip") são atualizados nele quando a
+    planilha ativa trouxer um valor novo e diferente do já gravado
+    (correção 2026-08-28, `_atualizar_campos_fechados_item_existente`):
+    cobre o caso real de a EACE emitir a Nota Fiscal só depois de o item
+    já ter sido sincronizado sem ela. RI que já tem um KIT lançado nesse
+    lado (RN-015) não ganha outro — a linha da planilha some para a lista
+    "kit_ignorado" em vez de bloquear o resto da sincronização, mas o KIT
+    já lançado também recebe essa atualização. Item sem correspondência
     no catálogo, ou com Quantidade inválida, nunca é lançado — fica nas
     listas devolvidas para o usuário decidir (CLAUDE.md §9).
 
@@ -607,6 +703,12 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
     (`_concluir_ri_por_status_escola_conectada`), independente do
     resultado do lançamento de itens acima (duas verificações
     independentes sobre a mesma linha da planilha).
+
+    RN-046 (2026-08-28): a mesma coluna "Status escola" também é gravada
+    por item (`RiItemRelatorioEace.status_escola`), para exibição no Lado
+    3 e para o alerta de divergência entre produtos do mesmo RI
+    (`comparar_status_escola_relatorio`) — não substitui a verificação da
+    RN-024 acima, que continua olhando todas as linhas do INEP.
 
     `planilha`/`linhas_por_inep` são atalhos internos do Sincronizador em
     lote (RN-023/FEAT-025): quando informados, pulam a busca da Planilha
@@ -635,8 +737,15 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
             f"Nenhum item encontrado na Planilha EACE para o INEP {escola.inep}."
         )
 
+    # RN-046 (correção, 2026-08-28): dicionário (não mais um set) para
+    # conseguir, no item já lançado (`duplicados` abaixo), reaproveitar o
+    # objeto e atualizar o "Status escola" — item lançado antes desta
+    # regra existir nasceu com o campo em branco e uma nova sincronização
+    # não criava outro item (mesma Descrição + Quantidade), então nunca
+    # preenchia o valor. Num OSP/Validação OSP/Nota Fiscal (RN-022
+    # ampliada) continuam só na criação — não fazem parte deste ajuste.
     itens_existentes = {
-        (item.descricao_item, item.quantidade) for item in ri.itens_relatorio_eace.all()
+        (item.descricao_item, item.quantidade): item for item in ri.itens_relatorio_eace.all()
     }
     kit_ja_lancado = ri.itens_relatorio_eace.filter(eh_kit=True).exists()
 
@@ -670,9 +779,19 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
         descricao_item = catalogo.descricao_curta or catalogo.descricao
         if eh_kit and kit_ja_lancado:
             resultado["kit_ignorado"].append(descricao_item)
+            # RN-046 (correção): o KIT já lançado é o mesmo caso de
+            # "duplicados" abaixo (mesma Descrição + Quantidade), mas cai
+            # neste ramo primeiro (RN-015) — sem isto, o KIT nunca recebia
+            # a atualização dos campos fechados.
+            _atualizar_campos_fechados_item_existente(
+                itens_existentes.get((descricao_item, quantidade)), linha
+            )
             continue
         if (descricao_item, quantidade) in itens_existentes:
             resultado["duplicados"].append(descricao_item)
+            _atualizar_campos_fechados_item_existente(
+                itens_existentes[(descricao_item, quantidade)], linha
+            )
             continue
 
         item = RiItemRelatorioEace.objects.create(
@@ -681,13 +800,11 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
             quantidade=quantidade,
             valor_unitario=catalogo.valor_total,
             eh_kit=eh_kit,
-            # RN-022 (ampliada): campos fechados, só de exibição — lidos
-            # direto da mesma linha da planilha que originou este item.
-            num_osp=(linha.get("Num OSP") or "").strip(),
-            validacao_osp=(linha.get("Validação OSP") or "").strip(),
-            nota_fiscal=(linha.get("Nota Fiscal") or "").strip(),
+            # RN-022 (ampliada)/RN-046: campos fechados, só de exibição —
+            # lidos direto da mesma linha da planilha que originou o item.
+            **_valores_fechados_da_linha(linha),
         )
-        itens_existentes.add((descricao_item, quantidade))
+        itens_existentes[(descricao_item, quantidade)] = item
         resultado["criados"].append(item)
         if eh_kit:
             kit_ja_lancado = True
@@ -991,6 +1108,14 @@ def _processar_mensagem(bruto, mensagem_id_externo):
         status_leitura=status_leitura,
         mensagem_id_externo=mensagem_id_externo or "",
     )
+    auditar(
+        None,
+        Auditoria.RECEBIMENTO_EMAIL,
+        entidade="Ri",
+        entidade_id=ri.pk,
+        campo="assunto",
+        valor_novo=assunto,
+    )
 
     if padrao_ok:
         resumo = f"E-mail de resposta do financeiro recebido. Assunto: {assunto}"
@@ -1080,8 +1205,15 @@ def sincronizar_respostas_financeiro():
                     bruto = _buscar_mime(caixa, id_mensagem, token)
                     chave = _processar_mensagem(bruto, mensagem_id_externo)
                     resultado[chave] += 1
-                except Exception:
+                except Exception as erro:
                     logger.exception("Erro ao processar mensagem do Graph %s.", id_mensagem)
+                    auditar(
+                        None,
+                        Auditoria.ERRO,
+                        entidade="EmailFinanceiroSync",
+                        campo=type(erro).__name__,
+                        valor_novo=f"Mensagem {id_mensagem}: {erro}",
+                    )
 
             proxima = dados.get("@odata.nextLink")
             delta_link_final = dados.get("@odata.deltaLink") or delta_link_final

@@ -1,0 +1,59 @@
+name: Homologacao
+
+# FEAT-012: pipeline de CI/CD do Gerenciador Pos-Venda. Job "ci" roda em
+# toda push/PR para a branch homolog; job "deploy" so roda apos o "ci"
+# passar E o evento ser um push direto (nao PR), evitando deploy a partir
+# de branch nao revisada.
+on:
+  push:
+    branches: [homolog]
+  pull_request:
+    branches: [homolog]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      # Suficiente para settings.py carregar em CI - sem MySQL aqui, os
+      # testes rodam no fallback SQLite do proprio settings.py (DB_ENGINE
+      # nao definido).
+      SECRET_KEY: chave-so-para-ci-nao-usar-em-nenhum-ambiente-real
+      DEBUG: "False"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verificar projeto (manage.py check)
+        run: python manage.py check
+
+      - name: Rodar testes (manage.py test)
+        run: python manage.py test
+
+      - name: Validar build da imagem Docker
+        run: docker build -t sistema_posvenda:ci .
+
+  deploy:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/homolog'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH (scripts/deploy_homolog.sh no servidor)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HML_HOST }}
+          username: ${{ secrets.HML_USER }}
+          port: ${{ secrets.HML_PORT }}
+          key: ${{ secrets.HML_SSH_KEY }}
+          # Caminho conhecido no servidor de homologacao (default do
+          # proprio script, docs_gerenciador_pos_venda/devops/DEPLOYMENT.md).
+          script: |
+            DEPLOY_DIR="${{ secrets.HML_DEPLOY_DIR }}"
+            bash "${DEPLOY_DIR:-/home/Sistem_PosVenda}/scripts/deploy_homolog.sh"

@@ -57,6 +57,12 @@ Produção segue fora do escopo atual do DevOps (`.claude/agents/devops.md`,
 o mandato de construir o deploy de produção em si; isso continua exigindo
 pedido explícito do usuário quando chegar a hora.
 
+**Exceção pontual (2026-08-28, `ADR-003`):** usuário confirmou que
+`192.168.90.109` é o servidor de produção real e pediu explicitamente a
+correção de uma falha nele (estático não servido). Abertura de escopo
+restrita a essa correção, sem criar ambiente de produção formal — ver
+`ADR-003` para as condições.
+
 ## Processo (visão de negócio)
 
 Descrição em linguagem simples do percurso completo do processo, sem regras
@@ -86,9 +92,12 @@ INEP é considerado concluído (Faturado).
   precisam existir desde o início. Migração/importação inicial das 2.622
   escolas para o banco novo é **obrigatória** antes da v1 entrar em uso
   (requisitos.md, bloco 0).
-- **Auditoria** — login e execução de ações. **Gap:** hoje só cobre login;
-  extensão para alteração de campo/status de INEP é decisão de
-  implementação do Dev (estender existente ou log específico do módulo).
+- **Auditoria** — login, transição de status do RI, alteração de campo/
+  item (responsável, Lado IXC, Lado Relatório EACE), envio/recebimento de
+  e-mail com o financeiro e erro não tratado da aplicação (FEAT-011,
+  2026-08-31 — estendeu o `apps/auditoria` já existente, sem log
+  específico separado). Sem tela própria nesta versão; consulta só por
+  acesso direto ao banco.
 - **Usuários e Permissões** — dois perfis: Administrador (tudo) e Analista
   (tudo exceto excluir). CRUD de INEP/item, documentos e cadastro de
   usuário seguem essa regra. **Exceção (RN-043, 2026-08-28):** login via
@@ -199,9 +208,9 @@ INEP é considerado concluído (Faturado).
   validação do usuário`).
 - **Ciclo de vida do INEP** — catálogo fechado de 8 status (ver RN-001 em
   `business_rules.md`): 7 na linha principal — Implantação EACE → Andamento
-  → Envio de Email para faturamento → Aguardando financeiro → Aguardando
-  Anexo portal EACE → Aguardando validação EACE → Faturamento Concluído —
-  mais 1 desvio manual, "Correção MEGA", alcançável só a partir de
+  → Envio de Email para faturamento → Aguardando financeiro → Resposta
+  Financeiro → Aguardando validação EACE → Faturamento Concluído — mais 1
+  desvio manual, "Correção MEGA", alcançável só a partir de
   "Andamento" quando há divergência de quantidade/valor (RF-04) aberta, e
   que só retorna manualmente para "Andamento" (sem gatilho automático em
   nenhum sentido). A transição Andamento → Envio de Email para faturamento
@@ -271,6 +280,10 @@ Regras do padrão, quando usado:
 
 ## Decisões Pendentes
 
+- Ambiente de produção formal (compose próprio, branch própria, pipeline de
+  CI/CD, secrets segregados de homologação) — `192.168.90.109` roda hoje sem
+  isso; abertura de escopo atual é pontual (`ADR-003`), não define o
+  ambiente definitivo.
 - Critério exato de casamento entre os itens dos dois lados (EACE × IXC),
   hoje proposto como texto igual da descrição (`business_rules.md` RN-003;
   `modelo-dados.md`, "Pendências desta modelagem") — ainda não confirmado
@@ -304,6 +317,9 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-08-31 | "Ciclo de vida do INEP" corrigido — nome do status 5 atualizado para "Resposta Financeiro" (estava com o nome antigo, "Aguardando Anexo portal EACE") | FEAT-020 já tinha renomeado o status em `business_rules.md` (RN-001); esta seção não tinha sido atualizada junto |
+| 2026-08-31 | "Auditoria" em "Módulos e Responsabilidades" deixa de descrever gap ("hoje só cobre login") e passa a listar o escopo entregue | FEAT-011 entregue pelo Dev — login, transição de status, alteração de campo/item, envio/recebimento de e-mail e erro não tratado passam a gerar registro de auditoria; aguardando QA |
+| 2026-08-28 | Abertura pontual de escopo de produção para o DevOps corrigir estático não servido em `192.168.90.109` (`ADR-003`) | Usuário confirmou que esse servidor é produção (não homologação) e pediu explicitamente a correção da logo quebrada; FEAT-012 |
 | 2026-08-28 | Novo módulo "Autenticação e sincronização via Active Directory" em "Módulos e Responsabilidades"; "Usuários e Permissões" recebe exceção (RN-043) | Usuário pediu a integração com AD, resolvendo a pendência aberta em `lixo.md` (item 7); RN-043/RN-044 criadas em `business_rules.md`; decisão de reaproveitar a mesma conta de serviço/config do `modulo-posVenda` registrada em `ADR-002`; gera `FEAT-027` |
 | 2026-08-26 | Nova seção "Padrão de Interação Frontend — Atualizações Sem Reload Completo" (HTMX); `FEAT-019` criada | Usuário pediu para trocar de status/responsável e registrar histórico sem recarregar a página inteira; HTMX já era padrão do Dev (`dev.md`) mas não estava registrado na arquitetura do projeto |
 | 2026-08-26 | "Fluxo de e-mail com o financeiro" atualizado: nota de alvo (PDF → planilha) vira descrição do estado atual, já entregue e validado no navegador real | FEAT-017/FEAT-018 entregues pelo Dev no mesmo dia; RN-013 revisada 2× até o desenho final (aba automática, exigência só no envio/download) e RN-015 criada (1 KIT por INEP) |

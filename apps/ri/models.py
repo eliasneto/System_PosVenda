@@ -435,6 +435,14 @@ class RiItemRelatorioEace(models.Model):
     num_osp = models.CharField("Num OSP", max_length=50, blank=True)
     validacao_osp = models.CharField("Validação OSP", max_length=50, blank=True)
     nota_fiscal = models.CharField("Nota Fiscal", max_length=50, blank=True)
+    # RN-046 (2026-08-28): mesmo padrão dos 3 campos acima — fechado, só o
+    # Sincronizador preenche, lido da coluna "Status escola" (coluna T) da
+    # mesma linha da planilha. É por item (não por RI) porque a planilha
+    # traz 1 valor por produto — itens do mesmo RI com valor diferente
+    # entre si geram a divergência da RN-046 (ri_detail_view). Rótulo
+    # exibido como "Status Equip" (ajuste de texto, 2026-08-28) — o nome
+    # do campo continua ligado à coluna de origem da planilha.
+    status_escola = models.CharField("Status Equip", max_length=50, blank=True)
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:

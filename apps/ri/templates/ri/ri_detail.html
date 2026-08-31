@@ -339,6 +339,16 @@
             admitem um novo lançamento.
         </p>
 
+        <!-- RN-046 (2026-08-28): "Status escola" (coluna T) diferente entre
+             produtos do mesmo INEP — não há lado de referência aqui (é
+             entre itens do próprio Lado 3), por isso todos ficam vermelhos,
+             não só o que diverge da maioria. Não bloqueia nada. -->
+        {% if divergencia_status_escola.diverge %}
+        <p class="text-[11px] font-bold text-red-500 dark:text-red-400 mb-4 border border-red-200 dark:border-red-800/60 bg-red-50 dark:bg-red-950/20 rounded-xl px-4 py-3">
+            Divergência Status EACE — produtos deste INEP têm "Status Equip" diferentes na Planilha EACE (destacados em vermelho abaixo).
+        </p>
+        {% endif %}
+
         {% if not ri_bloqueado_faturamento_concluido %}
         <!-- FEAT-024/RN-022: busca os itens da Planilha EACE (Administrador
              > Planilha EACE) pelo INEP deste RI e lança os que casarem com
@@ -358,7 +368,7 @@
 
         <div class="flex flex-col gap-2 mb-6">
             {% for item in ri.itens_relatorio_eace.all %}
-            <div class="bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3">
+            <div class="bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3{% if divergencia_status_escola.diverge %} ring-2 ring-red-400{% endif %}">
                 <div class="flex items-center justify-between">
                     <span class="text-xs font-bold text-gray-700 dark:text-gray-300">
                         {{ item.descricao_item }}{% if item.eh_kit %} <span class="text-gray-400 dark:text-gray-500 normal-case">(KIT)</span>{% endif %}
@@ -380,8 +390,8 @@
                         {% endif %}
                     </div>
                 </div>
-                {% if item.num_osp or item.validacao_osp or item.nota_fiscal %}
-                {# RN-022 (ampliada, 2026-08-27): campos fechados, só o Sincronizador preenche — nunca aparecem no formulário de edição. #}
+                {% if item.num_osp or item.validacao_osp or item.nota_fiscal or item.status_escola %}
+                {# RN-022 (ampliada, 2026-08-27)/RN-046 (2026-08-28): campos fechados, só o Sincronizador preenche — nunca aparecem no formulário de edição. #}
                 <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
                     {% if item.num_osp %}
                     <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase">Num OSP: <span class="text-green-600 dark:text-green-400">{{ item.num_osp }}</span></span>
@@ -391,6 +401,11 @@
                     {% endif %}
                     {% if item.nota_fiscal %}
                     <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase">Nota Fiscal: <span class="text-green-600 dark:text-green-400">{{ item.nota_fiscal }}</span></span>
+                    {% endif %}
+                    {% if item.status_escola %}
+                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase">Status Equip:
+                        <span class="{% if divergencia_status_escola.diverge %}text-red-500 dark:text-red-400{% else %}text-green-600 dark:text-green-400{% endif %}">{{ item.status_escola }}</span>
+                    </span>
                     {% endif %}
                 </div>
                 {% endif %}

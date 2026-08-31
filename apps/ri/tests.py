@@ -39,6 +39,7 @@ from .services import (
     EmailFinanceiroSyncError,
     PlanilhaEaceSincronizacaoError,
     PlanilhaFaturamentoError,
+    comparar_status_escola_relatorio,
     gerar_planilha_faturamento,
     montar_corpo_email_financeiro,
     montar_dashboard_financeiro,
@@ -571,6 +572,87 @@ class RiStatusUpdateViewTests(TestCase):
         )
         ri.refresh_from_db()
         self.assertEqual(ri.status, Ri.ANDAMENTO)
+
+    def test_marca_anexo_eace_a_partir_de_resposta_financeiro(self):
+        """FEAT-010/RF-10: Analista e Administrador podem marcar o anexo
+        feito no portal EACE a partir de "Resposta Financeiro"."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_marca_anexo_eace_bloqueada_fora_de_resposta_financeiro(self):
+        """FEAT-010/RF-10: fora de "Resposta Financeiro", a marcação é
+        rejeitada — mesmo para o Administrador (não é uma exceção dele,
+        RN-019 é só para a saída de "Aguardando financeiro")."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.ANDAMENTO)
+
+    def test_administrador_marca_anexo_eace_a_partir_de_faturamento_concluido(self):
+        """RN-020: correção do Administrador — volta um RI já concluído
+        para "Aguardando validação EACE" continua permitida (não é a
+        marcação normal do fluxo, é a exceção já aberta pela RN-020)."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_conclui_faturamento_a_partir_de_aguardando_validacao_eace(self):
+        """FEAT-010/RF-11: conclusão manual, disponível a partir de
+        "Aguardando validação EACE" — grava `concluido_em`, mesmo campo já
+        usado pela conclusão automática (RN-024)."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertIsNone(ri.concluido_em)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.FATURAMENTO_CONCLUIDO, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.FATURAMENTO_CONCLUIDO)
+        self.assertIsNotNone(ri.concluido_em)
+
+    def test_conclusao_bloqueada_fora_de_aguardando_validacao_eace(self):
+        """FEAT-010/RF-11: "Botão de conclusão só habilitado depois da
+        marcação de anexo" (checklist.md) — sem passar por "Aguardando
+        validação EACE", a conclusão manual é rejeitada."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.FATURAMENTO_CONCLUIDO, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.assertIsNone(ri.concluido_em)
+
+    def test_conclusao_gera_entrada_no_historico(self):
+        """RN-008: a conclusão manual grava log igual às demais trocas de
+        status, identificando o usuário como autor."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.FATURAMENTO_CONCLUIDO, "next": reverse("grid_inep")},
+        )
+        entrada = RiHistorico.objects.get(ri=ri, tipo=RiHistorico.LOG_STATUS)
+        self.assertEqual(entrada.valor_anterior, "Aguardando validação EACE")
+        self.assertEqual(entrada.valor_novo, "Faturamento Concluído")
+        self.assertEqual(entrada.autor, self.user)
 
 
 class RiResponsavelUpdateViewTests(TestCase):
@@ -3663,6 +3745,183 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
         self.assertContains(resp, "Validação OSP")
         self.assertContains(resp, "Nota Fiscal")
 
+    def test_status_escola_gravado_por_item(self):
+        """RN-046: o valor da coluna "Status escola" (coluna T) da linha
+        que originou o item fica gravado nele, igual a Num OSP/Validação
+        OSP/Nota Fiscal (RN-022 ampliada)."""
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Em implantação"
+            ),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(resultado["criados"][0].status_escola, "Em implantação")
+
+    def test_item_lancado_manualmente_nao_tem_status_escola(self):
+        item = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Cabo de rede", quantidade=1, valor_unitario="5.50",
+        )
+        self.assertEqual(item.status_escola, "")
+
+    def test_comparar_status_escola_sem_divergencia_quando_todos_iguais(self):
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario=Decimal("350.00"), eh_kit=True,
+            status_escola="Em implantação",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario=Decimal("150.00"),
+            status_escola="Em implantação",
+        )
+        resultado = comparar_status_escola_relatorio(self.ri)
+        self.assertFalse(resultado["diverge"])
+
+    def test_comparar_status_escola_diverge_entre_produtos_do_mesmo_inep(self):
+        """RN-046: "Status escola" diferente entre 2 produtos do mesmo RI
+        é divergência, mesmo sem nenhum lado de referência."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario=Decimal("350.00"), eh_kit=True,
+            status_escola="Conectada",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario=Decimal("150.00"),
+            status_escola="Em implantação",
+        )
+        resultado = comparar_status_escola_relatorio(self.ri)
+        self.assertTrue(resultado["diverge"])
+        self.assertEqual(resultado["valores"], ["Conectada", "Em implantação"])
+
+    def test_comparar_status_escola_ignora_item_sem_valor(self):
+        """RN-046: item lançado manualmente (sem "Status escola") não
+        entra na comparação — não é tratado como um 3º valor divergente."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario=Decimal("350.00"), eh_kit=True,
+            status_escola="Conectada",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Cabo de rede", quantidade=1, valor_unitario="5.50",
+        )
+        resultado = comparar_status_escola_relatorio(self.ri)
+        self.assertFalse(resultado["diverge"])
+
+    def test_tela_mostra_alerta_e_itens_vermelhos_quando_status_escola_diverge(self):
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola.inep, "Kit Cobertura Wi-Fi - 4 Access Points - Equip - MEGA - CO",
+                status_escola="Conectada",
+            ),
+            _linha_planilha_eace(
+                self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Em implantação"
+            ),
+        ])
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "sincronizar_planilha_eace"},
+        )
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "Divergência Status EACE")
+        self.assertContains(resp, "ring-red-400")
+
+    def test_sincronizar_de_novo_atualiza_status_escola_de_item_ja_lancado(self):
+        """RN-046 (correção, 2026-08-28): usuário reportou item sincronizado
+        antes de este campo existir — "Status escola" ficava sempre em
+        branco, mesmo sincronizando de novo, porque o item já lançado
+        (mesma Descrição + Quantidade) só entrava em "duplicados", sem
+        atualizar nada. Sincronizar de novo agora atualiza só esse campo,
+        sem duplicar o item nem tocar nos demais campos fechados."""
+        item_antigo = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=2, valor_unitario=Decimal("150.00"),
+            num_osp="4230", validacao_osp="Aprovado",
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="2",
+                num_osp="4230", validacao_osp="Aprovado", status_escola="Em implantação",
+            ),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        item_antigo.refresh_from_db()
+        self.assertEqual(resultado["criados"], [])
+        self.assertEqual(resultado["duplicados"], ["Nobreak"])
+        self.assertEqual(item_antigo.status_escola, "Em implantação")
+        self.assertEqual(RiItemRelatorioEace.objects.count(), 1)
+
+    def test_sincronizar_de_novo_atualiza_status_escola_do_kit_ja_lancado(self):
+        """RN-046 (correção, 2026-08-28): mesmo bug do teste acima, mas
+        para o KIT — cai no ramo "kit_ignorado" (RN-015) antes de chegar
+        no de "duplicados", e por isso nunca recebia o backfill."""
+        kit_antigo = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario=Decimal("350.00"), eh_kit=True,
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola.inep, "Kit Cobertura Wi-Fi - 4 Access Points - Equip - MEGA - CO",
+                status_escola="Em implantação",
+            ),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        kit_antigo.refresh_from_db()
+        self.assertEqual(resultado["kit_ignorado"], ["Kit Cobertura Wi-Fi - 4 Access Points"])
+        self.assertEqual(kit_antigo.status_escola, "Em implantação")
+
+    def test_sincronizar_de_novo_atualiza_nota_fiscal_de_item_ja_lancado(self):
+        """Usuário pediu (2026-08-28) que os 4 campos fechados (não só
+        "Status Equip") sejam sempre atualizados a cada nova planilha —
+        cobre o caso real de a EACE emitir a Nota Fiscal só depois de o
+        item já ter sido sincronizado sem ela."""
+        item_antigo = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=2, valor_unitario=Decimal("150.00"),
+            num_osp="4230", validacao_osp="Aprovado",
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="2",
+                num_osp="4230", validacao_osp="Aprovado", nota_fiscal="381",
+            ),
+        ])
+        sincronizar_relatorio_eace_da_planilha(self.ri)
+        item_antigo.refresh_from_db()
+        self.assertEqual(item_antigo.nota_fiscal, "381")
+
+    def test_sincronizar_de_novo_nao_apaga_campo_fechado_quando_planilha_vem_vazia(self):
+        """Planilha nova com a coluna vazia não deve apagar um valor já
+        gravado — falta de dado não é tratada como "backfill negativo"
+        (mesmo critério conservador já usado no "Status Equip")."""
+        item_antigo = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=2, valor_unitario=Decimal("150.00"),
+            nota_fiscal="381",
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="2", nota_fiscal="",
+            ),
+        ])
+        sincronizar_relatorio_eace_da_planilha(self.ri)
+        item_antigo.refresh_from_db()
+        self.assertEqual(item_antigo.nota_fiscal, "381")
+
+    def test_tela_nao_mostra_alerta_quando_status_escola_igual(self):
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola.inep, "Kit Cobertura Wi-Fi - 4 Access Points - Equip - MEGA - CO",
+                status_escola="Conectada",
+            ),
+            _linha_planilha_eace(
+                self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Conectada"
+            ),
+        ])
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "sincronizar_planilha_eace"},
+        )
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, "Divergência Status EACE")
+
 
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_SINCRONIZADOR)
 class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
@@ -3718,6 +3977,20 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
         self.ri_1.refresh_from_db()
         self.assertEqual(self.ri_1.status, Ri.FATURAMENTO_CONCLUIDO)
         self.assertIsNotNone(self.ri_1.concluido_em)
+
+    def test_status_escola_gravado_por_item_tambem_no_lote(self):
+        """RN-046: mesma gravação por item vale para o lote — não é lógica
+        separada, é a mesma `sincronizar_relatorio_eace_da_planilha`."""
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola_1.inep, "Kit Cobertura Wi-Fi - 4 Access Points - MEGA - CO",
+                status_escola="Em implantação",
+            ),
+        ])
+        processados = sincronizar_relatorio_eace_de_todas_as_ri()
+        resultados_por_ri = {ri.pk: resultado for ri, resultado in processados}
+        item = resultados_por_ri[self.ri_1.pk]["criados"][0]
+        self.assertEqual(item.status_escola, "Em implantação")
 
     def test_usa_ri_mais_recente_quando_escola_tem_mais_de_um(self):
         ri_antigo = self.ri_1

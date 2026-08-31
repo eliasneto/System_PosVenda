@@ -54,6 +54,30 @@ class EmailTrackingTests(TestCase):
         self.assertEqual(codigos, ["RI-20260823-35296909", "RI-20260824-10000002"])
 
 
+class LoginViewTests(TestCase):
+    """FEAT-030 (RN-047): usuário já autenticado que acessa /login/ é
+    redirecionado, em vez de ver o formulário com o menu sobreposto."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="analista", password="senha-teste-123")
+
+    def test_usuario_autenticado_e_redirecionado_ao_acessar_login(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("login"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("home"), resp.url)
+
+    def test_usuario_nao_autenticado_ve_o_formulario_normalmente(self):
+        resp = self.client.get(reverse("login"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Nome do usuário")
+
+    def test_credencial_invalida_continua_mostrando_erro(self):
+        resp = self.client.post(reverse("login"), {"username": "analista", "password": "errada"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Usuário ou senha inválidos.")
+
+
 class HomeViewTests(TestCase):
     """FEAT-026 (RN-025/RN-026): dashboard financeiro na tela inicial."""
 

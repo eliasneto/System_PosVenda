@@ -15,6 +15,8 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 
+from apps.auditoria.models import Auditoria
+from apps.auditoria.services import registrar as auditar
 from apps.core.email_tracking import montar_assunto_com_codigo, montar_codigo_rastreio
 from apps.escolas.models import Escola
 
@@ -45,6 +47,7 @@ from .services import (
     PlanilhaEaceSincronizacaoError,
     PlanilhaFaturamentoError,
     comparar_kit_e_produtos_ixc_relatorio,
+    comparar_status_escola_relatorio,
     gerar_planilha_faturamento,
     montar_corpo_email_financeiro,
     sincronizar_divergencia_kit_relatorio,
@@ -155,6 +158,22 @@ def _validar_transicao_status_ri(ri, novo_status, usuario):
         and ri.divergencias.filter(resolvida_em__isnull=True, bloqueia=True).exists()
     ):
         return "Bloqueado: há divergência aberta que impede o envio ao financeiro (RN-003)."
+    # FEAT-010/RF-10: marcação manual do anexo no portal EACE só a partir
+    # de "Resposta Financeiro" — mesmo destino do gatilho automático
+    # (RF-19). `FATURAMENTO_CONCLUIDO` também é aceito como origem para
+    # não travar a correção do Administrador (RN-020: só ele chega aqui
+    # vindo desse status, o guard do início da função já garante isso).
+    if novo_status == Ri.AGUARDANDO_VALIDACAO_EACE and ri.status not in (
+        Ri.AGUARDANDO_ANEXO_PORTAL_EACE,
+        Ri.FATURAMENTO_CONCLUIDO,
+    ):
+        return 'Só é possível marcar o anexo feito no EACE a partir de "Resposta Financeiro" (RN-001).'
+    # FEAT-010/RF-11: conclusão manual só depois da marcação de anexo —
+    # "Botão de conclusão só habilitado depois da marcação de anexo"
+    # (checklist.md), aqui aplicado como bloqueio de origem, mesmo padrão
+    # das demais regras desta função.
+    if novo_status == Ri.FATURAMENTO_CONCLUIDO and ri.status != Ri.AGUARDANDO_VALIDACAO_EACE:
+        return 'Só é possível concluir o faturamento a partir de "Aguardando validação EACE" (RN-001).'
     return None
 
 
@@ -178,6 +197,19 @@ def _registrar_log_campo(ri, usuario, campo, valor_anterior, valor_novo):
         ri=ri,
         tipo=RiHistorico.LOG_CAMPO,
         autor=usuario,
+        campo=campo,
+        valor_anterior=valor_anterior,
+        valor_novo=valor_novo,
+    )
+    # FEAT-011/RF-12: mesmo evento também vira registro de auditoria
+    # técnica — cobre responsável (RN-012) e cadastro/edição/exclusão dos
+    # itens do Lado IXC e do Relatório EACE, únicos chamadores desta
+    # função.
+    auditar(
+        usuario,
+        Auditoria.ALTERACAO_CAMPO,
+        entidade="Ri",
+        entidade_id=ri.pk,
         campo=campo,
         valor_anterior=valor_anterior,
         valor_novo=valor_novo,
@@ -552,6 +584,15 @@ def ri_enviar_email_financeiro_view(request, pk):
             ),
             assunto=assunto,
             anexo_pdf=nome_planilha,
+        )
+        auditar(
+            request.user,
+            Auditoria.ENVIO_EMAIL,
+            entidade="Ri",
+            entidade_id=ri.pk,
+            campo="assunto",
+            valor_novo=assunto,
+            ip_origem=request.META.get("REMOTE_ADDR"),
         )
         entrada_email = RiHistorico(
             ri=ri,
@@ -967,6 +1008,12 @@ def ri_detail_view(request, inep):
     # ações que mudam algum dos dois lados (`sincronizar_divergencia_kit_relatorio`).
     divergencia_kit_relatorio = comparar_kit_e_produtos_ixc_relatorio(ri) if ri else None
 
+    # RN-046 (2026-08-28): divergência de "Status escola" (coluna T) entre
+    # os próprios itens do Lado Relatório EACE — mesmo padrão de cálculo
+    # na renderização acima; não bloqueia nada, só destaca em vermelho
+    # todos os itens do Lado 3 quando houver mais de um valor entre eles.
+    divergencia_status_escola = comparar_status_escola_relatorio(ri) if ri else None
+
     # RN-008 (2026-08-26): linha do tempo paginada (10 por página) — evita
     # trazer todo o histórico do RI de uma vez, algo que tende a crescer
     # bastante agora que cadastro/edição/exclusão dos itens do Lado IXC e
@@ -1008,6 +1055,7 @@ def ri_detail_view(request, inep):
             "divergencia_estado_ixc": divergencia_estado_ixc,
             "divergencia_kit": divergencia_kit,
             "divergencia_kit_relatorio": divergencia_kit_relatorio,
+            "divergencia_status_escola": divergencia_status_escola,
             "kit_form_eace": kit_form_eace,
             "kit_ja_lancado_eace": kit_ja_lancado_eace,
             "produto_formset_eace": produto_formset_eace,

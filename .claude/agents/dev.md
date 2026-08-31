@@ -117,11 +117,13 @@ Inclui somente alterações visuais.
 Destino:
 
 ```text
-🔄 Em andamento → 👤 Aguardando validação visual
+Sem RN-XXX vinculada: → 👤 Aguardando validação visual
+Com RN-XXX vinculada: 🔄 Em andamento → 👤 Aguardando validação visual
 ```
 
 Frontend exclusivamente visual:
 
+- sem nenhuma RN-XXX vinculada, não passa pelo status 🔄 Em andamento;
 - não gera QA;
 - não é marcado como concluído pelo Dev;
 - é aprovado visualmente pelo usuário.

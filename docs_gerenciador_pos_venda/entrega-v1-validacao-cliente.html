@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Relatório de Entrega — Versão 1 — Gerenciador Pós-Venda</title>
+<style>
+  @page {
+    size: A4;
+    margin: 2.2cm 1.8cm 1.4cm 1.8cm;
+    /* Rodapé nativo do CSS (page margin box) — ao contrário de um elemento
+       position:fixed, o Chromium reserva essa área de verdade: conteúdo
+       (inclusive linha de tabela) nunca desenha por cima dela. Testado com
+       tabela de 40 linhas cruzando página antes de aplicar aqui.
+       Uma única caixa (bottom-center, largura da página inteira) em vez de
+       três caixas lado a lado — três caixas encostadas deixavam uma linha
+       vertical visível na costura entre elas. */
+    @bottom-center {
+      content: "Gerenciador Pós-Venda  ·  Relatório de entrega — v1.0 · EACE, faturamento de kits (RI)  ·  31/08/2026";
+      background: #0f2438; color: #cfe0f2;
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif; font-size: 8pt;
+      vertical-align: middle;
+      width: 21cm;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: #1c2430;
+    font-size: 11.5pt;
+    line-height: 1.5;
+    margin: 0;
+  }
+  .cover {
+    min-height: 22cm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    page-break-after: always;
+  }
+  .cover .capa-faixa {
+    background: #0f2438;
+    border-radius: 12px;
+    padding: 2.6cm 2cm 2.2cm 2cm;
+    margin-bottom: 1.4cm;
+  }
+  .cover .tag {
+    color: #8fb8e6;
+    font-weight: 700;
+    letter-spacing: .1em;
+    font-size: 10pt;
+    text-transform: uppercase;
+    margin-bottom: .7em;
+  }
+  .cover h1 {
+    font-size: 27pt;
+    margin: 0 0 .3em 0;
+    color: #fff;
+  }
+  .cover h2 {
+    font-size: 13.5pt;
+    font-weight: 400;
+    color: #aec2d9;
+    margin: 0;
+  }
+  .cover .capa-faixa .risco {
+    width: 54px; height: 4px; background: #2563a8; border-radius: 2px;
+    margin: 1.1em 0 0 0;
+  }
+  .cover .meta-box {
+    border: 1px solid #e3e8ee;
+    border-radius: 12px;
+    padding: 1.5em 1.7em;
+    background: #fbfcfd;
+  }
+  .cover table.meta { border-collapse: collapse; font-size: 10.5pt; width: 100%; }
+  .cover table.meta tr:not(:last-child) td { border-bottom: 1px solid #eef1f4; }
+  .cover table.meta td { padding: 7px 0; }
+  .cover table.meta td:first-child {
+    color: #64748b; font-weight: 600; padding-right: 1.4em; white-space: nowrap; width: 38%;
+  }
+  .cover .footer-note {
+    margin-top: 1.6em;
+    font-size: 9.5pt;
+    color: #64748b;
+    border-top: 1px solid #d7dde4;
+    padding-top: .8em;
+  }
+
+  h1.section {
+    font-size: 16.5pt;
+    color: #0f2438;
+    border-bottom: 2px solid #2563a8;
+    padding-bottom: .25em;
+    margin: 0 0 .6em 0;
+    page-break-before: always;
+  }
+  h1.section .num { color: #2563a8; margin-right: .3em; }
+  h2 {
+    font-size: 12.5pt;
+    color: #17324a;
+    margin: 1.6em 0 .5em 0;
+  }
+  p { margin: .5em 0; }
+  ul, ol { margin: .4em 0 .9em 0; padding-left: 1.4em; }
+  li { margin: .3em 0; }
+
+  table.req { width: 100%; border-collapse: collapse; margin: .8em 0 1.4em 0; font-size: 10pt; }
+  table.req th {
+    background: #eef3f8; color: #17324a; text-align: left;
+    padding: 6px 8px; border: 1px solid #d7dde4; font-size: 9.5pt;
+  }
+  table.req td { padding: 6px 8px; border: 1px solid #e3e8ee; vertical-align: top; }
+  table.req td.id { white-space: nowrap; font-weight: 600; color: #2563a8; }
+
+  .badge {
+    display: inline-block; font-size: 8.5pt; font-weight: 600;
+    padding: 1px 7px; border-radius: 10px; color: #fff; white-space: nowrap;
+  }
+  .badge.entregue { background: #2f8f5b; }
+  .badge.parcial { background: #b98900; }
+  .badge.pendente { background: #c2410c; }
+  .badge.extra { background: #2563a8; }
+
+  .callout {
+    border-left: 4px solid #2563a8; background: #f2f6fa;
+    padding: .7em 1em; margin: .9em 0; font-size: 10.5pt;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .callout.open { border-left-color: #c2410c; background: #fdf3ec; }
+  .callout.open strong { color: #9a3412; }
+  .callout.ok { border-left-color: #2f8f5b; background: #f1f8f4; }
+  .callout.ok strong { color: #1e5e3c; }
+
+  .resumo { display: flex; flex-wrap: wrap; gap: .8em; margin: 1em 0 1.4em 0; }
+  .resumo .card {
+    flex: 1 1 150px; border: 1px solid #e3e8ee; border-radius: 8px;
+    padding: .8em 1em; background: #fbfcfd;
+  }
+  .resumo .card .num { font-size: 20pt; font-weight: 700; color: #0f2438; }
+  .resumo .card .lbl { font-size: 9pt; color: #64748b; }
+
+  code {
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 9.5pt;
+    background: #eef3f8;
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: #17324a;
+  }
+
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="capa-faixa">
+    <div class="tag">Relatório de entrega para validação do cliente</div>
+    <h1>Gerenciador Pós-Venda</h1>
+    <h2>Entrega da Versão 1 (v1) — Requisitos programados x entregues</h2>
+    <div class="risco"></div>
+  </div>
+  <div class="meta-box">
+    <table class="meta">
+      <tr><td>Cliente / processo</td><td>EACE — faturamento de kits (RI)</td></tr>
+      <tr><td>Documento</td><td>Relatório de entrega — versão 1.0</td></tr>
+      <tr><td>Data da entrega</td><td>31/08/2026</td></tr>
+      <tr><td>Prazo programado da v1</td><td>28/08/2026</td></tr>
+      <tr><td>Nome exibido no sistema</td><td>"Gerenciador Pós Venda" (sem hífen)</td></tr>
+      <tr><td>Versão do sistema (release)</td><td>1.0.0</td></tr>
+    </table>
+  </div>
+  <div class="footer-note">
+    Este documento confronta os requisitos programados para a v1 (documento
+    de requisitos já validado com o cliente) com o que foi efetivamente
+    implementado até a data acima, e lista também o que foi entregue além do
+    escopo original.
+  </div>
+</section>
+
+<h1 class="section"><span class="num">1.</span>Resumo da Entrega</h1>
+<p>
+Comparação com os 30 itens do documento de requisitos original (20 RF + 5
+RNF + 5 SEG):
+</p>
+<div class="resumo">
+  <div class="card"><div class="num">30</div><div class="lbl">requisitos entregues</div></div>
+  <div class="card"><div class="num">0</div><div class="lbl">requisitos parciais</div></div>
+  <div class="card"><div class="num">0</div><div class="lbl">requisitos pendentes</div></div>
+  <div class="card"><div class="num">18</div><div class="lbl">itens entregues além do escopo original</div></div>
+</div>
+<p>
+As seções 2 a 4 detalham requisito a requisito (Funcionais, Não Funcionais e
+Segurança). A seção 5 lista o que foi entregue sem estar no documento de
+requisitos original. Todos os 30 requisitos programados para a v1 foram
+entregues.
+</p>
+
+<h1 class="section"><span class="num">2.</span>Requisitos Funcionais (RF)</h1>
+<table class="req">
+  <tr><th style="width:7%">ID</th><th style="width:12%">Status</th><th style="width:14%">Onde</th><th>Observação</th></tr>
+  <tr><td class="id">RF-01</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-002</td><td>2.622 escolas migradas.</td></tr>
+  <tr><td class="id">RF-02</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-004</td><td>Lançamento manual no Relatório EACE (3º lado).</td></tr>
+  <tr><td class="id">RF-03</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-004</td><td>Lado IXC — evoluiu para KIT Instalado + Produtos (RN-011).</td></tr>
+  <tr><td class="id">RF-04</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-005</td><td>Confronto formal (Relatório EACE × IXC) entregue e bloqueando o fluxo. Confronto informal (Kit declarado × IXC) confirmado completo — é comparação de descrição do KIT, não item a item.</td></tr>
+  <tr><td class="id">RF-05</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-007</td><td>Grid com drill-down por INEP.</td></tr>
+  <tr><td class="id">RF-06</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-005 / FEAT-007</td><td>Destaque vermelho de divergência.</td></tr>
+  <tr><td class="id">RF-07</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-008</td><td>Envio de e-mail ao financeiro por INEP.</td></tr>
+  <tr><td class="id">RF-08</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-009</td><td>Leitura automática da caixa de entrada.</td></tr>
+  <tr><td class="id">RF-09</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-009</td><td>Segunda validação da Nota Fiscal.</td></tr>
+  <tr><td class="id">RF-10</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-010</td><td>Marcação manual de anexo feito no portal EACE, disponível a partir de "Resposta Financeiro".</td></tr>
+  <tr><td class="id">RF-11</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-010</td><td>Conclusão manual "Faturamento Concluído", liberada depois da marcação de anexo.</td></tr>
+  <tr><td class="id">RF-12</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-011</td><td>Auditoria estendida — login, transição de status, alteração de campo/item, envio/recebimento de e-mail e erro do sistema geram registro.</td></tr>
+  <tr><td class="id">RF-13</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-003 / FEAT-028 / FEAT-029</td><td>Dois perfis com regra de permissão ativa (exclusão bloqueada para Analista); troca de perfil e liga/desliga de acesso pela tela "Administrador &gt; Usuários". Criar/editar/desativar usuário fica no /admin/, por decisão do projeto.</td></tr>
+  <tr><td class="id">RF-14</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-006</td><td>8 status e as transições, incluindo "Correção MEGA".</td></tr>
+  <tr><td class="id">RF-15</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-006</td><td>Destaque amarelo ao entrar em "Envio de Email para faturamento".</td></tr>
+  <tr><td class="id">RF-16</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-008</td><td>Formulário de dados para o financeiro.</td></tr>
+  <tr><td class="id">RF-17</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-008</td><td>Documento anexado automaticamente ao enviar o e-mail — evoluiu de PDF para planilha (ver FEAT-017, seção 5).</td></tr>
+  <tr><td class="id">RF-18</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-008</td><td>Confirmação de envio muda o status automaticamente.</td></tr>
+  <tr><td class="id">RF-19</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-009</td><td>Resposta do financeiro identificada muda o status automaticamente.</td></tr>
+  <tr><td class="id">RF-20</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-002</td><td>Status de conexão da Escola (desconectado/parcial/conectado).</td></tr>
+</table>
+
+<h1 class="section"><span class="num">3.</span>Requisitos Não Funcionais (RNF)</h1>
+<table class="req">
+  <tr><th style="width:7%">ID</th><th style="width:12%">Status</th><th style="width:14%">Onde</th><th>Observação</th></tr>
+  <tr><td class="id">RNF-01</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-009</td><td>Rotina automática de leitura da caixa de e-mail do financeiro, a cada 5 minutos (300 segundos — intervalo configurável).</td></tr>
+  <tr><td class="id">RNF-02</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-002</td><td>2.622 escolas migradas sem problema relatado.</td></tr>
+  <tr><td class="id">RNF-04</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-011</td><td>Auditoria estendida entregue; registros sem expiração automática.</td></tr>
+  <tr><td class="id">RNF-05</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-001</td><td>Reaproveitamento do <code>modulo-posVenda</code> (frontend, e-mail, permissão).</td></tr>
+  <tr><td class="id">RNF-06</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-008 / FEAT-009</td><td>Tratamento de falha de e-mail sem interromper o uso.</td></tr>
+</table>
+
+<h1 class="section"><span class="num">4.</span>Segurança (SEG)</h1>
+<table class="req">
+  <tr><th style="width:7%">ID</th><th style="width:12%">Status</th><th style="width:14%">Onde</th><th>Observação</th></tr>
+  <tr><td class="id">SEG-01</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-003</td><td>Exclusão de INEP/item, documentos e usuário restrita ao Administrador.</td></tr>
+  <tr><td class="id">SEG-02</td><td><span class="badge entregue">Entregue</span></td><td>—</td><td>Prática seguida no projeto inteiro (variáveis de ambiente, sem credencial no código).</td></tr>
+  <tr><td class="id">SEG-03</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-004</td><td>Kit declarado e Relatório EACE não são editáveis pelo usuário.</td></tr>
+  <tr><td class="id">SEG-04</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-011</td><td>Login e as ações relevantes (status, campo, e-mail, erro) ficam registrados, com rastreabilidade por usuário.</td></tr>
+  <tr><td class="id">SEG-05</td><td><span class="badge entregue">Entregue</span></td><td>FEAT-011</td><td>Sem tela dedicada no sistema — consulta só por acesso direto ao banco, como previsto.</td></tr>
+</table>
+
+<h1 class="section"><span class="num">5.</span>Entregue além do escopo original (v1)</h1>
+<p>
+Ao longo da v1, novas regras de negócio (<code>RN-008</code> em diante) foram
+levantadas com o usuário e incorporadas — nenhuma estava no documento de
+requisitos original. Todos os itens abaixo estão implementados e disponíveis
+no sistema.
+</p>
+
+<h2>Comunicação e histórico</h2>
+<table class="req">
+  <tr><th style="width:12%">ID</th><th>O que é</th></tr>
+  <tr><td class="id">FEAT-014</td><td>Histórico de comunicação do RI: linha do tempo com mensagem, anexo e e-mail, com entrada automática ao mudar status ou campo relevante.</td></tr>
+  <tr><td class="id">FEAT-017</td><td>Anexo do financeiro passou de PDF para planilha de faturamento, com uma aba por produto distinto lançado.</td></tr>
+</table>
+
+<h2>Catálogo e cruzamento de dados</h2>
+<table class="req">
+  <tr><th style="width:12%">ID</th><th>O que é</th></tr>
+  <tr><td class="id">FEAT-015</td><td>Catálogo de preços fixos EACE (LPU) por Lote, com importação em lote a partir da planilha oficial.</td></tr>
+  <tr><td class="id">FEAT-016</td><td>Cruzamento automático do Kit Declarado com o catálogo pelo número de Access Points, para os casos em que a EACE só informa o número.</td></tr>
+  <tr><td class="id">FEAT-021</td><td>Nobreak declarado: item padrão incluído automaticamente para as 2.622 escolas.</td></tr>
+  <tr><td class="id">FEAT-022</td><td>Painel "Relatório EACE" (3º lado) passou a usar o mesmo formulário do Lado IXC (KIT Instalado + Produtos).</td></tr>
+</table>
+
+<h2>Planilha EACE e sincronização automática</h2>
+<table class="req">
+  <tr><th style="width:12%">ID</th><th>O que é</th></tr>
+  <tr><td class="id">FEAT-023</td><td>Tela "Administrador &gt; Planilha EACE": upload do arquivo de faturamento que alimenta o sincronizador.</td></tr>
+  <tr><td class="id">FEAT-024</td><td>Sincronizador individual: lança automaticamente os itens do Relatório EACE de um RI a partir da planilha.</td></tr>
+  <tr><td class="id">FEAT-025</td><td>Sincronizador em lote: aplica a mesma lógica a todas as RI de uma vez, com resumo agregado.</td></tr>
+</table>
+
+<h2>Ciclo de vida e dados adicionais</h2>
+<table class="req">
+  <tr><th style="width:12%">ID</th><th>O que é</th></tr>
+  <tr><td class="id">FEAT-018</td><td>Município e Estado manuais no Lado IXC, com alerta de divergência contra o cadastro da Escola.</td></tr>
+  <tr><td class="id">FEAT-020</td><td>Status renomeado para "Resposta Financeiro", com gatilho automático estendido para qualquer resposta identificada por código de rastreio.</td></tr>
+</table>
+
+<h2>Painel gerencial</h2>
+<table class="req">
+  <tr><th style="width:12%">ID</th><th>O que é</th></tr>
+  <tr><td class="id">FEAT-026</td><td>Dashboard financeiro na tela inicial: "Valor Total do Projeto" e "Valor já faturado", com a diferença para a meta.</td></tr>
+</table>
+
+<h2>Autenticação e administração de acesso</h2>
+<table class="req">
+  <tr><th style="width:12%">ID</th><th>O que é</th></tr>
+  <tr><td class="id">FEAT-027</td><td>Login validado contra o Active Directory, com sincronização de e-mail/nome a partir do AD.</td></tr>
+  <tr><td class="id">FEAT-028</td><td>Tela "Administrador &gt; Usuários": troca de perfil entre Administrador e Analista.</td></tr>
+  <tr><td class="id">FEAT-029</td><td>Liberação de acesso aos dados por usuário (ligado/desligado), independente do perfil.</td></tr>
+</table>
+
+<h2>Experiência de uso</h2>
+<table class="req">
+  <tr><th style="width:12%">ID</th><th>O que é</th></tr>
+  <tr><td class="id">FEAT-013</td><td>Modo escuro (dark mode), com memória de preferência entre sessões.</td></tr>
+  <tr><td class="id">FEAT-019</td><td>Atualizações sem reload completo da página (HTMX) em troca de status, responsável e histórico.</td></tr>
+</table>
+
+<h2>Correção</h2>
+<table class="req">
+  <tr><th style="width:12%">ID</th><th>O que é</th></tr>
+  <tr><td class="id">FEAT-030</td><td>Correção do menu lateral sobreposto na tela de login para usuário já autenticado.</td></tr>
+</table>
+
+<h1 class="section"><span class="num">6.</span>Situação desta versão</h1>
+<div class="callout ok">
+  <strong>Sem pendência funcional.</strong> Todos os 30 requisitos
+  programados para a v1 (Funcionais, Não Funcionais e Segurança) foram
+  entregues, incluindo os 18 itens entregues além do escopo original
+  (seção 5).
+</div>
+
+</body>
+</html>

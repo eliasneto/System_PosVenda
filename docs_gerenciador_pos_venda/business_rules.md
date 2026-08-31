@@ -1,5 +1,5 @@
 # Regras de Negócio — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-08-28_ (RN-045 criada — liberação de acesso aos dados, liga/desliga por usuário, FEAT-029)
+_Última atualização: 2026-08-31_ (RN-002 consolidada — confronto 1 é campo único, já implementado; RN-006 atualizada — FEAT-011 entregue)
 
 ## Ciclo de Vida do RI
 
@@ -250,52 +250,44 @@ equivalente) no template do drill-down e do `ri_detail`.
 **Status:** Ativa
 
 ### RN-002 — Alerta de divergência entre Kit declarado e IXC (não bloqueia)
-**Descrição:** O sistema compara, item a item (Descrição do Item,
-Quantidade, Valor Unitário), os dados informados pela EACE **antes do
-início do projeto** ("Kit declarado", 1º lado do RI) contra os dados
-informados pelo usuário a partir do chamado do IXC (2º lado do RI). Campo
-divergente = destaque visual amarelo.
+**Descrição:** O sistema compara a descrição do KIT declarado pela EACE
+**antes do início do projeto** ("Kit declarado", 1º lado do RI) contra a
+descrição do KIT instalado, informada pelo usuário a partir do chamado do
+IXC (2º lado do RI, item com `eh_kit=True`). Divergência = destaque visual
+amarelo no campo do KIT.
 
-**Contexto:** Mesma regra já levantada em `requisitos.md` (ITEM 12): o que a
-EACE declara antes da instalação pode diferir do que foi realmente
+**Contexto:** Mesma regra já levantada em `requisitos.md` (ITEM 12): o que
+a EACE declara antes da instalação pode diferir do que foi realmente
 implantado em campo (registrado via IXC) — isso é só um alerta de atenção,
-não um erro formal. **Esclarecido em 2026-08-22:** o usuário confirmou que
-o RI tem **3 lados**, não 2 (ver RN-003) — este é o confronto entre o 1º e
-o 2º; a comparação é item a item, mesma mecânica da RN-003, não um campo
-único de "Kit".
+não um erro formal. O RI tem **3 lados** (Kit declarado, IXC, Relatório
+EACE — ver RN-003); este é o confronto entre o 1º e o 2º.
 
-**Critérios:** Comparação é "Kit declarado" (1º lado — dado da EACE antes
-do projeto) × "IXC" (2º lado), item a item, mesma comparação estrita da
-RN-003 (acentuação, espaço e caixa contam como divergência). Resultado
-divergente = destaque visual amarelo.
+**Critérios:** Campo único — "Kit declarado" (`Escola.kit_inicial`, ou o
+item mais recente de `RiItemEace` quando houver lançamento via admin) ×
+"KIT Instalado" do Lado IXC (item com `eh_kit=True`). Destaque amarelo só
+quando os dois lados têm valor preenchido e divergem; comparação estrita
+(acentuação, espaço e caixa contam como divergência). Não compara
+Quantidade nem Valor Unitário — é comparação de descrição, não de item de
+estoque.
 
 **Exceções:** Não bloqueia nenhuma transição de status nem o avanço do
 processo — é apenas indicador visual.
 
-**Esclarecido em 2026-08-26:** além da comparação item a item acima
-(quantidade/valor unitário, cobre também os Produtos avulsos), o alerta
-inclui um campo específico do KIT — "qual KIT foi declarado antes do
-projeto" (`Escola.kit_inicial`) × "qual KIT foi instalado" (item com
-`eh_kit=True` no Lado IXC, RN-011/RN-015) — com a **mesma mecânica visual
-da RN-014** (município): campo único, destaque amarelo só quando os dois
-lados têm valor e divergem, sem bloquear. Isso resolve a favor de manter
-os campos `Escola.kit_inicial`/`Ri.kit_informado_ixc`/`Ri.divergencia_kit`
-como o indicador simples do KIT (em vez de aposentá-los) — o Dev decide
-apenas se `kit_informado_ixc` continua sincronizado manualmente ou passa a
-refletir o item `eh_kit` atual do Lado IXC (decisão técnica reversível e de
-baixo risco, CLAUDE.md §9).
+**Impacto técnico:** `divergencia_kit`, computado na renderização de
+`ri_detail_view` — mesmo padrão do alerta de Município/Estado (RN-014),
+não persiste em `RiDivergencia` (essa tabela é só para as divergências que
+bloqueiam, RN-003). `RiItemEace` (model da FEAT-004) guarda no máximo o
+histórico de descrições já lançadas via Django admin — nunca uma lista de
+produtos avulsos (o lançamento manual foi removido pela RN-010 em
+2026-08-24); por isso o confronto é de campo único, não item a item.
 
-**Impacto técnico:** comparação item a item entre os itens do "Kit
-declarado" (model já implementado na FEAT-004, hoje chamado `RiItemEace` —
-nome pode confundir com o 3º lado novo da RN-003; ajuste de nome é decisão
-técnica do Dev) e os itens do "IXC" (`RiItemIxc`), mais o alerta de campo
-único do KIT descrito acima (`Escola.kit_inicial` × `Ri.kit_informado_ixc`/
-`Ri.divergencia_kit` ou equivalente pós-RN-011).
+**Features relacionadas:** FEAT-004, FEAT-005, FEAT-006.
 
-**Features relacionadas:** FEAT-004, FEAT-005.
-
-**Status:** Ativa (redação atualizada em 2026-08-22; esclarecida em
-2026-08-26)
+**Status:** Ativa (redação consolidada em 2026-08-31 — fecha a pendência
+registrada em `checklist.md`/FEAT-005: o alerta já estava implementado e
+confirmado em 2026-08-27, junto com a FEAT-006; a comparação nunca foi
+"item a item" nem envolveu Valor Unitário — "Kit declarado" sempre
+representou uma única descrição, nunca uma lista de itens)
 
 ## Confronto de Divergências
 
@@ -535,6 +527,32 @@ sincronização não ocorre — sem isso não há como consultar o AD.
 
 **Status:** Ativa
 
+### RN-047 — Redirecionamento de usuário já autenticado na tela de login
+**Descrição:** Usuário com sessão já autenticada que acessar a URL de login
+(`/login/`) deve ser redirecionado automaticamente para o dashboard, sem ver
+o formulário de login.
+
+**Contexto:** bug reportado pelo usuário em 2026-08-28 — usuário logado que
+acessava `/login/` via `LoginView` do Django (que, por padrão, não
+redireciona quem já tem sessão ativa) via o formulário de login normalmente;
+como o `base.html` exibe o menu lateral para qualquer usuário autenticado
+(independente da página), a tela de login aparecia com o menu do sistema
+sobreposto.
+
+**Critérios:** requisição a `/login/` com usuário autenticado retorna
+redirecionamento para a rota `home`, sem exibir o formulário; usuário não
+autenticado continua vendo somente o formulário de login, sem menu lateral;
+comportamento de erro de credenciais inválidas não é alterado.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** configuração da `LoginView` em `apps/core/urls.py`
+(ou view equivalente em `apps/core/views.py`).
+
+**Features relacionadas:** FEAT-030.
+
+**Status:** Ativa
+
 ## Envio e Rastreio de E-mail
 
 ### RN-009 — Código de rastreio do e-mail do RI
@@ -700,9 +718,10 @@ de e-mail, login no sistema e erros.
 código-base; retenção indefinida (sem expiração); consulta aos registros só
 por acesso direto ao banco nesta versão, sem tela própria.
 
-**Exceções:** hoje `apps/auditoria` original só cobre login — estender para
-alteração de campo/transição de status é decisão de implementação do Dev
-(estender o existente ou criar log específico do módulo).
+**Exceções:** decisão de implementação exercida pelo Dev em 2026-08-31
+(FEAT-011) — estendeu o `apps/auditoria` já existente (login, transição de
+status, alteração de campo/item, envio/recebimento de e-mail e erro não
+tratado), em vez de criar um log específico à parte.
 
 **Impacto técnico:** tabela `auditoria` (`modelo-dados.md`).
 
@@ -1349,6 +1368,58 @@ RE/RI; RN-024 é automático, a partir da planilha).
 
 **Status:** Ativa
 
+### RN-046 — Divergência de "Status escola" entre produtos do mesmo INEP (Lado 3)
+**Descrição:** Cada item lançado no Lado Relatório EACE (3º lado,
+`RiItemRelatorioEace`) passa a guardar também o valor da coluna "Status
+escola" (coluna T) da linha da Planilha EACE que o originou — mesmo
+mecanismo já usado para Num OSP/Validação OSP/Nota Fiscal (RN-022
+ampliada): campo fechado, só o Sincronizador preenche, exibido por item no
+painel. Quando os itens de um mesmo RI têm valores diferentes de "Status
+escola" entre si, o sistema exibe um alerta "Divergência Status EACE" no
+topo do painel e destaca em **vermelho todos os itens do Lado 3** desse RI
+— não só o(s) item(ns) que diverge(m) da maioria.
+
+**Contexto:** Usuário pediu, em 2026-08-28, que o "Status escola" (hoje já
+lido pelo Sincronizador só para a conclusão automática do RI, RN-024)
+também apareça por produto no Lado 3, já que a planilha traz esse valor
+por linha (por produto), não 1 valor único por INEP. Confirmado com o
+usuário (CLAUDE.md §9) que, ao detectar divergência, **todos** os itens do
+Lado 3 ficam vermelhos — não há um lado de referência "correto" nessa
+comparação (é entre produtos do mesmo lado, diferente da RN-002/RN-003,
+que comparam lados diferentes).
+
+**Critérios:**
+- Valor de "Status escola" gravado por item no momento da sincronização
+  (Sincronizador individual, FEAT-024, ou em lote, FEAT-025) — mesma linha
+  da planilha que originou o item; item lançado manualmente não tem valor.
+- Exibido por item no painel do Lado 3, mesmo padrão visual (rótulo com o
+  valor) já usado para Num OSP/Validação OSP/Nota Fiscal.
+- Divergência = pelo menos 2 itens do mesmo RI com "Status escola"
+  preenchido e diferente entre si (comparação estrita, mesmo critério das
+  RN-002/RN-003). Item sem valor (lançado manualmente) não entra na
+  comparação.
+- Havendo divergência: alerta "Divergência Status EACE" no topo do painel
+  do Lado 3 (mesmo padrão visual do alerta já existente da RN-003) e todos
+  os itens do Lado 3 do RI destacados em vermelho — não só os que diferem
+  da maioria.
+- Não bloqueia nenhuma transição de status do RI nem altera a RN-024
+  (conclusão automática por "Conectada" continua incondicional e
+  independente desta divergência).
+
+**Exceções:** RI com nenhum item no Lado 3, ou com só 1 item, nunca aciona
+o alerta (não há o que comparar).
+
+**Impacto técnico:** novo campo em `RiItemRelatorioEace` (ex.:
+`status_escola`) gravado dentro de `sincronizar_relatorio_eace_da_planilha`
+a partir de `linha.get("Status escola")`, reaproveitado pelos dois
+Sincronizadores (RN-022/RN-023); nova verificação de divergência entre os
+itens do mesmo RI (mesma camada de `sincronizar_divergencia_kit_relatorio`,
+RN-002/RN-003) exposta ao template do Lado 3.
+
+**Features relacionadas:** FEAT-024, FEAT-025.
+
+**Status:** Ativa
+
 ## Dashboard e Relatórios Financeiros
 
 ### RN-025 — Card "Valor Total do Projeto" (Kit + Nobreak inicial, 1º lado)
@@ -1444,6 +1515,9 @@ view/seção do dashboard da RN-025 (`apps/core`, `home.html`).
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-08-31 | RN-002 consolidada — confronto 1 (Kit declarado × IXC) é comparação de campo único (descrição do KIT), não item a item; fecha a pendência da FEAT-005 sem código novo | Investigação confirmou que `RiItemEace` nunca guardou lista de produtos avulsos (RN-010 removeu o lançamento manual em 2026-08-24) e que o alerta (`divergencia_kit`) já estava implementado e confirmado desde 2026-08-27 (FEAT-006); usuário confirmou que não há mais nada a fazer |
+| 2026-08-31 | RN-006, campo "Exceções" atualizado | FEAT-011 entregue pelo Dev — decisão de implementação exercida (estendeu o `apps/auditoria` já existente, sem log específico à parte); aguardando QA |
+| 2026-08-28 | RN-047 criada (usuário já autenticado que acessar `/login/` deve ser redirecionado ao dashboard, sem ver o formulário) | Usuário reportou, com print, que a tela de login aparecia com o menu lateral (sidebar) sobreposto; causa: `LoginView` do Django não redireciona por padrão quem já tem sessão ativa; gera `FEAT-030`, correção pendente do Dev |
 | 2026-08-28 | RN-045 criada (liberação de acesso aos dados — todo usuário tem um controle Ligado/Desligado, independente do perfil; Desligado vê o menu mas nenhuma tela com dado, com aviso de "aguardando liberação"); RN-043 recebe ampliação (conta criada via AD também nasce Desligada) | Usuário pediu que toda conta nova (login solto ou via AD) entre no sistema sem ver nenhuma informação até o Administrador liberar manualmente; confirmado com o usuário (CLAUDE.md §9, 3 perguntas): vale para Administrador também, não só Analista; só conta criada a partir de agora nasce desligada — quem já usa o sistema hoje não é afetado; tela mostra aviso claro, não fica vazia sem explicação; gera `FEAT-029` |
 | 2026-08-28 | RN-004 ampliada — tela interna "Administrador > Usuários" pode trocar perfil (Administrador ↔ Analista) de outro usuário, sem precisar do `/admin/` do Django; Administrador não pode trocar o próprio perfil por essa tela | Usuário pediu, depois de descobrir que a troca de perfil só existia pelo `/admin/` do Django, uma opção equivalente dentro do próprio menu Administrador; confirmado com o usuário (CLAUDE.md §9): escopo mínimo — só listar usuário e trocar perfil, sem criar/editar outros campos/desativar (isso continua só pelo `/admin/`); bloqueio de autotroca é decisão do Orquestrador (opção mais simples e conservadora, evita lockout acidental), a confirmar na validação; gera `FEAT-028` |
 | 2026-08-28 | RN-043 e RN-044 criadas (autenticação via Active Directory e sincronização pós-login de e-mail/nome); RN-004 recebe exceção (criação automática de usuário via login AD, perfil Analista) | Usuário pediu a integração com AD; resolve pendência aberta em `lixo.md` (item 7) desde 2026-08-20; decisão de reaproveitar a mesma conta de serviço/config do `modulo-posVenda` registrada em `ADR-002`; gera `FEAT-027` |

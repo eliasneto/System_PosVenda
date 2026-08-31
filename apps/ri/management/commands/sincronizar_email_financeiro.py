@@ -1,5 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 
+from apps.auditoria.models import Auditoria
+from apps.auditoria.services import registrar as auditar
 from apps.ri.services import EmailFinanceiroSyncError, sincronizar_respostas_financeiro
 
 
@@ -18,6 +20,16 @@ class Command(BaseCommand):
         try:
             resultado = sincronizar_respostas_financeiro()
         except EmailFinanceiroSyncError as erro:
+            # FEAT-011/RF-12: falha da passada inteira (autenticação,
+            # limite de páginas) — diferente do erro por mensagem, já
+            # registrado dentro de `sincronizar_respostas_financeiro`.
+            auditar(
+                None,
+                Auditoria.ERRO,
+                entidade="EmailFinanceiroSync",
+                campo=type(erro).__name__,
+                valor_novo=str(erro),
+            )
             raise CommandError(str(erro))
 
         # RN-016: resposta no padrão e fora do padrão avançam o status do
