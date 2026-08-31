@@ -119,6 +119,31 @@ ABA_KIT_PLANILHA_FATURAMENTO = "NF KIT"
 # Excel proíbe estes caracteres em nome de aba e limita a 31 caracteres.
 _CARACTERES_INVALIDOS_ABA = re.compile(r"[\[\]:\*\?/\\]")
 
+# Caracteres proibidos em nome de arquivo (Windows) + quebra de linha (não
+# pode vazar para o header Content-Disposition).
+_CARACTERES_INVALIDOS_ARQUIVO = re.compile(r'[\\/:*?"<>|\r\n]')
+
+# Escola.nome permite até 255 caracteres (há escola cadastrada com 100) —
+# corta o nome no arquivo antes de estourar `RiHistorico.anexo`
+# (FileField max_length=255, já com folga pro prefixo `upload_to` e pro
+# sufixo que o Django acrescenta em caso de nome duplicado).
+_TAMANHO_MAXIMO_NOME_ARQUIVO_PLANILHA = 200
+
+
+def nome_arquivo_planilha_faturamento(escola):
+    """Ajuste 2026-08-31 (pedido do usuário): o .xlsx anexado no e-mail do
+    financeiro (e baixado pelo botão "Baixar planilha") passa a se chamar
+    "FATURAMENTO MATERIAS EACE - <INEP> - <nome da escola>.xlsx", em vez do
+    genérico "faturamento_<inep>.xlsx" — facilita achar o arquivo certo
+    quando o financeiro recebe e-mail de várias escolas."""
+    nome_escola = _CARACTERES_INVALIDOS_ARQUIVO.sub("", escola.nome or "").strip()
+    nome = f"FATURAMENTO MATERIAS EACE - {escola.inep} - {nome_escola}.xlsx"
+    excedente = len(nome) - _TAMANHO_MAXIMO_NOME_ARQUIVO_PLANILHA
+    if excedente > 0:
+        nome_escola = nome_escola[: max(len(nome_escola) - excedente, 0)].rstrip()
+        nome = f"FATURAMENTO MATERIAS EACE - {escola.inep} - {nome_escola}.xlsx"
+    return nome
+
 _RE_OBS_INEP = re.compile(r"(INEP:\s*)\S+")
 _RE_OBS_ITEM_LPU = re.compile(r"(ITEM LPU:\s*).*?(?=\s+MUNICIPIO/UF:)", re.DOTALL)
 _RE_OBS_MUNICIPIO_UF = re.compile(r"(MUNICIPIO/UF:\s*).*?(?=\s+VENCIMENTO:)", re.DOTALL)
@@ -266,13 +291,16 @@ def gerar_planilha_faturamento(ri, data_vencimento):
     escola = ri.escola
     data_str = data_vencimento.strftime("%d/%m/%Y")
 
-    grupos = OrderedDict()  # aba_nome -> {"item_lpu": str, "subtotal": Decimal}
+    grupos = OrderedDict()  # aba_nome -> {"item_lpu": str, "subtotal": Decimal, "quantidade_total": int}
     for item in sorted(itens, key=lambda item: item.criado_em):
         catalogo = _resolver_catalogo_ixc(item.descricao_item, item.eh_kit, escola.lote)
         item_lpu, aba_nome = _item_lpu_e_aba(item.descricao_item, item.eh_kit, catalogo)
         valor_unitario = catalogo.valor_faturavel if catalogo else Decimal("0")
-        grupo = grupos.setdefault(aba_nome, {"item_lpu": item_lpu, "subtotal": Decimal("0")})
+        grupo = grupos.setdefault(
+            aba_nome, {"item_lpu": item_lpu, "subtotal": Decimal("0"), "quantidade_total": 0}
+        )
         grupo["subtotal"] += valor_unitario * item.quantidade
+        grupo["quantidade_total"] += item.quantidade
         # Último item lançado prevalece no texto do ITEM LPU — um RI só
         # tem mais de uma variação na mesma aba num cenário raro (ex.:
         # correção trocando o tamanho do KIT); a soma do valor continua
@@ -305,7 +333,14 @@ def gerar_planilha_faturamento(ri, data_vencimento):
         aba["F16"] = escola.endereco
         aba["G16"] = ri.municipio_ixc
         aba["H16"] = ri.estado_ixc
-        aba["I16"] = dados["item_lpu"]
+        # Pedido do usuário (2026-08-31): produto avulso (não KIT) com mais
+        # de 1 unidade lançada mostra a quantidade entre parênteses ao lado
+        # do nome — ex.: "Nobreak (6)". KIT nunca leva esse sufixo (a
+        # unidade faturada já é "KIT N", não a contagem de equipamentos).
+        nome_equipamento = dados["item_lpu"]
+        if aba_nome != ABA_KIT_PLANILHA_FATURAMENTO and dados["quantidade_total"] > 1:
+            nome_equipamento = f"{nome_equipamento} ({dados['quantidade_total']})"
+        aba["I16"] = nome_equipamento
         abas_usadas.add(aba.title)
 
     for aba in list(workbook.worksheets):

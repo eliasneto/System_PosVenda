@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib import messages
@@ -51,6 +52,7 @@ from .services import (
     comparar_status_escola_relatorio,
     gerar_planilha_faturamento,
     montar_corpo_email_financeiro,
+    nome_arquivo_planilha_faturamento,
     sincronizar_divergencia_kit_relatorio,
     # FEAT-024/RN-022: Sincronizador do Lado Relatório EACE a partir da
     # Planilha EACE (RN-021), casada com o catálogo pelo INEP.
@@ -570,7 +572,7 @@ def ri_enviar_email_financeiro_view(request, pk):
             assunto = montar_assunto_com_codigo(codigo, assunto)
 
         corpo = montar_corpo_email_financeiro(ri)
-        nome_planilha = f"faturamento_{ri.escola.inep}.xlsx"
+        nome_planilha = nome_arquivo_planilha_faturamento(ri.escola)
 
         email = EmailMessage(
             subject=assunto,
@@ -640,9 +642,13 @@ def ri_baixar_planilha_financeiro_view(request, pk):
         messages.error(request, str(erro))
         return redirect(next_url)
 
+    nome_planilha = nome_arquivo_planilha_faturamento(ri.escola)
     resposta = HttpResponse(planilha_bytes, content_type=MIME_PLANILHA_FATURAMENTO)
+    # Nome da escola pode ter acento — filename comum (fallback ASCII) +
+    # filename* (RFC 5987/6266) para o navegador mostrar o nome completo.
+    nome_ascii = nome_planilha.encode("ascii", "ignore").decode("ascii") or "faturamento.xlsx"
     resposta["Content-Disposition"] = (
-        f'attachment; filename="faturamento_{ri.escola.inep}.xlsx"'
+        f'attachment; filename="{nome_ascii}"; filename*=UTF-8\'\'{quote(nome_planilha)}'
     )
     return resposta
 

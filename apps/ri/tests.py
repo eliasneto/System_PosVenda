@@ -45,6 +45,7 @@ from .services import (
     montar_dashboard_financeiro,
     montar_faturamento_por_estado,
     montar_faturamento_por_municipio,
+    nome_arquivo_planilha_faturamento,
     sincronizar_divergencia_kit_relatorio,
     sincronizar_relatorio_eace_da_planilha,
     sincronizar_relatorio_eace_de_todas_as_ri,
@@ -854,7 +855,8 @@ class RiEnvioFinanceiroTests(TestCase):
         self.assertIn(self.escola.inep, enviado.subject)
         self.assertEqual(len(enviado.attachments), 1)
         nome_anexo, conteudo_anexo, tipo_anexo = enviado.attachments[0]
-        self.assertTrue(nome_anexo.endswith(".xlsx"))
+        # Pedido do usuário (2026-08-31): nome do anexo identifica a escola.
+        self.assertEqual(nome_anexo, "FATURAMENTO MATERIAS EACE - 50000001 - Escola Financeiro.xlsx")
         self.assertEqual(
             tipo_anexo, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
@@ -954,6 +956,11 @@ class RiEnvioFinanceiroTests(TestCase):
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         self.assertIn("attachment", resp["Content-Disposition"])
+        # Pedido do usuário (2026-08-31): nome do arquivo identifica a escola.
+        self.assertIn(
+            'filename="FATURAMENTO MATERIAS EACE - 50000001 - Escola Financeiro.xlsx"',
+            resp["Content-Disposition"],
+        )
         self.assertTrue(resp.content)
         self.assertEqual(len(mail.outbox), 0)
         self.ri.refresh_from_db()
@@ -1075,8 +1082,12 @@ class GerarPlanilhaFaturamentoTests(TestCase):
 
         aba_rack = next(ws for ws in workbook.worksheets if ws.title.strip() == "RACK")
         self.assertEqual(aba_rack["H10"].value, 1500.0)  # só equipamento (500) x 3
-        self.assertEqual(aba_rack["I16"].value, "RACK")
+        # RN-013 (ajuste 2026-08-31): produto avulso com mais de 1 unidade
+        # mostra a quantidade entre parênteses na I16 — RACK tem 3 aqui.
+        self.assertEqual(aba_rack["I16"].value, "RACK (3)")
+        # F10 (texto copiado pra Nota Fiscal) NÃO leva o sufixo — só a I16.
         self.assertIn("ITEM LPU: RACK", aba_rack["F10"].value)
+        self.assertNotIn("ITEM LPU: RACK (3)", aba_rack["F10"].value)
         self.assertEqual(len(aba_rack._images), 1)
 
     def test_soma_subtotal_de_produtos_diferentes_na_mesma_aba(self):
@@ -1186,6 +1197,78 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         mensagem = str(contexto.exception)
         self.assertIn("o Município (Lado IXC)", mensagem)
         self.assertIn("o Estado (Lado IXC)", mensagem)
+
+    def test_i16_sem_sufixo_de_quantidade_com_1_unica_unidade(self):
+        """Pedido do usuário (2026-08-31): o sufixo "(N)" só aparece com
+        mais de 1 equipamento — 1 unidade continua só com o nome."""
+        RiItemIxc.objects.filter(descricao_item="Rack 5U").update(quantidade=1)
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba_rack = next(ws for ws in workbook.worksheets if ws.title.strip() == "RACK")
+        self.assertEqual(aba_rack["I16"].value, "RACK")
+
+    def test_i16_kit_nunca_leva_sufixo_de_quantidade(self):
+        """Pedido do usuário (2026-08-31): o sufixo "(N)" é só para
+        equipamento avulso — KIT nunca leva, mesmo somando mais de 1
+        unidade na mesma aba (RI corrigido trocando o tamanho do KIT,
+        cenário já previsto no agrupamento por aba)."""
+        RiItemIxc.objects.create(
+            ri=self.ri,
+            descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=2,
+            valor_unitario="0",
+            eh_kit=True,
+        )
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba_kit = next(ws for ws in workbook.worksheets if ws.title.strip() == "NF KIT")
+        self.assertEqual(aba_kit["I16"].value, "KIT 4")
+
+    def test_i16_produto_sem_aba_cadastrada_tambem_leva_sufixo_de_quantidade(self):
+        """A regra da quantidade vale tanto pra aba de catálogo (RACK)
+        quanto pra aba criada na hora pra produto sem cadastro."""
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Enlace de Rádio",
+            quantidade=2, valor_unitario="0", eh_kit=False,
+        )
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba_nova = workbook["Enlace de Rádio"]
+        self.assertEqual(aba_nova["I16"].value, "Enlace de Rádio (2)")
+
+
+class NomeArquivoPlanilhaFaturamentoTests(TestCase):
+    """Pedido do usuário (2026-08-31): nome do .xlsx anexado no e-mail (e
+    baixado pelo botão "Baixar planilha") passa a identificar a escola."""
+
+    def test_monta_nome_com_inep_e_nome_da_escola(self):
+        escola = Escola.objects.create(inep="70000001", nome="Escola Modelo", municipio="Recife", estado="PE")
+        self.assertEqual(
+            nome_arquivo_planilha_faturamento(escola),
+            "FATURAMENTO MATERIAS EACE - 70000001 - Escola Modelo.xlsx",
+        )
+
+    def test_remove_caractere_invalido_de_nome_de_arquivo(self):
+        escola = Escola.objects.create(
+            inep="70000002", nome='Escola "Teste"/Especial', municipio="Recife", estado="PE"
+        )
+        nome = nome_arquivo_planilha_faturamento(escola)
+        self.assertNotIn('"', nome)
+        self.assertNotIn("/", nome)
+
+    def test_nome_de_escola_muito_longo_e_truncado_sem_quebrar(self):
+        """Escola.nome permite até 255 caracteres (há escola real
+        cadastrada com 100) — o nome do arquivo não pode estourar o
+        `RiHistorico.anexo` (FileField max_length=255, com o prefixo do
+        `upload_to` e a folga de deduplicação do Django)."""
+        nome_bem_longo = "Escola " + "Muito Comprida " * 15  # 232 chars, dentro do limite da Escola.nome (255)
+        escola = Escola.objects.create(
+            inep="70000003", nome=nome_bem_longo, municipio="Recife", estado="PE"
+        )
+        nome = nome_arquivo_planilha_faturamento(escola)
+        self.assertLessEqual(len(nome), 200)
+        self.assertTrue(nome.startswith("FATURAMENTO MATERIAS EACE - 70000003 - Escola"))
+        self.assertTrue(nome.endswith(".xlsx"))
 
 
 class MontarCorpoEmailFinanceiroTests(TestCase):

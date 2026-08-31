@@ -558,7 +558,14 @@ class RiHistorico(models.Model):
         verbose_name="Autor",
     )
     mensagem = models.TextField("Mensagem", max_length=250, blank=True)
-    anexo = models.FileField("Anexo", upload_to="ri_historico/%Y/%m/", blank=True)
+    # max_length=255 (2026-08-31): o padrão do FileField (100) estourava
+    # com escola de nome comprido — o anexo da planilha de faturamento
+    # passou a se chamar "FATURAMENTO MATERIAS EACE - <INEP> - <escola>.xlsx"
+    # (RN-013, pedido do usuário) e há escola cadastrada com nome de 100
+    # caracteres (Escola.nome permite até 255).
+    anexo = models.FileField(
+        "Anexo", upload_to="ri_historico/%Y/%m/", max_length=255, blank=True
+    )
     # RN-008/FEAT-009 (2026-08-27): a resposta do financeiro (RF-08) chega
     # com 2 arquivos (NF PDF + XML) numa única mensagem — `anexo` acima só
     # guarda 1 por entrada (usado pelo envio, FEAT-008, com a planilha
