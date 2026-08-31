@@ -988,6 +988,85 @@ def copiar_itens_lado3_para_lado2(ris_elegiveis):
 
 
 # ==========================================
+# Correção pontual de dados (2026-08-31, a pedido do usuário via
+# `python manage.py corrigir_valor_itens_relatorio_eace`): o commit que
+# criou `KitPadrao.valor_faturavel` (só equipamento, sem somar serviço —
+# antes o Valor Unitário do KIT/Produto faturado vinha inflado com
+# equipamento + serviço) corrigiu a resolução de preço só para itens
+# NOVOS (Sincronizador e lançamento manual, RN-018). O valor gravado é um
+# "retrato histórico" (mesmo motivo da RN-018, não é FK pro catálogo) —
+# nunca recalculado sozinho depois de gravado. Item do Lado Relatório
+# EACE (3º lado) lançado/sincronizado ANTES dessa correção continua com o
+# valor antigo, inflando "Valor já Faturado" (RN-026) e qualquer outro
+# lugar que leia `RiItemRelatorioEace.valor_unitario`.
+# ==========================================
+
+
+def identificar_itens_relatorio_eace_valor_desatualizado():
+    """Levanta os itens do Lado Relatório EACE cujo Valor Unitário
+    gravado não bate com `KitPadrao.valor_faturavel` (o valor correto, só
+    equipamento) — mesma resolução de catálogo já usada para itens novos
+    (`_resolver_catalogo_ixc`, RN-013/018: KIT casa pelo número de Access
+    Points, Produto casa por descrição + Lote da escola).
+
+    Devolve `(desatualizados, sem_catalogo)`:
+    - `desatualizados`: lista de `(item, valor_correto)`.
+    - `sem_catalogo`: itens cujo catálogo não foi encontrado (KIT sem
+      número de Access Points reconhecível na descrição, ou Produto sem
+      cadastro para o Lote da escola) — não dá pra saber o valor correto,
+      ficam de fora sem alterar nada."""
+    desatualizados = []
+    sem_catalogo = []
+    itens = RiItemRelatorioEace.objects.select_related("ri__escola")
+    for item in itens:
+        catalogo = _resolver_catalogo_ixc(item.descricao_item, item.eh_kit, item.ri.escola.lote)
+        if catalogo is None:
+            sem_catalogo.append(item)
+            continue
+        valor_correto = catalogo.valor_faturavel
+        if valor_correto != item.valor_unitario:
+            desatualizados.append((item, valor_correto))
+    return desatualizados, sem_catalogo
+
+
+def corrigir_valor_itens_relatorio_eace(desatualizados):
+    """Aplica a correção identificada por
+    `identificar_itens_relatorio_eace_valor_desatualizado`: grava o valor
+    correto em cada item, registra o log da linha do tempo (RN-008) e
+    recalcula a divergência formal Lado IXC × Lado Relatório EACE (RN-003)
+    1 vez por RI afetado. Devolve o total de itens corrigidos."""
+    ris_afetados = {}
+    with transaction.atomic():
+        for item, valor_correto in desatualizados:
+            valor_anterior = f"{item.descricao_item} — {item.quantidade} un. — R$ {item.valor_unitario:.2f}"
+            item.valor_unitario = valor_correto
+            item.save(update_fields=["valor_unitario"])
+            valor_novo = f"{item.descricao_item} — {item.quantidade} un. — R$ {item.valor_unitario:.2f}"
+            RiHistorico.objects.create(
+                ri=item.ri,
+                tipo=RiHistorico.LOG_CAMPO,
+                autor=None,
+                campo="Item do Relatório EACE (valor corrigido)",
+                valor_anterior=valor_anterior,
+                valor_novo=valor_novo,
+            )
+            auditar(
+                None,
+                Auditoria.ALTERACAO_CAMPO,
+                entidade="Ri",
+                entidade_id=item.ri_id,
+                campo="Item do Relatório EACE (valor corrigido)",
+                valor_anterior=valor_anterior,
+                valor_novo=valor_novo,
+            )
+            ris_afetados[item.ri_id] = item.ri
+        for ri in ris_afetados.values():
+            sincronizar_divergencia_kit_relatorio(ri)
+
+    return len(desatualizados)
+
+
+# ==========================================
 # FEAT-009 (RF-08/RF-09/RF-19, RN-005/RN-009): leitura da resposta do
 # financeiro na caixa própria do sistema, por polling (~5 min,
 # architecture.md "Fluxo de e-mail com o financeiro") via Microsoft Graph
