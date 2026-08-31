@@ -982,6 +982,26 @@ class RiEnvioFinanceiroTests(TestCase):
         )
         self.assertContains(resp, "nenhum item lançado")
 
+    def test_baixar_planilha_vencimento_e_30_dias_apos_geracao(self):
+        """Correção 2026-08-31: o VENCIMENTO (E10) não é a data em que a
+        planilha foi gerada — é a data de geração + 30 dias corridos."""
+        self.client.force_login(self.user)
+        resp = self.client.get(
+            reverse("ri_baixar_planilha_financeiro", kwargs={"pk": self.ri.pk})
+        )
+        workbook = openpyxl.load_workbook(BytesIO(resp.content))
+        aba = workbook[next(n for n in workbook.sheetnames if n.strip() == "NF KIT")]
+        self.assertEqual(aba["E10"].value.date(), timezone.localdate() + timedelta(days=30))
+
+    def test_enviar_email_vencimento_e_30_dias_apos_geracao(self):
+        """Mesma correção do teste acima, mas no fluxo de envio de e-mail
+        (a planilha anexada usa a mesma função de geração)."""
+        self._enviar_email()
+        _, conteudo_anexo, _ = mail.outbox[0].attachments[0]
+        workbook = openpyxl.load_workbook(BytesIO(conteudo_anexo))
+        aba = workbook[next(n for n in workbook.sheetnames if n.strip() == "NF KIT")]
+        self.assertEqual(aba["E10"].value.date(), timezone.localdate() + timedelta(days=30))
+
 
 class GerarPlanilhaFaturamentoTests(TestCase):
     """FEAT-017/RN-013: geração da planilha de faturamento a partir da

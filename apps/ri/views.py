@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings
@@ -500,6 +501,11 @@ def _fragmento_responsavel_htmx(request, ri, next_url, origem):
 
 MIME_PLANILHA_FATURAMENTO = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
+# Vencimento da NF = data de geração da planilha (envio do e-mail ou
+# clique em "Baixar planilha") + 30 dias corridos — não a própria data
+# de geração (correção 2026-08-31, RN-013 desatualizada nesse ponto).
+DIAS_VENCIMENTO_PLANILHA_FATURAMENTO = 30
+
 
 @login_required
 def ri_enviar_email_financeiro_view(request, pk):
@@ -533,7 +539,11 @@ def ri_enviar_email_financeiro_view(request, pk):
         # antes de mexer em qualquer outro dado do RI (mesma mensagem
         # objetiva do botão "Baixar planilha").
         try:
-            planilha_bytes = gerar_planilha_faturamento(ri, data_vencimento=timezone.localdate())
+            planilha_bytes = gerar_planilha_faturamento(
+                ri,
+                data_vencimento=timezone.localdate()
+                + timedelta(days=DIAS_VENCIMENTO_PLANILHA_FATURAMENTO),
+            )
         except PlanilhaFaturamentoError as erro:
             messages.error(request, str(erro))
             return redirect(next_url)
@@ -621,7 +631,11 @@ def ri_baixar_planilha_financeiro_view(request, pk):
         next_url = reverse("grid_inep")
 
     try:
-        planilha_bytes = gerar_planilha_faturamento(ri, data_vencimento=timezone.localdate())
+        planilha_bytes = gerar_planilha_faturamento(
+            ri,
+            data_vencimento=timezone.localdate()
+            + timedelta(days=DIAS_VENCIMENTO_PLANILHA_FATURAMENTO),
+        )
     except PlanilhaFaturamentoError as erro:
         messages.error(request, str(erro))
         return redirect(next_url)
