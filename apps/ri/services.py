@@ -55,7 +55,7 @@ def _linhas_itens_ixc(ri):
     total = Decimal("0")
     for item in ri.itens_ixc.all():
         catalogo = _resolver_catalogo_ixc(item.descricao_item, item.eh_kit, escola.lote)
-        valor_unitario = catalogo.valor_total if catalogo else Decimal("0")
+        valor_unitario = catalogo.valor_faturavel if catalogo else Decimal("0")
         subtotal = item.quantidade * valor_unitario
         total += subtotal
         linhas.append(
@@ -269,7 +269,7 @@ def gerar_planilha_faturamento(ri, data_vencimento):
     for item in sorted(itens, key=lambda item: item.criado_em):
         catalogo = _resolver_catalogo_ixc(item.descricao_item, item.eh_kit, escola.lote)
         item_lpu, aba_nome = _item_lpu_e_aba(item.descricao_item, item.eh_kit, catalogo)
-        valor_unitario = catalogo.valor_total if catalogo else Decimal("0")
+        valor_unitario = catalogo.valor_faturavel if catalogo else Decimal("0")
         grupo = grupos.setdefault(aba_nome, {"item_lpu": item_lpu, "subtotal": Decimal("0")})
         grupo["subtotal"] += valor_unitario * item.quantidade
         # Último item lançado prevalece no texto do ITEM LPU — um RI só
@@ -798,7 +798,7 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
             ri=ri,
             descricao_item=descricao_item,
             quantidade=quantidade,
-            valor_unitario=catalogo.valor_total,
+            valor_unitario=catalogo.valor_faturavel,
             eh_kit=eh_kit,
             # RN-022 (ampliada)/RN-046: campos fechados, só de exibição —
             # lidos direto da mesma linha da planilha que originou o item.

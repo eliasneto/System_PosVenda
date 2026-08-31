@@ -846,7 +846,7 @@ def ri_detail_view(request, inep):
                         descricao = kit_form_eace.descricao_selecionada
                         instancia = kit_form_eace.instancia_selecionada
                         if instancia:
-                            valor_unitario_kit = instancia.valor_total
+                            valor_unitario_kit = instancia.valor_faturavel
                         else:
                             # "Outro" — sem instância de catálogo escolhida
                             # direto; cai para a mesma resolução por número
@@ -854,7 +854,7 @@ def ri_detail_view(request, inep):
                             # faturamento (RN-013). Sem correspondência,
                             # 0,00 — nenhum valor inventado (CLAUDE.md §9).
                             catalogo = _resolver_catalogo_ixc(descricao, True, escola.lote)
-                            valor_unitario_kit = catalogo.valor_total if catalogo else Decimal("0")
+                            valor_unitario_kit = catalogo.valor_faturavel if catalogo else Decimal("0")
                         item_kit = RiItemRelatorioEace.objects.create(
                             ri=ri,
                             descricao_item=descricao,
@@ -877,7 +877,7 @@ def ri_detail_view(request, inep):
                             quantidade=dados["quantidade"],
                             # Já temos a instância do catálogo escolhida no
                             # select — sem precisar re-resolver por descrição.
-                            valor_unitario=produto.valor_total,
+                            valor_unitario=produto.valor_faturavel,
                         )
                         _registrar_log_campo(
                             ri, request.user, "Produto (Relatório EACE)", "",

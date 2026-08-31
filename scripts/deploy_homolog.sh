@@ -13,6 +13,7 @@ set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/home/Sistem_PosVenda}"
 COMPOSE_FILE="docker-compose.hml.yml"
+COMPOSE_OVERRIDE_FILE="docker-compose.hml.override.yml"
 ENV_FILE=".env.hml"
 
 echo "==> Entrando em ${DEPLOY_DIR}"
@@ -28,19 +29,30 @@ if [ ! -f "${ENV_FILE}" ]; then
     exit 1
 fi
 
+# COMPOSE_OVERRIDE_FILE e local do servidor, nao versionado (volumes externos
+# especificos desta maquina - banco reaproveitado, planilha-modelo de
+# faturamento etc., ver TROUBLESHOOTING.md). "git reset --hard" acima nunca
+# apaga esse arquivo por nao ser rastreado, mas o deploy tem que incluir ele
+# sempre que existir - senao os containers recriados perdem esses volumes.
+COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+if [ -f "${COMPOSE_OVERRIDE_FILE}" ]; then
+    echo "==> Incluindo override local: ${COMPOSE_OVERRIDE_FILE}"
+    COMPOSE_ARGS+=(-f "${COMPOSE_OVERRIDE_FILE}")
+fi
+
 echo "==> Subindo containers (build)"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --build
+docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" up -d --build
 
 echo "==> Aguardando o banco ficar saudavel"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --wait db
+docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" up -d --wait db
 
 echo "==> Rodando migrations"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" exec -T web python manage.py migrate --noinput
+docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" exec -T web python manage.py migrate --noinput
 
 echo "==> Rodando collectstatic (Nginx serve o resultado, docker/nginx/homolog.conf)"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" exec -T web python manage.py collectstatic --noinput
+docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" exec -T web python manage.py collectstatic --noinput
 
 echo "==> Status dos containers"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" ps
+docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" ps
 
 echo "==> Deploy de homologacao concluido"

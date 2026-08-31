@@ -1,5 +1,35 @@
 # Troubleshooting — Gerenciador Pós-Venda
-_Última atualização: 2026-08-28_
+_Última atualização: 2026-08-31_
+
+### Banco vazio depois do deploy em produção (`migrate` aplica tudo do zero, escolas somem)
+
+**Caso real confirmado (2026-08-31, servidor `192.168.90.109:8000`):**
+deploy manual rodado só com `docker compose -f docker-compose.hml.yml
+--env-file .env.hml up -d --build` (sem o
+`docker-compose.hml.override.yml`) — o log mostrou `Volume
+sistema_posvenda_hml_posvenda_db_data_hml Created` (volume **novo**) e o
+`migrate` seguinte aplicou todas as migrations desde
+`contenttypes.0001_initial`, sinal inequívoco de banco vazio (um banco
+real, já em uso, não teria essas migrations pendentes). Sintoma
+associado: 502 Bad Gateway do Nginx durante a troca de container.
+
+**Causa:** este servidor reaproveita um volume de banco de antes da
+FEAT-012 (`sistema_posvenda_posvenda_db_data`, sem sufixo `_hml`), via
+`docker-compose.hml.override.yml` — arquivo local do servidor, não
+commitado (ver `DEPLOYMENT.md`). Rodar `docker compose` sem incluir esse
+arquivo faz o Docker criar um volume novo (nome derivado do
+`docker-compose.hml.yml` puro) em vez de usar o existente.
+
+**Os dados não foram perdidos** — o volume antigo não é apagado por um
+`up`, só fica sem uso. Recuperação: `docker compose ... down` (sem `-v`),
+recriar o `docker-compose.hml.override.yml` (conteúdo em
+`DEPLOYMENT.md`) e subir de novo incluindo os dois `-f`. Confirmar com
+`migrate` (só as migrations realmente novas devem aparecer) e com a
+contagem de `Escola` (2.622).
+
+**Prevenção:** todo comando `docker compose` neste servidor usa os dois
+`-f` (`docker-compose.hml.yml` **e** `docker-compose.hml.override.yml`)
+— nunca só o primeiro. Ver `DEPLOYMENT.md`, seção "Produção".
 
 ### Imagem/logo/CSS não aparece em homologação ou produção (ícone de imagem quebrada)
 
@@ -44,6 +74,134 @@ healthcheck do `db` passar (`condition: service_healthy`). Se travar:
 existente (senha antiga) e o `.env.hml` atual (senha nova). Não há reset
 automático do volume — decisão de apagar `posvenda_db_data_hml` é
 destrutiva e exige autorização explícita (regra do DevOps).
+
+### Login via Active Directory não funciona em homologação (FEAT-027/RN-043)
+
+**Caso real confirmado (2026-08-31, servidor `192.168.90.109:8000`):** login
+com conta do AD falhava silenciosamente (formulário recarregava com erro,
+sem 500) mesmo com `python-ldap`/`django-auth-ldap` instalados e rede
+liberada até o AD.
+
+**Causa:** as credenciais reais de AD (`AD_SERVER_URI`, `AD_BIND_DN`,
+`AD_BIND_PASSWORD`, `AD_USER_SEARCH_BASE`, `AD_DEFAULT_DOMAIN`,
+`USE_AD_AUTH=true`) tinham sido preenchidas só no `.env` (usado pelo stack
+`docker-compose.yml` "plain"), não no `.env.hml` (usado pelo stack que
+efetivamente serve `:8000`, via `docker-compose.hml.yml`). Com
+`USE_AD_AUTH=false`/valores `TODO` no `.env.hml`, `config/settings.py`
+(linha ~140) nunca ativa o `LDAPBackend` — login cai só no `ModelBackend`
+local, sem erro visível (comportamento intencional do `except ImportError`
+e do fallback, ver comentário no próprio `settings.py`).
+
+**Diagnóstico:** `docker exec <container-web> printenv | grep AD_` mostra
+os valores efetivamente carregados pelo container — comparar com o que
+está em `.env.hml` no host, não assumir que bate com o `.env`.
+
+**Correção:** copiar as mesmas chaves `AD_*`/`USE_AD_AUTH` do `.env` para o
+`.env.hml` (mesma conta de serviço, decisão já registrada em
+`architecture.md`/ADR-002) e recriar o `web`:
+`docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml up -d --force-recreate web`.
+Validar com um bind de teste da conta de serviço (não usar credencial de
+usuário real no teste) antes de considerar resolvido.
+
+**Atenção ao recriar `web`/`db` neste servidor:** `--force-recreate` num
+serviço pode arrastar o `db` junto se o hash de config mudar — sempre usar
+os dois `-f` (ver entrada abaixo e a de "Banco vazio depois do deploy").
+
+### Dois stacks (`sistema_posvenda-*` "plain" e `sistema_posvenda_hml-*`) disputando o mesmo volume de banco
+
+**Caso real confirmado (2026-08-31):** ao recriar `sistema_posvenda_hml-db-1`
+depois de uma correção de `.env.hml`, o container ficou `unhealthy` com
+`[ERROR] [InnoDB] Unable to lock ./ibdata1 error: 11` em loop.
+
+**Causa:** o projeto "plain" (`docker-compose.yml`, sem `_hml` no nome do
+container) e o projeto de homologação (`docker-compose.hml.yml` +
+`docker-compose.hml.override.yml`) estavam **os dois** apontando para o
+mesmo volume externo `sistema_posvenda_posvenda_db_data`. MySQL/InnoDB só
+permite um processo com o arquivo `ibdata1` travado por vez — o segundo
+container a tentar abrir o banco fica em loop de retry até desistir. Não há
+corrupção de dado (InnoDB só lê o lock, não escreve nada além disso).
+
+**Diagnóstico:**
+`docker inspect <container-db> --format '{{range .Mounts}}{{.Name}}{{end}}'`
+nos dois containers de banco — se o `.Name` do volume for igual nos dois,
+é disputa de lock, não problema de configuração do MySQL em si.
+
+**Correção aplicada:** `docker compose -f docker-compose.yml stop db` no
+projeto "plain" (não remove container nem volume — reversível com `start`
+a qualquer momento), liberando o lock para o `db` de homologação assumir o
+volume real. Confirmar dado intacto depois:
+`docker exec <web> python manage.py shell -c "from apps.core... Escola.objects.count()"`
+(esperado: 2.622, mesma contagem da entrada "Banco vazio depois do deploy"
+acima).
+
+**Pendência:** os dois stacks não deveriam coexistir usando o mesmo volume
+— decidir com o Orquestrador/usuário se o stack "plain" ainda é necessário
+neste servidor (seu `web` já estava parado, só `db` e `email_scheduler`
+ligados) ou se deve ser desativado definitivamente. Enquanto o `db` do
+stack "plain" ficar parado, o `email_scheduler` desse stack roda sem banco.
+
+### Erro 500 ao baixar/enviar a planilha de faturamento (`FileNotFoundError: doc/FATURAMENTO MATERIAS EACE.xlsx`)
+
+**Caso real confirmado (2026-08-31, servidor `192.168.90.109:8000`):**
+`GET /ri/<id>/financeiro/planilha/` e `POST /ri/<id>/financeiro/enviar/`
+devolviam 500. Traceback do `web`:
+`FileNotFoundError: [Errno 2] No such file or directory: '/app/doc/FATURAMENTO MATERIAS EACE.xlsx'`.
+
+**Não é configuração de `.env`/`.env.hml`** — o caminho é fixo no código
+(`apps/ri/services.py`, `CAMINHO_PLANILHA_FATURAMENTO_MODELO =
+settings.BASE_DIR / "doc" / "FATURAMENTO MATERIAS EACE.xlsx"`), sem
+variável de ambiente envolvida.
+
+**Causa:** `doc/FATURAMENTO MATERIAS EACE.xlsx` está no `.gitignore` (é a
+planilha-modelo real de faturamento, tratada como dado sensível/local, não
+código). Como o deploy faz `git reset --hard origin/homolog`, esse arquivo
+nunca chega ao servidor — e sem volume dedicado, some a cada rebuild da
+imagem.
+
+**Correção aplicada:** volume nomeado `doc_hml` montado em `/app/doc` no
+serviço `web`, adicionado ao `docker-compose.hml.override.yml` (arquivo
+local do servidor, não versionado — mesmo padrão já usado para o volume
+externo do banco). O arquivo real foi copiado uma vez para dentro do volume
+via `docker cp`. Validado rodando `gerar_planilha_faturamento()` direto
+pelo `manage.py shell` (sem depender de sessão autenticada no navegador).
+
+**Atenção:** `scripts/deploy_homolog.sh` só incluía `-f
+docker-compose.hml.yml` nos comandos — sem o `-f
+docker-compose.hml.override.yml`, o próximo deploy automático recriaria os
+containers **sem** `doc_hml` nem o volume externo do banco, revertendo os
+dois problemas desta página. Corrigido no script (inclui o override
+automaticamente quando o arquivo existe no servidor) — mas essa correção
+só entra em vigor depois de mergeada/publicada na branch `homolog`.
+
+**Se o modelo da planilha mudar no futuro:** repetir o `docker cp` do
+arquivo novo para dentro do container `web` em `/app/doc/` (o volume
+`doc_hml` é persistente entre deploys, não precisa recriar o volume).
+
+### Erro 500 ao enviar e-mail do financeiro (`SMTPAuthenticationError: 535`)
+
+**Caso real confirmado (2026-08-31, servidor `192.168.90.109:8000`):**
+`POST /ri/<id>/financeiro/enviar/` devolvia 500. Traceback do `web`:
+`smtplib.SMTPAuthenticationError: (535, b'5.7.3 Authentication
+unsuccessful ...')` no `smtp.office365.com`.
+
+**Mesmo padrão do caso de AD acima:** `EMAIL_HOST_USER` no `.env.hml`
+estava com o placeholder `TODO-preencher-usuario-real` (nunca preenchido)
+— o Office365 rejeita autenticação com um usuário que não existe. A conta
+real só tinha sido configurada no `.env` local de desenvolvimento do
+usuário, nunca propagada para o `.env.hml` do servidor.
+
+**Diagnóstico:** `docker exec <container-web> printenv | grep EMAIL_` —
+comparar com o `.env.hml` do host; qualquer valor ainda `TODO` é a causa
+mais provável de 535/401 em integração de e-mail.
+
+**Correção:** sincronizar `EMAIL_HOST_USER`/`EMAIL_HOST_PASSWORD` (mesma
+conta que já funciona localmente) para o `.env.hml` e recriar `web`/
+`email_scheduler`:
+`docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml up -d`.
+
+**Validar sem enviar e-mail de verdade:** login SMTP isolado
+(`smtplib.SMTP(...).login(user, senha)`, sem `sendmail`) direto no
+container — confirma a credencial sem disparar mensagem real.
 
 ### Deploy automático (push na branch `homolog`) não dispara ou falha no job "deploy"
 

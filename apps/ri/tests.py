@@ -1034,7 +1034,7 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         # openpyxl devolve datetime (não date) ao reabrir uma célula com
         # formato de data — mesmo valor, tipo diferente no round-trip.
         self.assertEqual(aba_kit["E10"].value.date(), date(2026, 9, 21))
-        self.assertEqual(aba_kit["H10"].value, 3500.0)  # (3000 + 500) x 1
+        self.assertEqual(aba_kit["H10"].value, 3000.0)  # só equipamento (3000) x 1
         self.assertEqual(aba_kit["C16"].value, "Escola Planilha Teste")
         self.assertEqual(aba_kit["F16"].value, "Rua Teste, 123")
         self.assertEqual(aba_kit["G16"].value, "Recife")
@@ -1054,7 +1054,7 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         self.assertEqual(len(aba_kit._images), 1)
 
         aba_rack = next(ws for ws in workbook.worksheets if ws.title.strip() == "RACK")
-        self.assertEqual(aba_rack["H10"].value, 1800.0)  # 600 x 3
+        self.assertEqual(aba_rack["H10"].value, 1500.0)  # só equipamento (500) x 3
         self.assertEqual(aba_rack["I16"].value, "RACK")
         self.assertIn("ITEM LPU: RACK", aba_rack["F10"].value)
         self.assertEqual(len(aba_rack._images), 1)
@@ -1074,8 +1074,8 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba_rack = next(ws for ws in workbook.worksheets if ws.title.strip() == "RACK")
-        # Rack 5U: 600 x 3 = 1800; Rack 9U: 900 x 1 = 900; soma = 2700.
-        self.assertEqual(aba_rack["H10"].value, 2700.0)
+        # Só equipamento: Rack 5U: 500 x 3 = 1500; Rack 9U: 900 x 1 = 900; soma = 2400.
+        self.assertEqual(aba_rack["H10"].value, 2400.0)
 
     def test_kit_fora_do_catalogo_nao_inventa_valor(self):
         """RN-013/CLAUDE.md §9: KIT sem correspondência no catálogo (ex.:
@@ -1203,9 +1203,9 @@ class MontarCorpoEmailFinanceiroTests(TestCase):
             ri=self.ri, descricao_item="Rack 5U", quantidade=3, valor_unitario="0", eh_kit=False,
         )
         corpo = montar_corpo_email_financeiro(self.ri)
-        self.assertIn("Kit Cobertura Wi-Fi - 4 Access Points — 1 un. — R$ 3500.00 — R$ 3500.00", corpo)
-        self.assertIn("Rack 5U — 3 un. — R$ 600.00 — R$ 1800.00", corpo)
-        self.assertIn("Valor total: R$ 5300.00", corpo)
+        self.assertIn("Kit Cobertura Wi-Fi - 4 Access Points — 1 un. — R$ 3000.00 — R$ 3000.00", corpo)
+        self.assertIn("Rack 5U — 3 un. — R$ 500.00 — R$ 1500.00", corpo)
+        self.assertIn("Valor total: R$ 4500.00", corpo)
 
     def test_item_fora_do_catalogo_nao_inventa_valor(self):
         """RN-013/CLAUDE.md §9: item sem correspondência no catálogo (ex.:
@@ -1663,7 +1663,7 @@ class RiDetailViewTests(TestCase):
         item = RiItemRelatorioEace.objects.get(ri=ri)
         self.assertEqual(item.descricao_item, "Kit Wi-Fi Indoor")
         self.assertEqual(item.quantidade, 1)
-        self.assertEqual(item.valor_unitario, Decimal("350.00"))
+        self.assertEqual(item.valor_unitario, Decimal("300.00"))
         self.assertTrue(item.eh_kit)
 
     def test_lancar_kit_outro_relatorio_eace_sem_correspondencia_fica_com_valor_zero(self):
@@ -3025,6 +3025,26 @@ class KitPadraoModelTests(TestCase):
         )
         self.assertEqual(float(item.valor_total), 380.38)
 
+    def test_valor_faturavel_e_so_o_equipamento_nao_soma_servico(self):
+        """Correção pedida pelo usuário em 2026-08-31: o Valor Unitário
+        faturado (KIT ou Produto) vem só do equipamento — o valor de
+        serviço não entra, ao contrário de `valor_total`. Exemplo real
+        reportado: Kit 15 tinha que ficar em R$ 26.353,13 (só equipamento),
+        não ~R$ 51 mil (equipamento + serviço)."""
+        item = KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 15 Access Points", lote=9, unidade="Escola",
+            valor_equipamento="26353.13", valor_servico="25000.00",
+        )
+        self.assertEqual(item.valor_faturavel, Decimal("26353.13"))
+        self.assertNotEqual(item.valor_faturavel, item.valor_total)
+
+    def test_valor_faturavel_trata_equipamento_ausente_como_zero(self):
+        item = KitPadrao.objects.create(
+            descricao="Manutenção de Rede Interna", lote=9, unidade="Escola/Mês",
+            valor_servico="380.38",
+        )
+        self.assertEqual(item.valor_faturavel, Decimal("0"))
+
     def test_kit_fechado_por_escola_quando_unidade_e_escola(self):
         item = KitPadrao.objects.create(
             descricao="Kit Cobertura Wi-Fi - 1 Access Point", lote=9, unidade="Escola",
@@ -3466,7 +3486,7 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
         self.assertEqual(item.descricao_item, "Kit Cobertura Wi-Fi - 4 Access Points")
         self.assertTrue(item.eh_kit)
         self.assertEqual(item.quantidade, 1)
-        self.assertEqual(item.valor_unitario, Decimal("350.00"))
+        self.assertEqual(item.valor_unitario, Decimal("300.00"))
         self.assertEqual(item.num_osp, "2919")
         self.assertEqual(item.validacao_osp, "Aprovado")
         self.assertEqual(item.nota_fiscal, "289")

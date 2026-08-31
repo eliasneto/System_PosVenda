@@ -434,7 +434,7 @@ class RiItemRelatorioEaceKitForm(forms.Form):
     def instancia_selecionada(self):
         """`KitPadrao` escolhido no catálogo — `None` para a opção "Outro"
         (kit fora do catálogo, sem instância). Usada pela view para ler o
-        Valor Unitário direto (`instancia.valor_total`), sem precisar
+        Valor Unitário direto (`instancia.valor_faturavel`), sem precisar
         resolver de novo por descrição/número de Access Points."""
         escolhido = self.cleaned_data["kit"]
         return self._catalogo.get(escolhido)

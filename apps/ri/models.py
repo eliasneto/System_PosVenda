@@ -231,6 +231,17 @@ class KitPadrao(models.Model):
         return _decimal(self.valor_equipamento) + _decimal(self.valor_servico)
 
     @property
+    def valor_faturavel(self):
+        """Valor usado para preencher o Valor Unitário de um item (KIT ou
+        Produto) resolvido deste catálogo — só o valor de equipamento, sem
+        somar o valor de serviço (correção pedida pelo usuário em
+        2026-08-31: a LPU estava sendo lida com equipamento + serviço
+        somados, inflando o Valor Unitário faturado; vale para todo item,
+        não só o KIT, e para todos os Lotes). Mesmo fallback de
+        `None`/vazio que `valor_total`."""
+        return Decimal(str(self.valor_equipamento)) if self.valor_equipamento not in (None, "") else Decimal("0")
+
+    @property
     def kit_fechado_por_escola(self):
         """RN-010: True quando a Unidade indica preço fechado do KIT
         completo por escola (unidade "Escola" ou "Escola/Mês"); False
