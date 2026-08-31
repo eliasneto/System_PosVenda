@@ -20,6 +20,7 @@ import openpyxl
 import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.db import transaction
 from django.db.models import Count, DecimalField, F, Prefetch, Sum
 from django.utils import timezone
 
@@ -879,6 +880,111 @@ def sincronizar_relatorio_eace_de_todas_as_ri():
         processados.append((ri, resultado))
 
     return processados
+
+
+# ==========================================
+# Correção pontual de dados (2026-08-31, a pedido do usuário via
+# `python manage.py copiar_itens_relatorio_eace_para_ixc`): NÃO é um novo
+# Sincronizador nem altera o comportamento de RN-022/RN-023 daqui pra
+# frente — usuário confirmou (CLAUDE.md §9) que é execução única para
+# corrigir RIs já sincronizados no Lado Relatório EACE (3º lado) que ainda
+# não têm nenhum item lançado no Lado IXC (2º lado). Copia os mesmos itens
+# para o Lado IXC só quando o RI está "conectado" — `Ri.status ==
+# FATURAMENTO_CONCLUIDO` (RN-024) — e TODOS os itens do Lado 3 daquele RI
+# já estão com Nota Fiscal preenchida (usuário confirmou, 2026-08-31, que
+# "Validação OSP" não entra no filtro — só NF + conectada).
+#
+# "Conectado" usa `Ri.status`, não o campo `RiItemRelatorioEace.status_escola`
+# (RN-046): checado nos dados reais em 2026-08-31, quase todo item
+# existente tem esse campo em branco — RIs concluídos antes de a RN-046
+# existir (2026-08-28) nunca tiveram o campo backfillado, porque o
+# Sincronizador em lote pula RI já em "Faturamento Concluído"
+# (`RI_BLOQUEADO_FATURAMENTO_CONCLUIDO`, RN-020) e nunca mais revisita os
+# itens. `Ri.status == FATURAMENTO_CONCLUIDO` é o sinal confiável — só
+# chega nesse status via RN-024 (achou "Conectada" na planilha em algum
+# sync passado) ou conclusão manual, os dois casos válidos aqui.
+# ==========================================
+
+
+def identificar_ris_lado3_com_nf_sem_lado2():
+    """Levanta os RIs elegíveis para a cópia Lado 3 → Lado 2 (ver cabeçalho
+    acima) e a contagem de RIs pulados, para o management command reportar
+    antes de gravar qualquer coisa (execução em modo simulação por
+    padrão).
+
+    Devolve `(elegiveis, pulados_status_incompleto, pulados_ja_tem_lado2)`:
+    - `elegiveis`: lista de `Ri` prontos para a cópia.
+    - `pulados_status_incompleto`: RI "Faturamento Concluído" com pelo
+      menos 1 item do Lado 3 sem Nota Fiscal.
+    - `pulados_ja_tem_lado2`: RI que já tem ao menos 1 item lançado no Lado
+      IXC — nunca sobrescrito por esta correção.
+    """
+    ris = (
+        Ri.objects.filter(status=Ri.FATURAMENTO_CONCLUIDO)
+        .prefetch_related("itens_relatorio_eace", "itens_ixc")
+    )
+
+    elegiveis = []
+    pulados_status_incompleto = 0
+    pulados_ja_tem_lado2 = 0
+
+    for ri in ris:
+        itens_lado3 = list(ri.itens_relatorio_eace.all())
+        todos_com_nf = bool(itens_lado3) and all(item.nota_fiscal for item in itens_lado3)
+        if not todos_com_nf:
+            pulados_status_incompleto += 1
+            continue
+        if ri.itens_ixc.exists():
+            pulados_ja_tem_lado2 += 1
+            continue
+        elegiveis.append(ri)
+
+    return elegiveis, pulados_status_incompleto, pulados_ja_tem_lado2
+
+
+def copiar_itens_lado3_para_lado2(ris_elegiveis):
+    """Aplica a cópia identificada por `identificar_ris_lado3_com_nf_sem_lado2`:
+    para cada RI, cria no Lado IXC uma réplica exata (descrição,
+    quantidade, valor unitário, `eh_kit`) de cada item já lançado no Lado
+    Relatório EACE, registra o log da linha do tempo (RN-008) e recalcula
+    a divergência formal Lado IXC × Lado Relatório EACE (RN-003) — mesma
+    chamada já feita depois de qualquer lançamento manual nesses lados.
+    Não valida de novo os critérios de elegibilidade (responsabilidade de
+    quem chamou). Devolve o total de itens criados."""
+    total_itens = 0
+    with transaction.atomic():
+        for ri in ris_elegiveis:
+            for item in ri.itens_relatorio_eace.all():
+                novo_item = RiItemIxc.objects.create(
+                    ri=ri,
+                    descricao_item=item.descricao_item,
+                    quantidade=item.quantidade,
+                    valor_unitario=item.valor_unitario,
+                    eh_kit=item.eh_kit,
+                )
+                resumo = f"{novo_item.descricao_item} — {novo_item.quantidade} un. (copiado do Lado Relatório EACE)"
+                campo = "KIT Instalado (Lado IXC)" if novo_item.eh_kit else "Produto (Lado IXC)"
+                RiHistorico.objects.create(
+                    ri=ri,
+                    tipo=RiHistorico.LOG_CAMPO,
+                    autor=None,
+                    campo=campo,
+                    valor_anterior="",
+                    valor_novo=resumo,
+                )
+                auditar(
+                    None,
+                    Auditoria.ALTERACAO_CAMPO,
+                    entidade="Ri",
+                    entidade_id=ri.pk,
+                    campo=campo,
+                    valor_anterior="",
+                    valor_novo=resumo,
+                )
+                total_itens += 1
+            sincronizar_divergencia_kit_relatorio(ri)
+
+    return total_itens
 
 
 # ==========================================
