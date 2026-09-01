@@ -81,6 +81,14 @@ class Ri(models.Model):
     # da Escola (alerta visual quando diverge), decisão do usuário.
     municipio_ixc = models.CharField("Município (Lado IXC)", max_length=150, blank=True)
     estado_ixc = models.CharField("Estado (Lado IXC, UF)", max_length=2, blank=True)
+    # RN-048 (2026-09-01): CNPJ/CNPJ Fictício do Lado IXC — preenchimento
+    # manual, mesmo bloco de Data de Ativação/Município/Estado. Vão para a
+    # planilha de faturamento (RN-013): CNPJ na célula A16, CNPJ Fictício
+    # na B16, de cada aba. Mesmo padrão de município_ixc/estado_ixc: campo
+    # opcional aqui — "obrigatório" é só na hora de gerar a planilha/enviar
+    # o e-mail (ver `gerar_planilha_faturamento`, apps/ri/services.py).
+    cnpj = models.CharField("CNPJ (Lado IXC)", max_length=20, blank=True)
+    cnpj_ficticio = models.CharField("CNPJ Fictício (Lado IXC)", max_length=20, blank=True)
     # FEAT-008/RF-16: "dados a enviar ao financeiro" reaproveitam os itens
     # já lançados do lado IXC (sem redigitar); este campo guarda o texto
     # livre digitado no campo "Mensagem" da tela de composição de e-mail

@@ -230,11 +230,14 @@ class RiDataAtivacaoForm(forms.ModelForm):
     financeiro, não a cada "Salvar" do Lado IXC — do contrário, lançar só
     um Produto novo depois do KIT já lançado ficaria bloqueado por um
     campo sem relação nenhuma com aquela ação. Ver RN-013/`services.py`
-    (`gerar_planilha_faturamento`), onde a exigência de fato mora."""
+    (`gerar_planilha_faturamento`), onde a exigência de fato mora.
+
+    RN-048 (2026-09-01): mesmo formulário ganha CNPJ/CNPJ Fictício, mesmo
+    padrão opcional aqui — mesma exigência só na hora de gerar a planilha."""
 
     class Meta:
         model = Ri
-        fields = ["data_ativacao", "municipio_ixc", "estado_ixc"]
+        fields = ["data_ativacao", "municipio_ixc", "estado_ixc", "cnpj", "cnpj_ficticio"]
         widgets = {
             "data_ativacao": forms.DateInput(
                 attrs={"class": CAMPO_TEXTO, "type": "date"}, format="%Y-%m-%d"
@@ -245,7 +248,23 @@ class RiDataAtivacaoForm(forms.ModelForm):
             "estado_ixc": forms.TextInput(
                 attrs={"class": CAMPO_TEXTO, "placeholder": "Ex.: CE", "maxlength": 2}
             ),
+            # RN-048: mesmo padrão opcional de município/estado — texto
+            # livre, sem validação de dígito verificador (não pedido pelo
+            # usuário); "obrigatório" é só na hora de gerar a planilha/
+            # enviar o e-mail (RN-013, `gerar_planilha_faturamento`).
+            "cnpj": forms.TextInput(
+                attrs={"class": CAMPO_TEXTO, "placeholder": "Ex.: 00.000.000/0000-00"}
+            ),
+            "cnpj_ficticio": forms.TextInput(
+                attrs={"class": CAMPO_TEXTO, "placeholder": "Ex.: 00.000.000/0000-00"}
+            ),
         }
+
+    def clean_cnpj(self):
+        return (self.cleaned_data.get("cnpj") or "").strip()
+
+    def clean_cnpj_ficticio(self):
+        return (self.cleaned_data.get("cnpj_ficticio") or "").strip()
 
     def clean_estado_ixc(self):
         # RN-014: sempre 2 letras (UF), maiúsculas — mesmo padrão de

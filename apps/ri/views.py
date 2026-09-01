@@ -231,12 +231,15 @@ def _resumo_item_ixc(descricao, quantidade, valor_unitario=None):
     return resumo
 
 
-# RN-008/RN-014: rótulo de log de cada campo do formulário único de Data de
-# Ativação/Município/Estado do Lado IXC (`RiDataAtivacaoForm`).
+# RN-008/RN-014/RN-048: rótulo de log de cada campo do formulário único de
+# Data de Ativação/Município/Estado/CNPJ/CNPJ Fictício do Lado IXC
+# (`RiDataAtivacaoForm`).
 ROTULOS_CAMPO_ATIVACAO_IXC = {
     "data_ativacao": "Data de Ativação",
     "municipio_ixc": "Município (Lado IXC)",
     "estado_ixc": "Estado (Lado IXC)",
+    "cnpj": "CNPJ (Lado IXC)",
+    "cnpj_ficticio": "CNPJ Fictício (Lado IXC)",
 }
 
 

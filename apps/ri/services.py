@@ -151,10 +151,10 @@ _RE_OBS_VENCIMENTO = re.compile(r"(VENCIMENTO:\s*)\S+")
 
 
 class PlanilhaFaturamentoError(Exception):
-    """RN-013/RN-014: bloqueia a geração da planilha (envio de e-mail ou
-    download) — falta KIT, Data de Ativação, Município ou Estado do Lado
-    IXC, ou a planilha-modelo não tem nenhuma aba para basear a criação
-    automática de uma aba nova."""
+    """RN-013/RN-014/RN-048: bloqueia a geração da planilha (envio de
+    e-mail ou download) — falta KIT, Data de Ativação, Município, Estado,
+    CNPJ ou CNPJ Fictício do Lado IXC, ou a planilha-modelo não tem
+    nenhuma aba para basear a criação automática de uma aba nova."""
 
 
 def _juntar_com_e(itens):
@@ -256,14 +256,15 @@ def gerar_planilha_faturamento(ri, data_vencimento):
     clonando o layout de uma aba existente (ajuste 2026-08-26) — nada
     fica bloqueado por falta de cadastro prévio no catálogo.
 
-    RN-013/RN-014 (2026-08-26): KIT, Data de Ativação, Município e Estado
-    do Lado IXC são exigidos só AQUI — na hora de gerar a planilha (envio
-    de e-mail ou download), não a cada "Salvar" do Lado IXC (RN-011). Isso
-    evita travar o lançamento de um Produto novo, ou uma correção de Data
-    de Ativação, por causa de um campo sem relação com aquela ação — o
-    usuário só precisa ter os quatro preenchidos até o momento de enviar/
-    baixar. Levanta `PlanilhaFaturamentoError` — sem gerar nada — listando
-    tudo que falta de uma vez.
+    RN-013/RN-014 (2026-08-26)/RN-048 (2026-09-01): KIT, Data de Ativação,
+    Município, Estado, CNPJ e CNPJ Fictício do Lado IXC são exigidos só
+    AQUI — na hora de gerar a planilha (envio de e-mail ou download), não
+    a cada "Salvar" do Lado IXC (RN-011). Isso evita travar o lançamento
+    de um Produto novo, ou uma correção de Data de Ativação, por causa de
+    um campo sem relação com aquela ação — o usuário só precisa ter os
+    seis preenchidos até o momento de enviar/baixar. Levanta
+    `PlanilhaFaturamentoError` — sem gerar nada — listando tudo que falta
+    de uma vez.
 
     Agrupado pela ABA de destino, não pela descrição exata do item: vários
     produtos do catálogo (ex.: "Rack 3U", "Rack 5U") podem apontar para a
@@ -282,6 +283,10 @@ def gerar_planilha_faturamento(ri, data_vencimento):
         faltando.append("o Município (Lado IXC)")
     if not (ri.estado_ixc or "").strip():
         faltando.append("o Estado (Lado IXC)")
+    if not (ri.cnpj or "").strip():
+        faltando.append("o CNPJ (Lado IXC)")
+    if not (ri.cnpj_ficticio or "").strip():
+        faltando.append("o CNPJ Fictício (Lado IXC)")
     if faltando:
         raise PlanilhaFaturamentoError(
             "Antes de enviar o e-mail ou baixar a planilha, preencha no "
@@ -329,6 +334,10 @@ def gerar_planilha_faturamento(ri, data_vencimento):
             data_str=data_str,
         )
         aba["H10"] = float(dados["subtotal"])
+        # RN-048: CNPJ/CNPJ Fictício do Lado IXC, digitados manualmente —
+        # mesma linha 16 do Município/Estado/nome da escola abaixo.
+        aba["A16"] = ri.cnpj
+        aba["B16"] = ri.cnpj_ficticio
         aba["C16"] = escola.nome
         aba["F16"] = escola.endereco
         aba["G16"] = ri.municipio_ixc

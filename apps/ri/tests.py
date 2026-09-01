@@ -779,6 +779,8 @@ class RiEnvioFinanceiroTests(TestCase):
             municipio_ixc="Fortaleza",
             estado_ixc="CE",
             data_ativacao=date(2026, 8, 1),
+            cnpj="00.000.000/0001-00",
+            cnpj_ficticio="11.111.111/0001-11",
         )
         # RN-013: KIT sempre usa a aba fixa "NF KIT" da planilha-modelo —
         # não depende de estar cadastrado no catálogo (usado aqui só para
@@ -1030,6 +1032,8 @@ class GerarPlanilhaFaturamentoTests(TestCase):
             municipio_ixc="Recife",
             estado_ixc="PE",
             data_ativacao=date(2026, 8, 1),
+            cnpj="00.000.000/0001-00",
+            cnpj_ficticio="11.111.111/0001-11",
         )
         KitPadrao.objects.create(
             descricao="Rack 5U", lote=9, unidade="Unidade",
@@ -1062,6 +1066,9 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         # formato de data — mesmo valor, tipo diferente no round-trip.
         self.assertEqual(aba_kit["E10"].value.date(), date(2026, 9, 21))
         self.assertEqual(aba_kit["H10"].value, 3000.0)  # só equipamento (3000) x 1
+        # RN-048: CNPJ/CNPJ Fictício do Lado IXC, na mesma linha 16.
+        self.assertEqual(aba_kit["A16"].value, "00.000.000/0001-00")
+        self.assertEqual(aba_kit["B16"].value, "11.111.111/0001-11")
         self.assertEqual(aba_kit["C16"].value, "Escola Planilha Teste")
         self.assertEqual(aba_kit["F16"].value, "Rua Teste, 123")
         self.assertEqual(aba_kit["G16"].value, "Recife")
@@ -1197,6 +1204,19 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         mensagem = str(contexto.exception)
         self.assertIn("o Município (Lado IXC)", mensagem)
         self.assertIn("o Estado (Lado IXC)", mensagem)
+
+    def test_ri_sem_cnpj_e_cnpj_ficticio_bloqueia_com_mensagem_unica(self):
+        """RN-048 (2026-09-01): mesmo padrão de bloqueio de Município/Estado
+        acima — exigidos só na hora de gerar a planilha, não a cada
+        "Salvar" do Lado IXC."""
+        self.ri.cnpj = ""
+        self.ri.cnpj_ficticio = ""
+        self.ri.save(update_fields=["cnpj", "cnpj_ficticio"])
+        with self.assertRaises(PlanilhaFaturamentoError) as contexto:
+            gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        mensagem = str(contexto.exception)
+        self.assertIn("o CNPJ (Lado IXC)", mensagem)
+        self.assertIn("o CNPJ Fictício (Lado IXC)", mensagem)
 
     def test_i16_sem_sufixo_de_quantidade_com_1_unica_unidade(self):
         """Pedido do usuário (2026-08-31): o sufixo "(N)" só aparece com
@@ -2475,6 +2495,30 @@ class RiDetailViewTests(TestCase):
         entrada_estado = RiHistorico.objects.get(ri=ri, campo="Estado (Lado IXC)")
         self.assertEqual(entrada_estado.valor_novo, "CE")
 
+    def test_salvar_cnpj_e_cnpj_ficticio_gera_entrada_no_historico(self):
+        """RN-048 (2026-09-01): mesmo padrão de Município/Estado — cadastro
+        de CNPJ/CNPJ Fictício (Lado IXC) gera uma entrada por campo
+        alterado, com o valor anterior vazio (primeiro cadastro)."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {
+                "acao": "salvar_ixc",
+                **self.FORMSET_PRODUTO_VAZIO,
+                "data_ativacao": "",
+                "municipio_ixc": "",
+                "estado_ixc": "",
+                "cnpj": "00.000.000/0001-00",
+                "cnpj_ficticio": "11.111.111/0001-11",
+            },
+        )
+        entrada_cnpj = RiHistorico.objects.get(ri=ri, campo="CNPJ (Lado IXC)")
+        self.assertEqual(entrada_cnpj.valor_anterior, "")
+        self.assertEqual(entrada_cnpj.valor_novo, "00.000.000/0001-00")
+        entrada_ficticio = RiHistorico.objects.get(ri=ri, campo="CNPJ Fictício (Lado IXC)")
+        self.assertEqual(entrada_ficticio.valor_novo, "11.111.111/0001-11")
+
     def test_editar_data_ativacao_gera_entrada_so_do_campo_alterado(self):
         """Só o campo de fato alterado nessa submissão gera entrada — não
         os 3 juntos a cada "Salvar" do Lado IXC."""
@@ -2502,6 +2546,21 @@ class RiDetailViewTests(TestCase):
         """RN-014 (revista em 2026-08-26): Município/Estado NÃO travam o
         "Salvar" do Lado IXC — a exigência é só na hora de enviar o
         e-mail/baixar a planilha (RN-013), não a cada lançamento. Um KIT
+        lançado sem os dois salva normalmente."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 1)
+
+    def test_cnpj_e_cnpj_ficticio_nao_bloqueiam_o_salvar(self):
+        """RN-048 (2026-09-01): mesmo padrão de Município/Estado (RN-014) —
+        CNPJ/CNPJ Fictício NÃO travam o "Salvar" do Lado IXC; a exigência é
+        só na hora de enviar o e-mail/baixar a planilha (RN-013). Um KIT
         lançado sem os dois salva normalmente."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")

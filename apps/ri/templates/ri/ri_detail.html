@@ -277,6 +277,21 @@
             <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Data de Ativação inválida.</p>
             {% endif %}
 
+            <!-- RN-048 (2026-09-01): CNPJ/CNPJ Fictício do Lado IXC —
+                 preenchimento manual, mesmo padrão opcional de Município/
+                 Estado logo abaixo (não trava o Salvar). Exigidos só na
+                 hora de enviar o e-mail/baixar a planilha (RN-013). -->
+            <div class="flex gap-3">
+                <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 flex-1">
+                    CNPJ
+                    {{ data_ativacao_form.cnpj }}
+                </label>
+                <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 flex-1">
+                    CNPJ Fictício
+                    {{ data_ativacao_form.cnpj_ficticio }}
+                </label>
+            </div>
+
             <!-- RN-014 (2026-08-26; revista no mesmo dia): Município/Estado
                  do Lado IXC — preenchimento manual, opcional aqui (não trava
                  o Salvar). São exigidos só na hora de enviar o e-mail/baixar
@@ -299,9 +314,9 @@
                 </label>
             </div>
             <p class="text-[10px] text-gray-400 dark:text-gray-500 font-bold">
-                KIT, Data de Ativação, Município e Estado precisam estar
-                preenchidos para enviar o e-mail ou baixar a planilha do
-                financeiro (RN-013).
+                KIT, Data de Ativação, Município, Estado, CNPJ e CNPJ
+                Fictício precisam estar preenchidos para enviar o e-mail ou
+                baixar a planilha do financeiro (RN-013).
             </p>
             {% if divergencia_municipio_ixc or divergencia_estado_ixc %}
             <p class="text-[11px] font-bold text-red-500 dark:text-red-400">
