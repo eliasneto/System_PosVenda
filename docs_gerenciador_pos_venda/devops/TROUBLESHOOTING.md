@@ -214,6 +214,64 @@ conta que já funciona localmente) para o `.env.hml` e recriar `web`/
 (`smtplib.SMTP(...).login(user, senha)`, sem `sendmail`) direto no
 container — confirma a credencial sem disparar mensagem real.
 
+### Stack "plain" assumiu a produção sozinho, sem ninguém rodar `up` nele (logo/estático quebrado)
+
+**Caso real confirmado (2026-09-02, servidor `192.168.90.109:8000`):** o
+site em produção estava sendo servido pelo stack **"plain"**
+(`sistema_posvenda-*`, sem Nginx) havia mais de 1 dia — não pelo stack
+`hml` (`sistema_posvenda_hml-*`, com Nginx) que `DEPLOYMENT.md` documenta
+como o real. Sintoma: `/static/img/logo1.png` devolvia erro — mesma causa
+já registrada na entrada "Imagem/logo/CSS não aparece" acima
+(`runserver` do stack "plain" não serve `/static/` com `DEBUG=False`, sem
+Nginx na frente).
+
+**Causa raiz:** os dois stacks apontam para o **mesmo volume de banco**
+(`sistema_posvenda_posvenda_db_data`, ver entrada "Dois stacks... "
+acima). Em algum momento o `db` do stack `hml` saiu do ar (`Exited (137)`,
+provável falta de memória) e nunca foi religado manualmente. Como o `db`
+e o `web` do stack "plain" estão com `restart: always` no
+`docker-compose.yml`, **um simples reboot do host, ou o Docker reiniciar
+sozinho, é suficiente para o stack "plain" voltar a subir e retomar o
+lock do volume** — sem nenhum `git push`/deploy envolvido. Foi assim que
+ele assumiu a produção silenciosamente.
+
+**Correção aplicada:** cutover manual, autorizado pelo usuário
+diretamente ao DevOps (produção, sem servidor de homologação dedicado
+provisionado — ver `architecture.md`):
+1. Backup real do banco a partir do stack "plain" (o que estava ao vivo).
+2. `docker compose -f docker-compose.yml stop` (não destrutivo) parou
+   `db`/`web`/`email_scheduler` do stack "plain".
+3. `docker update --restart=no sistema_posvenda-db-1 sistema_posvenda-web-1
+   sistema_posvenda-email_scheduler-1` — **essencial**: sem isso, o
+   incidente se repetiria no próximo reboot do host, mesmo sem deploy
+   novo. Os 3 containers do stack "plain" continuam existindo (parados),
+   não foram removidos — reversível com `docker compose -f
+   docker-compose.yml start` se um dia precisar.
+4. `docker compose -f docker-compose.hml.yml -f
+   docker-compose.hml.override.yml --env-file .env.hml up -d --build`,
+   `migrate`, `collectstatic` — stack `hml` (com Nginx) assumiu o volume
+   real (só a migration nova apareceu no `migrate`, confirmando volume
+   certo) e passou a responder em `:8000`.
+5. Validado: `/login/` e `/static/img/logo1.png` devolvendo `200`;
+   `Escola.objects.count()` batendo com o esperado (2.718, já contando as
+   96 escolas da "Nova BASE EACE.xlsx").
+
+**Prevenção:** checar periodicamente (ou antes de qualquer deploy)
+`docker ps -a | grep sistema_posvenda` — se `sistema_posvenda-db-1`/
+`sistema_posvenda-web-1` (sem `_hml`) aparecerem `Up`, o stack errado
+assumiu de novo; investigar antes de continuar. Os 3 containers do stack
+"plain" ficam com `restart: no` a partir desta correção — se alguém
+precisar deles de volta (ex.: emergência), religar manualmente já muda
+esse comportamento, então reaplicar o `docker update --restart=no` depois
+de terminar.
+
+**Pendência (não bloqueia o site, mas falta preencher):**
+`GRAPH_FINANCEIRO_CLIENT_ID`/`_SECRET`/`_TENANT_ID` em `.env.hml`
+continuam com `TODO` — envio de e-mail do financeiro via Graph API
+(FEAT-008) não deve funcionar no stack `hml` até alguém preencher essas 3
+chaves com a credencial real (mesmo padrão dos casos de AD/SMTP
+documentados acima); DevOps não inventa esse valor.
+
 ### Deploy automático (push na branch `homolog`) não dispara ou falha no job "deploy"
 
 Confirmar que os secrets (`HML_HOST`, `HML_USER`, `HML_PORT`,

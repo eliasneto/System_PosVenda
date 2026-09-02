@@ -41,11 +41,20 @@ docker compose -f docker-compose.hml.yml --env-file .env.hml ps
 ## Produção (`192.168.90.109`) — deploy manual, passo a passo
 
 **Não existe pipeline automático para este servidor.** Toda alteração
-até hoje foi manual, sob autorização explícita do Orquestrador
+até hoje foi manual, sob autorização explícita do usuário/Orquestrador
 (`ADR-003`). Credenciais de acesso (SSH e login da aplicação) ficam no
 arquivo local `ServidorEACE` (raiz do repositório, **não versionado** —
 já sinalizado como risco de segurança em `CONTAINERS.md`/`checklist.md`;
 nunca copiar o conteúdo dele para um arquivo commitado).
+
+**Confirmado em 2026-09-02: o stack `hml` (com Nginx) é o único no ar.**
+O stack "plain" (`docker-compose.yml`, `sistema_posvenda-*`) chegou a
+assumir a produção sozinho por causa de um incidente (ver
+`TROUBLESHOOTING.md`, "Stack 'plain' assumiu a produção sozinho") — está
+parado e com `restart: no` desde então, para não voltar a acontecer num
+reboot. Antes de qualquer deploy, confirmar com `docker ps -a | grep
+sistema_posvenda` que `sistema_posvenda-db-1`/`sistema_posvenda-web-1`
+(sem `_hml`) continuam parados.
 
 Caminho no servidor: `/home/Sistem_PosVenda`. Branch do checkout real:
 **`feat-002-importar-escolas-planilha`**, não `homolog` — confirme com
