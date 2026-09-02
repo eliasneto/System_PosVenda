@@ -1,5 +1,5 @@
 # Regras de Negócio — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-08-31_ (RN-002 consolidada — confronto 1 é campo único, já implementado; RN-006 atualizada — FEAT-011 entregue)
+_Última atualização: 2026-09-02_ (RN-014 revisada — Município/Estado do Lado IXC pré-preenchidos do INEP; RN-016 corrigida — validação de domínio do remetente; RN-005 corrigida — aceita N Notas Fiscais no mesmo e-mail)
 
 ## Ciclo de Vida do RI
 

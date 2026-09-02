@@ -1,5 +1,5 @@
 # Checklist — Gerenciador Pós-Venda (v1 · Faturamento EACE por INEP)
-_Última atualização: 2026-08-31_
+_Última atualização: 2026-09-02_
 
 > **Versão-alvo:** 1.0.0. **Nome exibido no menu do sistema:** "Gerenciador
 > Pós Venda" (sem hífen) — ver `architecture.md`, "Identidade do Sistema e
@@ -1028,15 +1028,20 @@ antes de liberar o próximo passo (RN-005).
   corpo do texto.
 - NF (PDF) e XML ficam disponíveis no INEP; nova resposta substitui a
   versão anterior.
-- E-mail fora do padrão (sem 1 PDF + 1 XML, ou sem código de rastreio
-  identificável) não bloqueia o fluxo, só gera alerta no log.
+- E-mail fora do padrão (quantidade de PDF diferente da de XML, ou sem
+  código de rastreio identificável) não bloqueia o fluxo, só gera alerta
+  no log. **Revisto em 2026-09-02 (RN-005):** "no padrão" deixou de exigir
+  exatamente 1 PDF + 1 XML — financeiro pode responder com mais de 1 Nota
+  Fiscal no mesmo e-mail; ver correção abaixo.
 - Ao identificar a resposta, o status do RI muda automaticamente para
   "Aguardando Anexo portal EACE".
   **Divergência (2026-08-26):** RN-016 renomeia esse status para "Resposta
   Financeiro" e estende o gatilho para cobrir também resposta fora do
   padrão — critério acima passa a valer no formato novo; implementação é
-  da FEAT-020, não reabre esta feature.
-**Regras relacionadas:** RN-001, RN-005, RN-009, RF-08, RF-09, RF-19.
+  da FEAT-020, não reabre esta feature. **Revisto em 2026-09-02:** RN-016
+  ganhou validação de remetente (só domínio do financeiro conta como
+  resposta de verdade); ver correção abaixo.
+**Regras relacionadas:** RN-001, RN-005, RN-009, RN-016, RF-08, RF-09, RF-19.
 **Dependências:** FEAT-008 (ainda `🔍 Aguardando QA` — iniciada fora de
 ordem, autorizada explicitamente pelo usuário em 2026-08-25).
 **Tipo de validação:** QA (QA-009).
@@ -1057,10 +1062,11 @@ ordem, autorizada explicitamente pelo usuário em 2026-08-25).
   Microsoft aposentou essa autenticação); a leitura passou a usar
   Microsoft Graph, mas com um app do Azure AD **exclusivo deste sistema**
   — usuário confirmou que o Sistema_posvenda não pode depender do app do
-  `modulo-posVenda`. Esse app ainda não existe; até lá a sincronização
-  fica desligada (`GRAPH_FINANCEIRO_ENABLED=False`), então a leitura real
-  não foi validada ponta a ponta, só com a chamada ao Graph simulada nos
-  testes. **Corrigido em 2026-08-25 (Orquestrador):** o DevOps havia
+  `modulo-posVenda`. **Resolvido (confirmado em 2026-09-02):** o app do
+  Azure AD foi provisionado e a leitura real via Microsoft Graph está
+  ativa e validada ponta a ponta em produção (`GRAPH_FINANCEIRO_ENABLED`
+  ligado, e-mails reais do financeiro sendo lidos e processados) — não é
+  mais pendência. **Corrigido em 2026-08-25 (Orquestrador):** o DevOps havia
   reportado um roteiro pronto em `docs/devops/AZURE_AD_GRAPH_FINANCEIRO.md`
   — verificado agora e **esse arquivo não existe no repositório** (não há
   nem pasta `docs/` no `Sistema_posvenda`; `git status` não mostra o
@@ -1107,6 +1113,16 @@ ordem, autorizada explicitamente pelo usuário em 2026-08-25).
   validação no navegador real (Docker) confirmando um único card, sem
   duplicar arquivo, com autor "Sistema" (antes aparecia "Usuário
   removido"). Suíte completa do app `ri` (172 testes) passando.
+- **Corrigido (2026-09-02, Dev):** usuário reportou falso positivo real em
+  produção (INEP 35271561) — o eco do próprio e-mail enviado (mesma caixa
+  que envia, sem resposta de verdade do financeiro) avançava o status; em
+  casos mais graves, isso fazia a resposta real do financeiro chegar
+  depois ser descartada silenciosamente. RN-016 corrigida (só remetente do
+  domínio do financeiro conta) e RN-005 corrigida (aceita N Notas Fiscais
+  no mesmo e-mail, não só exatamente 1 PDF + 1 XML). 9 RIs com dado
+  incorreto revertidos em produção e 3 respostas reais recuperadas
+  retroativamente; correções implantadas em produção no mesmo dia (commit
+  `f1c834a`). Suíte completa (316 testes) passando.
 
 ---
 
@@ -1783,6 +1799,10 @@ navegador, depois mensagem duplicada) antes de o usuário esclarecer que
 deve travar só o envio/download, junto com KIT e Data de Ativação
 (RN-013); limite de 1 KIT por INEP (RN-015) pedido em seguida, no mesmo
 dia.
+**Revisado (2026-09-02, Dev):** RN-014 ampliada — Município/Estado nascem
+preenchidos com `Escola.municipio`/`Escola.estado` (INEP) quando o Lado
+IXC ainda está vazio, continuam editáveis; validado visualmente pelo
+usuário.
 
 ---
 
@@ -1856,10 +1876,14 @@ card de contagem, no mesmo padrão dos 2 já existentes.
   todo lugar que exibe o status (filtro do grid, badge, drill-down,
   `ri_detail`, histórico) — mesmo valor interno no banco, sem migração de
   dado nem novo status na sequência da RN-001.
-- Resposta do financeiro fora do padrão (sem 1 PDF + 1 XML reconhecíveis)
-  passa a mudar o status para "Resposta Financeiro", igual à resposta
-  válida — deixa de ficar parada em "Aguardando financeiro"; RN-005
-  continua sem bloquear em nenhum dos dois casos.
+- Resposta do financeiro fora do padrão (quantidade de PDF diferente da
+  de XML) passa a mudar o status para "Resposta Financeiro", igual à
+  resposta válida — deixa de ficar parada em "Aguardando financeiro";
+  RN-005 continua sem bloquear em nenhum dos dois casos. **Revisto em
+  2026-09-02:** só conta como resposta quando o remetente é do domínio do
+  financeiro (RN-016) — corrige falso positivo real em produção (INEP
+  35271561) em que o eco do próprio e-mail enviado avançava o status sem
+  o financeiro ter respondido.
 - Grid de INEPs (`grid_inep.html`) ganha um 3º card ao lado de "Total de
   INEPs" e "Com divergência", mesmo estilo visual, com a contagem de INEPs
   cujo RI atual está em "Resposta Financeiro".
@@ -2885,6 +2909,7 @@ INEPs continua funcionando do mesmo jeito de antes, em paralelo.
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-02 | FEAT-009/FEAT-020 corrigidas pelo Dev — usuário reportou falso positivo real em produção (INEP 35271561): RI avançava para "Resposta Financeiro" sem o financeiro ter respondido, e a resposta real chegada depois podia ser descartada silenciosamente; RN-016 corrigida (só remetente do domínio do financeiro conta como resposta) e RN-005 corrigida (aceita N Notas Fiscais no mesmo e-mail, não só exatamente 1 PDF + 1 XML — usuário reportou 2ª ocorrência, INEP 35095874, com anexos reais não sendo salvos); FEAT-018 ampliada — RN-014 revisada, Município/Estado do Lado IXC nascem preenchidos com o cadastro da Escola (INEP), continuam editáveis; correção de dado aplicada em produção sob autorização explícita do usuário (9 RIs revertidos, 3 respostas reais recuperadas retroativamente, backup prévio); correções implantadas em produção no mesmo dia (commit `f1c834a`); suíte completa (316 testes) passando | Usuário identificou o problema testando a tela real; investigação em produção (leitura direta, sem alterar nada até confirmar a causa) achou o padrão: eco do próprio e-mail enviado voltando pra caixa monitorada; features seguem `🔍 Aguardando QA`, correção é do Dev antes de o QA revisar |
 | 2026-09-02 | RN-024 retirada (Sincronizador do Relatório EACE deixa de alterar o status do RI — só lança os itens do Lado 3) e RN-003 ajustada (divergência do Lado IXC × Lado Relatório EACE deixa de acusar falso positivo quando um dos dois lados está vazio), entregues pelo Dev nas FEAT-005/FEAT-024/FEAT-025 | Usuário pediu os dois ajustes explicitamente; correção pontual aplicada aos dados já gravados (das 473 divergências abertas, 471 eram falso positivo e foram resolvidas); impacto conhecido, não resolvido nesta mudança: os cards "Kits Instalados" e "Valor já Faturado" (RN-026) dependem do RI chegar a "Faturamento Concluído", que agora só acontece pelo ciclo manual completo — usuário avisado |
 | 2026-09-02 | RN-052 criada (status "Andamento" passa a se chamar "Em Andamento"; Lado IXC só aceita lançamento/edição/exclusão com o RI nesse status — qualquer outro status fica somente leitura), entregue pelo Dev na FEAT-004 | Usuário pediu os dois ajustes explicitamente; Lado Relatório EACE não foi afetado, continua só sob a RN-020 |
 | 2026-09-02 | Criada FEAT-031 (status do RI e ação "Enviar e-mail" editáveis direto na tela de detalhe, sem sair da página) e já entregue pelo Dev, `🔍 Aguardando QA`; layout ajustado no mesmo dia (bloco reposicionado do cabeçalho para abaixo dos 3 lados); `business_rules.md` recebe RN-051 (nova) e RN-049 (nova — RI do Sincronizador em lote nasce "Implantação EACE"), RN-011 recebe correção (mensagem de erro ao reenviar formulário do Lado IXC sem alterações); RN-021 ampliada (upload aceita também o arquivo bruto exportado direto da EACE); 404 testes passando | Usuário testou a tela nova e reportou um bug real (INEP 35275505: mensagem "Selecione um KIT..." mesmo com tudo já preenchido) — corrigido no mesmo atendimento; RN-049 resolve pedido separado do mesmo dia; RN-021 valida contra arquivo real anexado pelo usuário ("Documento correto.csv", 1.783 linhas), sem tocar na Planilha EACE já ativa no ambiente local — Orquestrador só documentou, código já entregue pelo Dev |
