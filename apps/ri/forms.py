@@ -1,5 +1,3 @@
-import csv
-import io
 import re
 
 from django import forms
@@ -7,6 +5,7 @@ from django.core.validators import validate_email
 from django.db.models import F
 
 from .models import KitPadrao, PlanilhaEace, Ri, RiHistorico, RiItemIxc, RiItemRelatorioEace
+from .services import detectar_delimitador_planilha_eace
 
 CAMPO_TEXTO = (
     "w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none "
@@ -520,15 +519,15 @@ class PlanilhaEaceUploadForm(forms.Form):
             )
         finally:
             arquivo.seek(0)
-        cabecalho = next(csv.reader(io.StringIO(texto), delimiter=";"), None)
-        if not cabecalho:
+        if not texto.strip():
             raise forms.ValidationError("Arquivo vazio.")
-        colunas = {coluna.strip() for coluna in cabecalho}
-        faltando = [
-            coluna for coluna in PlanilhaEace.COLUNAS_OBRIGATORIAS if coluna not in colunas
-        ]
-        if faltando:
+        # RN-021 (ajuste 2026-09-02, pedido do usuário): aceita tanto a
+        # planilha já "tratada" (`;`) quanto o arquivo bruto exportado
+        # direto da EACE (`,`, campos entre aspas) — detecta sozinho qual
+        # dos dois foi enviado; usuário não precisa mais tratar o arquivo
+        # à mão antes de subir.
+        if detectar_delimitador_planilha_eace(texto) is None:
             raise forms.ValidationError(
-                f"Colunas obrigatórias ausentes: {', '.join(faltando)}."
+                f"Colunas obrigatórias ausentes: {', '.join(PlanilhaEace.COLUNAS_OBRIGATORIAS)}."
             )
         return arquivo

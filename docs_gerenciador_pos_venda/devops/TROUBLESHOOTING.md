@@ -177,6 +177,17 @@ só entra em vigor depois de mergeada/publicada na branch `homolog`.
 arquivo novo para dentro do container `web` em `/app/doc/` (o volume
 `doc_hml` é persistente entre deploys, não precisa recriar o volume).
 
+**O mesmo erro se repete no stack "plain" (produção), por um motivo
+diferente:** esse `web` usa bind mount do diretório do servidor
+(`.:/app` no `docker-compose.yml`), não uma imagem buildada — então não é
+o volume `doc_hml` que falta, é o próprio `doc/` nem existir em
+`/home/Sistem_PosVenda/` (nunca foi versionado, nunca foi copiado pra lá
+manualmente). Correção: `mkdir -p /home/Sistem_PosVenda/doc` e colocar o
+arquivo real ali direto (sem precisar de `docker cp` nem reiniciar
+container — o bind mount reflete na hora). Resumindo: **stack hml usa
+volume Docker nomeado (`docker cp`), stack "plain" usa arquivo direto no
+host** — são dois lugares diferentes para o mesmo arquivo.
+
 ### Erro 500 ao enviar e-mail do financeiro (`SMTPAuthenticationError: 535`)
 
 **Caso real confirmado (2026-08-31, servidor `192.168.90.109:8000`):**

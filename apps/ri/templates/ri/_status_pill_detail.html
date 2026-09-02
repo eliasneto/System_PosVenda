@@ -1,0 +1,39 @@
+{% comment %}
+Pill "Status do RI" do cabeçalho da tela de detalhe (RN-051, 2026-09-02)
+— mesmo padrão do `_responsavel_form_detail.html`: <select> com hx-post,
+auto-submit ao trocar (data-salvar-ao-trocar), sem sair da página. Troca
+de status também aparece no drill-down do grid (`_status_form.html`) —
+esta é a versão dedicada à tela de detalhe (`origem=detail`), decidindo
+o outro fragmento reposto na resposta (badge daqui, não o do grid).
+
+RN-013/RN-051: "Envio de Email para Faturamento" só aparece na lista
+quando as regras de negócio do envio estão satisfeitas hoje (KIT, Data
+de Ativação, Município, Estado, CNPJ, CNPJ Fictício, sem divergência
+aberta) — filtrado em `status_ri_opcoes_disponiveis` (view). RN-020: com
+o RI em "Faturamento Concluído", o Analista não pode trocar (mesmo
+critério de `_status_form.html`; backend também recusa).
+{% endcomment %}
+<div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white" id="status-pill-{{ ri.pk }}" hx-swap-oob="true">
+    <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Status do RI</p>
+    {% if ri.status == 'faturamento_concluido' and not usuario_administrador %}
+    <p class="text-sm font-black italic text-pv-yellow" title="Só Administrador altera o status a partir de &quot;Faturamento Concluído&quot; (RN-020)">
+        {{ ri.get_status_display }}
+    </p>
+    {% else %}
+    <form method="POST" action="{% url 'ri_status_update' pk=ri.pk %}"
+          hx-post="{% url 'ri_status_update' pk=ri.pk %}" hx-swap="none"
+          data-salvar-ao-trocar>
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <input type="hidden" name="origem" value="detail">
+        <select name="status" class="bg-transparent border-none outline-none text-sm font-black italic text-pv-yellow cursor-pointer">
+            {% if ri.status not in status_ri_manuais %}
+            <option value="{{ ri.status }}" selected>{{ ri.get_status_display }} (automático)</option>
+            {% endif %}
+            {% for valor, rotulo in status_ri_opcoes_disponiveis %}
+            <option value="{{ valor }}" {% if ri.status == valor %}selected{% endif %}>{{ rotulo }}</option>
+            {% endfor %}
+        </select>
+    </form>
+    {% endif %}
+</div>

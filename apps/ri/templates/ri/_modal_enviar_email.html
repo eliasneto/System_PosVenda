@@ -1,0 +1,73 @@
+{% comment %}
+Modal "Enviar e-mail ao financeiro" (FEAT-008/RN-013) — extraído para
+partial reaproveitável (RN-051, 2026-09-02): usado tanto pelo grid de
+INEPs (`grid_inep.html`) quanto pela tela de detalhe do RI
+(`ri_detail.html`), os dois abrindo o mesmo modal pelo botão "Enviar
+e-mail"/"Compor e-mail" (`data-abrir-modal-email`). Parâmetros: `ri`,
+`escola`, `assunto_sugerido`, `next_url` — `remetente_financeiro`/
+`para_financeiro_sugestao`/`cc_financeiro_sugestao` vêm do contexto da
+página (mesmos nos dois casos, não precisam ser passados de novo).
+{% endcomment %}
+<div id="modal-email-{{ ri.pk }}" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email>
+    <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
+    <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <form method="POST" action="{% url 'ri_enviar_email_financeiro' pk=ri.pk %}" enctype="multipart/form-data"
+              onsubmit="return confirm('Enviar este e-mail ao financeiro? O status do RI muda para \'Aguardando financeiro\'.');">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next_url }}">
+            <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800">
+                <h2 class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Enviar e-mail — INEP {{ escola.inep }}</h2>
+                <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">De</label>
+                    <input type="text" value="{{ remetente_financeiro }}" disabled
+                           class="w-full mt-1 px-3 py-2 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-500 dark:text-gray-400 cursor-not-allowed">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Para</label>
+                    <input type="text" name="para" value="{{ para_financeiro_sugestao }}" required
+                           class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Cc</label>
+                    <input type="text" name="cc" value="{{ cc_financeiro_sugestao }}"
+                           class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Assunto</label>
+                    <input type="text" name="assunto" value="{{ assunto_sugerido }}" required
+                           class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Anexo</label>
+                    <p class="text-[10px] text-gray-400 dark:text-gray-500 mb-1">A planilha de faturamento com os itens do lado IXC é gerada e anexada automaticamente (use "Baixar planilha" para conferir antes). Este campo é opcional, para anexar mais um arquivo.</p>
+                    <input type="file" name="anexo_extra" class="w-full text-xs font-bold text-gray-500 dark:text-gray-400 cursor-pointer file:mr-3 file:px-4 file:py-2 file:rounded-lg file:border-0 file:bg-[#0F0F0F] file:text-[#FFC107] file:font-black file:uppercase file:text-[10px] file:cursor-pointer">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Mensagem</label>
+                    <textarea name="mensagem" rows="4" placeholder="Ex.: kit substituído em campo..."
+                              class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300 resize-none">{{ ri.observacoes_envio_financeiro }}</textarea>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800">
+                <button type="button" data-fechar-modal-email class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                    Cancelar
+                </button>
+                {# FEAT-017/RN-013: baixa a mesma planilha que seria anexada, sem enviar nada — para validar antes de confirmar o envio. #}
+                <a href="{% url 'ri_baixar_planilha_financeiro' pk=ri.pk %}?next={{ next_url|urlencode }}"
+                   target="_blank"
+                   class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition inline-flex items-center gap-1.5">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                    Baixar planilha
+                </a>
+                <button type="submit" class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                    Enviar e-mail
+                </button>
+            </div>
+        </form>
+    </div>
+</div>

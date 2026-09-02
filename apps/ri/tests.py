@@ -40,6 +40,7 @@ from .services import (
     PlanilhaEaceSincronizacaoError,
     PlanilhaFaturamentoError,
     comparar_status_escola_relatorio,
+    detectar_delimitador_planilha_eace,
     gerar_planilha_faturamento,
     montar_corpo_email_financeiro,
     montar_dashboard_financeiro,
@@ -138,6 +139,16 @@ class GridInepViewTests(TestCase):
         resp = self.client.get(reverse("grid_inep"), {"status_conexao": Escola.CONECTADO})
         self.assertContains(resp, self.escola_com_ri.inep)
         self.assertNotContains(resp, self.escola_sem_ri.inep)
+
+    def test_assunto_sugerido_do_email_inclui_nome_da_escola(self):
+        """RN-050 (2026-09-02): assunto sugerido do e-mail ao financeiro
+        inclui o nome da escola, além do INEP — facilita identificar a
+        escola sem abrir o e-mail."""
+        escola = Escola.objects.create(inep="10000005", nome="Escola Envio Email")
+        Ri.objects.create(escola=escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, f"Faturamento EACE — INEP {escola.inep} — {escola.nome}")
 
     def test_busca_por_inep_nome_municipio_ou_uf(self):
         self.client.force_login(self.user)
@@ -342,7 +353,7 @@ class RiStatusUpdateViewTests(TestCase):
         )
         entrada = RiHistorico.objects.get(ri=ri, tipo=RiHistorico.LOG_STATUS)
         self.assertEqual(entrada.campo, "Status do RI")
-        self.assertEqual(entrada.valor_anterior, "Andamento")
+        self.assertEqual(entrada.valor_anterior, "Em Andamento")
         self.assertEqual(entrada.valor_novo, "Envio de Email para faturamento")
         self.assertEqual(entrada.autor, self.user)
 
@@ -407,16 +418,22 @@ class RiStatusUpdateViewTests(TestCase):
         ser criada manualmente para bloquear — basta o Lado IXC e o Lado
         Relatório EACE terem KIT/Produtos diferentes (RN-003) para o
         gerador automático (`sincronizar_divergencia_kit_relatorio`)
-        alimentar a mesma divergência que bloqueia a transição."""
+        alimentar a mesma divergência que bloqueia a transição. RN-003
+        (ajustada em 2026-09-02): precisa dos dois lados com algum item —
+        um lado vazio não conta como divergência."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         RiItemIxc.objects.create(
             ri=ri, descricao_item="KIT Cobertura Wi-Fi - 6 Access Points",
             quantidade=1, valor_unitario=Decimal("0.00"), eh_kit=True,
         )
-        # Sem item correspondente no Lado Relatório EACE — diverge. O
-        # recálculo roda depois de qualquer lançamento real (RN-003,
-        # `ri_detail_view`); chamado direto aqui para isolar o teste do
-        # formulário de lançamento (já coberto pela FEAT-004).
+        # Lado Relatório EACE com um KIT diferente (não vazio) — diverge
+        # de verdade. O recálculo roda depois de qualquer lançamento real
+        # (RN-003, `ri_detail_view`); chamado direto aqui para isolar o
+        # teste do formulário de lançamento (já coberto pela FEAT-004).
+        RiItemRelatorioEace.objects.create(
+            ri=ri, descricao_item="KIT Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario=Decimal("400.00"), eh_kit=True,
+        )
         sincronizar_divergencia_kit_relatorio(ri)
         self.client.force_login(self.user)
         self.client.post(
@@ -614,8 +631,7 @@ class RiStatusUpdateViewTests(TestCase):
 
     def test_conclui_faturamento_a_partir_de_aguardando_validacao_eace(self):
         """FEAT-010/RF-11: conclusão manual, disponível a partir de
-        "Aguardando validação EACE" — grava `concluido_em`, mesmo campo já
-        usado pela conclusão automática (RN-024)."""
+        "Aguardando validação EACE" — grava `concluido_em`."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.assertIsNone(ri.concluido_em)
         self.client.force_login(self.user)
@@ -1972,7 +1988,7 @@ class RiDetailViewTests(TestCase):
         vem do catálogo `KitPadrao` (aba LPU), quantidade sempre 1. Valor
         unitário (ajuste do usuário, 2026-08-24): tirado do formulário —
         nasce 0, sem informação nenhuma pedida."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
         self.client.force_login(self.analista)
         resp = self.client.post(
@@ -1996,7 +2012,7 @@ class RiDetailViewTests(TestCase):
         mesma do select), não a completa da planilha — que traz um
         qualificador entre parênteses (ex.: "(serviços, materiais e
         equipamentos)") sem utilidade na tela."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         kit = KitPadrao.objects.create(
             descricao="Kit Cobertura Wi-Fi - 4 Access Points (serviços, materiais e equipamentos)",
             unidade="Escola",
@@ -2018,7 +2034,7 @@ class RiDetailViewTests(TestCase):
     def test_segundo_kit_bloqueado_quando_ja_tem_um_lancado(self):
         """RN-011 (ajuste 2026-08-26): 1 KIT por INEP — RI que já tem um
         KIT lançado não pode lançar outro; o já lançado não muda."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         primeiro = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
         segundo = KitPadrao.objects.create(descricao="Kit Wi-Fi Outdoor", unidade="Escola")
         RiItemIxc.objects.create(
@@ -2069,7 +2085,7 @@ class RiDetailViewTests(TestCase):
     def test_produto_lancado_normalmente_mesmo_com_kit_ja_lancado(self):
         """RN-011: o bloqueio é só para KIT — lançar Produto continua
         funcionando normalmente num RI que já tem KIT."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         RiItemIxc.objects.create(
             ri=ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
             quantidade=1, valor_unitario="0", eh_kit=True,
@@ -2110,7 +2126,7 @@ class RiDetailViewTests(TestCase):
         """RN-011 (opção "Outro", 2026-08-24): kit instalado diferente de
         tudo no catálogo — pessoa escolhe "Outro" e digita o número de
         Access Points; descrição gravada segue o padrão do catálogo."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2132,7 +2148,7 @@ class RiDetailViewTests(TestCase):
     def test_lancar_kit_outro_sem_numero_nao_cria_item(self):
         """RN-011: "Outro" sem o número de Access Points não lança nada e
         mostra erro, em vez de gravar uma descrição incompleta."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2216,7 +2232,7 @@ class RiDetailViewTests(TestCase):
         um escolhido no catálogo `KitPadrao`, com Quantidade digitada
         manualmente. Valor unitário (ajuste do usuário, 2026-08-24):
         tirado do formulário — nasce 0."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         roteador = KitPadrao.objects.create(descricao="Roteador extra", unidade="Unidade")
         cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
         self.client.force_login(self.analista)
@@ -2246,7 +2262,7 @@ class RiDetailViewTests(TestCase):
         """RN-008 (esclarecida em 2026-08-26): cadastro de KIT Instalado e
         de Produto no Lado IXC gera entrada própria na linha do tempo, cada
         um com o próprio rótulo — não só a mudança de status."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
         cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
         self.client.force_login(self.analista)
@@ -2276,7 +2292,7 @@ class RiDetailViewTests(TestCase):
         """Sem valor anterior (cadastro novo, não alteração), a linha do
         tempo usa "Cadastrou", não "Alterou" — feedback claro pedido pelo
         usuário junto com o critério de aceite (RN-008, 2026-08-26)."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
         self.client.force_login(self.analista)
         self.client.post(
@@ -2292,7 +2308,7 @@ class RiDetailViewTests(TestCase):
         """Correção (2026-08-25): mesma regra do KIT Instalado vale para
         "Produtos" — grava a descrição curta, sem o qualificador entre
         parênteses do catálogo."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         nobreak = KitPadrao.objects.create(
             descricao="Nobreak (serviço, material, equipamento)", unidade="Unidade"
         )
@@ -2319,7 +2335,7 @@ class RiDetailViewTests(TestCase):
         div da linha no navegador, sem reindexar as demais — o índice do
         meio some da submissão (como se nunca tivesse sido preenchido) e
         os outros dois continuam lançando normalmente."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         roteador = KitPadrao.objects.create(descricao="Roteador extra", unidade="Unidade")
         cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
         self.client.force_login(self.analista)
@@ -2365,7 +2381,7 @@ class RiDetailViewTests(TestCase):
         repete a mensagem de erro à toa."""
         ri = Ri.objects.create(
             escola=self.escola,
-            status=Ri.IMPLANTACAO_EACE,
+            status=Ri.ANDAMENTO,
             municipio_ixc="Fortaleza",
             estado_ixc="CE",
         )
@@ -2399,10 +2415,51 @@ class RiDetailViewTests(TestCase):
         resp_f5 = self.client.get(resp.url)
         self.assertNotContains(resp_f5, "Selecione um KIT, um produto ou informe a Data de Ativação.")
 
+    def test_reenviar_formulario_ja_preenchido_sem_mudar_nada_mostra_mensagem_neutra(self):
+        """RN-011 (correção 2026-09-02, bug reportado pelo usuário — INEP
+        35275505): quando o KIT já está lançado e a Data de Ativação já
+        está preenchida, reenviar o mesmo formulário sem nenhuma alteração
+        nova (ex.: clique duplo em "Salvar") não pode repetir "Selecione
+        um KIT, um produto ou informe a Data de Ativação" — a mensagem é
+        enganosa, já que os dois já estão lá, visíveis na própria tela."""
+        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
+        ri = Ri.objects.create(
+            escola=self.escola,
+            status=Ri.ANDAMENTO,
+            data_ativacao=date(2026, 8, 26),
+            municipio_ixc="Fortaleza",
+            estado_ixc="CE",
+            cnpj="00.000.000/0001-00",
+            cnpj_ficticio="11.111.111/0001-11",
+        )
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Kit Wi-Fi Indoor", quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        self.client.force_login(self.analista)
+        # Mesma submissão que o navegador manda ao reenviar a tela já
+        # preenchida sem mexer em nada: sem campo "kit" (o <select> nem
+        # aparece mais — RN-011, kit_ja_lancado), sem linha nova de
+        # produto, e os demais campos com os MESMOS valores já salvos.
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {
+                "acao": "salvar_ixc",
+                **self.FORMSET_PRODUTO_VAZIO,
+                "data_ativacao": "2026-08-26",
+                "municipio_ixc": "Fortaleza",
+                "estado_ixc": "CE",
+                "cnpj": "00.000.000/0001-00",
+                "cnpj_ficticio": "11.111.111/0001-11",
+            },
+            follow=True,
+        )
+        self.assertContains(resp, "Nenhuma alteração para salvar.")
+        self.assertNotContains(resp, "Selecione um KIT, um produto ou informe a Data de Ativação.")
+
     def test_salvar_data_ativacao_sozinha_sem_produto(self):
         """RN-011 (2026-08-24): "Data Ativação" — um valor só do RI,
         salvo mesmo sem lançar nenhum produto na mesma submissão."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2427,7 +2484,7 @@ class RiDetailViewTests(TestCase):
     def test_lancar_produto_tambem_salva_data_ativacao_na_mesma_submissao(self):
         """RN-011: Data Ativação e lançamento de produto podem ser salvos
         juntos, na mesma submissão."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
         self.client.force_login(self.analista)
         resp = self.client.post(
@@ -2454,7 +2511,7 @@ class RiDetailViewTests(TestCase):
         """RN-014 (2026-08-26): Município/Estado do Lado IXC, salvos na
         mesma submissão do formulário único; UF sempre gravada em
         maiúsculas, mesmo padrão de Escola.estado."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2475,7 +2532,7 @@ class RiDetailViewTests(TestCase):
         """RN-008 (esclarecida em 2026-08-26): cadastro de Data de
         Ativação/Município/Estado (Lado IXC) gera uma entrada por campo
         alterado, com o valor anterior vazio (primeiro cadastro)."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.analista)
         self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2499,7 +2556,7 @@ class RiDetailViewTests(TestCase):
         """RN-048 (2026-09-01): mesmo padrão de Município/Estado — cadastro
         de CNPJ/CNPJ Fictício (Lado IXC) gera uma entrada por campo
         alterado, com o valor anterior vazio (primeiro cadastro)."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.analista)
         self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2523,7 +2580,7 @@ class RiDetailViewTests(TestCase):
         """Só o campo de fato alterado nessa submissão gera entrada — não
         os 3 juntos a cada "Salvar" do Lado IXC."""
         ri = Ri.objects.create(
-            escola=self.escola, status=Ri.IMPLANTACAO_EACE,
+            escola=self.escola, status=Ri.ANDAMENTO,
             data_ativacao=date(2026, 8, 20), municipio_ixc="Fortaleza", estado_ixc="CE",
         )
         self.client.force_login(self.analista)
@@ -2547,7 +2604,7 @@ class RiDetailViewTests(TestCase):
         "Salvar" do Lado IXC — a exigência é só na hora de enviar o
         e-mail/baixar a planilha (RN-013), não a cada lançamento. Um KIT
         lançado sem os dois salva normalmente."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
         self.client.force_login(self.analista)
         resp = self.client.post(
@@ -2562,7 +2619,7 @@ class RiDetailViewTests(TestCase):
         CNPJ/CNPJ Fictício NÃO travam o "Salvar" do Lado IXC; a exigência é
         só na hora de enviar o e-mail/baixar a planilha (RN-013). Um KIT
         lançado sem os dois salva normalmente."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
         self.client.force_login(self.analista)
         resp = self.client.post(
@@ -2575,7 +2632,7 @@ class RiDetailViewTests(TestCase):
     def test_estado_ixc_precisa_ter_2_letras(self):
         """RN-014: UF fora do padrão (2 letras) não é salva — não bloqueia
         o restante do Lado IXC, só essa submissão específica."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2596,7 +2653,7 @@ class RiDetailViewTests(TestCase):
         """RN-014: Município/Estado do Lado IXC diferentes do cadastro da
         Escola (Fortaleza/CE, ver setUp) mostram alerta visual, mas a
         submissão salva normalmente (não bloqueia)."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2633,7 +2690,7 @@ class RiDetailViewTests(TestCase):
         Kit declarado (Escola.kit_inicial = "Kit Wi-Fi Indoor", ver setUp)
         mostra alerta visual — mesma mecânica da RN-014 (município) —, mas
         o lançamento salva normalmente (não bloqueia)."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         kit = KitPadrao.objects.create(
             descricao="Kit Cobertura Wi-Fi - 15 Access Points", unidade="Escola",
         )
@@ -2674,7 +2731,7 @@ class RiDetailViewTests(TestCase):
         self.assertContains(resp, 'Nenhum KIT (Unidade "Escola") cadastrado no catálogo')
 
     def test_analista_edita_item_ixc(self):
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         item = RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
         )
@@ -2690,7 +2747,7 @@ class RiDetailViewTests(TestCase):
     def test_editar_item_ixc_gera_entrada_no_historico(self):
         """RN-008 (esclarecida em 2026-08-26): edição de item do Lado IXC
         gera entrada com valor anterior e novo — não só o cadastro."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         item = RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
         )
@@ -2706,7 +2763,7 @@ class RiDetailViewTests(TestCase):
         self.assertEqual(entrada.autor, self.analista)
 
     def test_administrador_exclui_item_ixc(self):
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         item = RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
         )
@@ -2718,7 +2775,7 @@ class RiDetailViewTests(TestCase):
     def test_excluir_item_ixc_gera_entrada_no_historico(self):
         """RN-008 (esclarecida em 2026-08-26): exclusão de item do Lado
         IXC também gera entrada, com o valor removido."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         item = RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
         )
@@ -2744,7 +2801,7 @@ class RiDetailViewTests(TestCase):
         self.assertNotContains(resp, 'value="350,00"')
 
     def test_analista_nao_pode_excluir_item_ixc(self):
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         item = RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
         )
@@ -2811,7 +2868,7 @@ class RiDetailViewTests(TestCase):
         self.assertEqual(ri.status, Ri.ENVIO_EMAIL_FATURAMENTO)
 
     def test_produto_com_quantidade_diferente_gera_divergencia(self):
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro", valor_equipamento="5.50")
         self.client.force_login(self.analista)
         self.client.post(
@@ -2838,7 +2895,7 @@ class RiDetailViewTests(TestCase):
         self.assertIn("5 un.", divergencia.descricao)
 
     def test_corrigir_item_ixc_resolve_divergencia_automaticamente(self):
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         item_ixc = RiItemIxc.objects.create(
             ri=ri, descricao_item="Cabo de rede", quantidade=10, valor_unitario="0",
         )
@@ -2862,6 +2919,58 @@ class RiDetailViewTests(TestCase):
             reverse("ri_item_ixc_update", kwargs={"item_pk": item_ixc.pk}),
             {"descricao_item": "Cabo de rede", "quantidade": 5, "valor_unitario": "0"},
         )
+        divergencia = RiDivergencia.objects.get(ri=ri, tipo=RiDivergencia.TIPO_KIT_RELATORIO)
+        self.assertIsNotNone(divergencia.resolvida_em)
+
+    def test_lado_ixc_vazio_nao_gera_divergencia_mesmo_com_relatorio_eace_preenchido(self):
+        """RN-003 (ajustada em 2026-09-02, pedido do usuário): Lado IXC
+        vazio (nada lançado ainda) não é divergência, mesmo com o Lado
+        Relatório EACE já tendo KIT/Produtos — a comparação só faz
+        sentido quando os dois lados têm algum valor lançado."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        RiItemRelatorioEace.objects.create(
+            ri=ri, descricao_item="Kit Wi-Fi Indoor", quantidade=1, valor_unitario="350.00", eh_kit=True,
+        )
+        sincronizar_divergencia_kit_relatorio(ri)
+        self.assertFalse(
+            RiDivergencia.objects.filter(ri=ri, tipo=RiDivergencia.TIPO_KIT_RELATORIO).exists()
+        )
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertFalse(resp.context["divergencia_kit_relatorio"]["diverge"])
+
+    def test_lado_relatorio_eace_vazio_nao_gera_divergencia_mesmo_com_ixc_preenchido(self):
+        """Mesma regra, lado invertido — Lado Relatório EACE vazio (ainda
+        não sincronizado) não é divergência com o Lado IXC já lançado."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Kit Wi-Fi Indoor", quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        sincronizar_divergencia_kit_relatorio(ri)
+        self.assertFalse(
+            RiDivergencia.objects.filter(ri=ri, tipo=RiDivergencia.TIPO_KIT_RELATORIO).exists()
+        )
+
+    def test_divergencia_e_resolvida_quando_lado_ixc_fica_vazio_de_novo(self):
+        """Divergência real (2 lados preenchidos, KITs diferentes) some
+        quando o item do Lado IXC é excluído e o lado fica vazio — mesma
+        mecânica de auto-resolução já usada quando os valores passam a
+        bater."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        item_ixc = RiItemIxc.objects.create(
+            ri=ri, descricao_item="Kit Wi-Fi Indoor", quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=ri, descricao_item="Kit Wi-Fi Outdoor", quantidade=1, valor_unitario="350.00", eh_kit=True,
+        )
+        sincronizar_divergencia_kit_relatorio(ri)
+        self.assertTrue(
+            RiDivergencia.objects.filter(
+                ri=ri, tipo=RiDivergencia.TIPO_KIT_RELATORIO, resolvida_em__isnull=True
+            ).exists()
+        )
+        self.client.force_login(self.admin)
+        self.client.post(reverse("ri_item_ixc_delete", kwargs={"item_pk": item_ixc.pk}))
         divergencia = RiDivergencia.objects.get(ri=ri, tipo=RiDivergencia.TIPO_KIT_RELATORIO)
         self.assertIsNotNone(divergencia.resolvida_em)
 
@@ -2969,6 +3078,13 @@ class RiDetailViewTests(TestCase):
         self.assertTrue(RiItemRelatorioEace.objects.filter(pk=item.pk).exists())
 
     def test_tela_esconde_formularios_e_acoes_dos_2_lados_em_faturamento_concluido(self):
+        """RN-020 (Lado Relatório EACE) + RN-052 (Lado IXC — "Faturamento
+        Concluído" é só um dos casos de "fora de Em Andamento"): os dois
+        lados ficam sem ação de editar/excluir item; o Lado Relatório EACE
+        esconde o formulário inteiro (RN-020, comportamento inalterado); o
+        Lado IXC mantém os campos visíveis (usuário precisa continuar
+        vendo Data Ativação/CNPJ/Município/Estado já lançados), só que
+        desabilitados (RN-052)."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
         RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="0", eh_kit=True,
@@ -2978,16 +3094,231 @@ class RiDetailViewTests(TestCase):
         )
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
-        self.assertContains(resp, "Bloqueado (Faturamento Concluído)", count=2)
+
+        # RN-020: Lado Relatório EACE — formulário inteiro some, sem ação
+        # de editar/excluir item.
+        self.assertContains(resp, "Bloqueado (Faturamento Concluído)")
         self.assertContains(
             resp,
             'RI em "Faturamento Concluído" — lançamento bloqueado até o Administrador trocar o status (RN-020).',
-            count=2,
         )
-        self.assertNotContains(resp, 'name="acao" value="salvar_ixc"')
         self.assertNotContains(resp, 'name="acao" value="salvar_relatorio_eace"')
-        self.assertNotContains(resp, "ri_item_ixc_delete")
         self.assertNotContains(resp, "ri_item_relatorio_eace_delete")
+
+        # RN-052: Lado IXC — formulário continua renderizado (campos
+        # visíveis), mas desabilitado; sem ação de editar/excluir item.
+        self.assertFalse(resp.context["lado_ixc_editavel"])
+        self.assertTrue(resp.context["kit_form"].fields["kit"].disabled)
+        self.assertTrue(resp.context["data_ativacao_form"].fields["data_ativacao"].disabled)
+        self.assertContains(resp, 'name="acao" value="salvar_ixc"')
+        self.assertContains(resp, 'Somente visualização (fora de "Em Andamento")')
+        self.assertContains(
+            resp, 'RI fora de "Em Andamento" — campos do Lado IXC em modo visualização (RN-052).'
+        )
+        self.assertNotContains(resp, "ri_item_ixc_delete")
+
+    def test_lado_ixc_bloqueia_lancamento_fora_de_em_andamento(self):
+        """RN-052 (2026-09-02): "Salvar" do Lado IXC só aceita POST com o
+        RI em "Em Andamento" — em qualquer outro status (aqui,
+        "Implantação EACE", o status inicial) o lançamento é recusado,
+        sem criar item."""
+        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
+        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+            follow=True,
+        )
+        self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 0)
+        # Mensagem exibida via django.contrib.messages, auto-escapada pelo
+        # template (`"` vira `&quot;`) — checa um trecho sem aspas.
+        self.assertContains(resp, "só são editáveis com o RI em")
+        self.assertContains(resp, "RN-052")
+
+    def test_administrador_tambem_nao_lanca_ixc_fora_de_em_andamento(self):
+        """RN-052: o bloqueio vale para os dois perfis, sem exceção de
+        Administrador — mesmo espírito da RN-020."""
+        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+        )
+        self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 0)
+
+    def test_lado_ixc_bloqueia_edicao_e_exclusao_de_item_fora_de_em_andamento(self):
+        """RN-052: com o item já lançado, editar/excluir também exige o RI
+        em "Em Andamento" — mesmo padrão de bloqueio de campo da RN-020,
+        agora aplicado a este lado."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
+        item = RiItemIxc.objects.create(
+            ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
+        )
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("ri_item_ixc_update", kwargs={"item_pk": item.pk}),
+            {"descricao_item": "Roteador Wi-Fi 6", "quantidade": 2, "valor_unitario": "150.00"},
+        )
+        item.refresh_from_db()
+        self.assertEqual(item.descricao_item, "Roteador")
+
+        self.client.post(reverse("ri_item_ixc_delete", kwargs={"item_pk": item.pk}))
+        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
+
+    def test_lado_ixc_libera_lancamento_quando_ri_volta_para_em_andamento(self):
+        """RN-052: não é um travamento permanente — com o RI em "Em
+        Andamento" o Lado IXC aceita lançamento normalmente."""
+        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 1)
+
+    def test_lado_relatorio_eace_continua_editavel_fora_de_em_andamento(self):
+        """RN-052 não altera o Lado Relatório EACE — usuário pediu o
+        bloqueio só para o Lado IXC (2º lado); RN-020 segue sozinha
+        valendo ali. Com o RI em "Implantação EACE" (fora de "Em
+        Andamento", já bloqueado para o Lado IXC), o Relatório EACE
+        continua aceitando lançamento normalmente."""
+        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
+        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "salvar_relatorio_eace", "eace-kit": kit.pk, **self.FORMSET_PRODUTO_EACE_VAZIO},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=ri).count(), 1)
+
+
+class RiDetailStatusEnvioEmailTests(TestCase):
+    """RN-051 (2026-09-02): troca de status direto na tela de detalhe do
+    RI (mesmo padrão do drill-down do grid) — "Envio de Email para
+    Faturamento" só aparece no <select> quando as regras de negócio do
+    envio (RN-013) estão satisfeitas hoje; o botão/modal "Enviar e-mail"
+    aparece na própria tela assim que o status muda para esse, sem F5
+    (HTMX, `origem=detail`)."""
+
+    def setUp(self):
+        self.analista = User.objects.create_user(
+            username="analista-envio-detail", password="senha-teste-123",
+            perfil=User.PERFIL_ANALISTA,
+        )
+        self.escola = Escola.objects.create(
+            inep="80000001", nome="Escola Envio Email Detail", municipio="Fortaleza", estado="CE",
+        )
+
+    def _preencher_requisitos_envio(self, ri):
+        """Deixa o RI pronto para "Envio de Email para Faturamento"
+        (mesma checagem de `gerar_planilha_faturamento`, RN-013)."""
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        ri.data_ativacao = date(2026, 8, 1)
+        ri.municipio_ixc = "Fortaleza"
+        ri.estado_ixc = "CE"
+        ri.cnpj = "00.000.000/0001-00"
+        ri.cnpj_ficticio = "11.111.111/0001-11"
+        ri.save()
+
+    def test_opcao_envio_email_nao_aparece_quando_nao_pronto(self):
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, '<option value="envio_email_faturamento"')
+
+    def test_opcao_envio_email_aparece_quando_pronto(self):
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self._preencher_requisitos_envio(ri)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, '<option value="envio_email_faturamento"')
+
+    def test_opcao_envio_email_continua_visivel_quando_ja_e_o_status_atual(self):
+        """Mesmo que algo torne o RI "não pronto" depois (ex.: item do KIT
+        excluído), o status atual continua representado no <select> — sem
+        isso, o navegador selecionaria outra opção qualquer, mentindo
+        sobre o status real."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, '<option value="envio_email_faturamento" selected')
+
+    def test_botao_enviar_email_nao_aparece_fora_do_status_de_envio(self):
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self._preencher_requisitos_envio(ri)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, f'data-abrir-modal-email="modal-email-{ri.pk}"')
+
+    def test_botao_enviar_email_aparece_quando_ja_esta_no_status_de_envio(self):
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
+        self._preencher_requisitos_envio(ri)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, f'data-abrir-modal-email="modal-email-{ri.pk}"')
+        self.assertContains(resp, f'INEP {self.escola.inep} — {self.escola.nome}')
+
+    def test_trocar_status_via_htmx_da_tela_de_detalhe_mostra_botao_enviar_email_sem_reload(self):
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self._preencher_requisitos_envio(ri)
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {
+                "status": Ri.ENVIO_EMAIL_FATURAMENTO,
+                "next": reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+                "origem": "detail",
+            },
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Status do RI atualizado.")
+        self.assertContains(resp, f'id="status-pill-{ri.pk}"')
+        self.assertContains(resp, f'id="acao-envio-email-{ri.pk}"')
+        self.assertContains(resp, f'data-abrir-modal-email="modal-email-{ri.pk}"')
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.ENVIO_EMAIL_FATURAMENTO)
+
+    def test_trocar_status_via_htmx_da_tela_de_detalhe_para_status_sem_envio_nao_mostra_botao(self):
+        """Origem "detail" também repõe o bloco vazio quando o novo status
+        não é "Envio de Email para Faturamento" — o botão não fica
+        "grudado" na tela depois de uma correção manual do status."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.CORRECAO_MEGA)
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {
+                "status": Ri.ANDAMENTO,
+                "next": reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+                "origem": "detail",
+            },
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertContains(resp, f'id="acao-envio-email-{ri.pk}"')
+        self.assertNotContains(resp, f'data-abrir-modal-email="modal-email-{ri.pk}"')
+
+    def test_origem_grid_continua_devolvendo_o_fragmento_do_grid(self):
+        """Sem `origem` no POST (comportamento de antes desta feature) ou
+        com `origem=grid`, a resposta continua sendo o fragmento do
+        drill-down do grid — não o da tela de detalhe."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self._preencher_requisitos_envio(ri)
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.ENVIO_EMAIL_FATURAMENTO, "next": reverse("grid_inep")},
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertContains(resp, f'id="form-status-{ri.pk}"')
+        self.assertNotContains(resp, f'id="status-pill-{ri.pk}"')
 
 
 _MEDIA_ROOT_TESTE_HISTORICO = tempfile.mkdtemp()
@@ -3490,7 +3821,7 @@ _CABECALHO_PLANILHA_EACE = (
     "Projeto;Cod Fornecedor;Fornecedor;CNPJ;Num Obra;Cod Produto;Descrição do Item;"
     "Qtde Produto;Valor Unit UR;Valor Produto;Prod Serv;Previsão de execução;"
     "Num Provisório;Num OSP;Validação OSP;Status OSP;Nota Fiscal;Enviado SAP;"
-    # RN-024: "Fase escola" (coluna S) e "Status escola" (coluna T, real).
+    # RN-046: "Fase escola" (coluna S) e "Status escola" (coluna T, real).
     "Fase escola;Status escola;Unique ID\n"
 )
 
@@ -3498,6 +3829,55 @@ _CABECALHO_PLANILHA_EACE = (
 def _csv_planilha_eace(nome="EACE.csv", linhas=None):
     conteudo = _CABECALHO_PLANILHA_EACE + "".join(linhas or [])
     return SimpleUploadedFile(nome, conteudo.encode("utf-8"), content_type="text/csv")
+
+
+# RN-021 (ajuste 2026-09-02, pedido do usuário): mesmas colunas de
+# `_CABECALHO_PLANILHA_EACE`, mas no formato BRUTO exportado direto do
+# sistema da EACE — vírgula como delimitador, campos entre aspas (a
+# vírgula também aparece dentro dos valores numéricos, formato BR:
+# "21.765,83" — só funciona citado). O sistema detecta sozinho qual dos
+# dois formatos foi enviado (`detectar_delimitador_planilha_eace`).
+_CABECALHO_PLANILHA_EACE_BRUTA = (
+    'Projeto,Cod Fornecedor,Fornecedor,CNPJ,Num Obra,Cod Produto,Descrição do Item,'
+    'Qtde Produto,Valor Unit UR,Valor Produto,Prod Serv,Previsão de execução,'
+    'Num Provisório,Num OSP,Validação OSP,Status OSP,Nota Fiscal,Enviado SAP,'
+    'Fase escola,Status escola,Unique ID\n'
+)
+
+
+def _csv_planilha_eace_bruta(nome="Documento correto.csv", linhas=None):
+    conteudo = _CABECALHO_PLANILHA_EACE_BRUTA + "".join(linhas or [])
+    return SimpleUploadedFile(nome, conteudo.encode("utf-8"), content_type="text/csv")
+
+
+def _linha_planilha_eace_bruta(
+    inep, descricao, qtd="1", num_osp="2919", validacao_osp="Aprovado", nota_fiscal="289",
+    status_escola="", valor="21.765,83",
+):
+    # Fornecedor com vírgula dentro do valor + "Valor Unit UR"/"Valor
+    # Produto" no formato BR (vírgula decimal) — os dois só ficam intactos
+    # (não quebram em coluna a mais) porque estão entre aspas; é
+    # justamente o caso que o parser tratado (`;`) não tinha que resolver.
+    return (
+        f'"{inep}","19001","Fornecedor Teste, Filial SP","00.000.000/0001-00","OBRA","",'
+        f'"{descricao}","{qtd}","{valor}","{valor}","Material","06/07/2026","3188",'
+        f'"{num_osp}","{validacao_osp}","","{nota_fiscal}","Não","5","{status_escola}","UID-TESTE"\n'
+    )
+
+
+class DetectarDelimitadorPlanilhaEaceTests(TestCase):
+    """RN-021 (ajuste 2026-09-02): detecção automática do delimitador da
+    Planilha EACE — `;` (formato já tratado) ou `,` (formato bruto, campos
+    entre aspas, exportado direto da EACE)."""
+
+    def test_reconhece_formato_tratado_com_ponto_e_virgula(self):
+        self.assertEqual(detectar_delimitador_planilha_eace(_CABECALHO_PLANILHA_EACE), ";")
+
+    def test_reconhece_formato_bruto_com_virgula_e_aspas(self):
+        self.assertEqual(detectar_delimitador_planilha_eace(_CABECALHO_PLANILHA_EACE_BRUTA), ",")
+
+    def test_arquivo_fora_dos_2_formatos_nao_e_reconhecido(self):
+        self.assertIsNone(detectar_delimitador_planilha_eace("Projeto,Descricao\n"))
 
 
 _MEDIA_ROOT_TESTE_PLANILHA_EACE = tempfile.mkdtemp()
@@ -3546,6 +3926,33 @@ class PlanilhaEaceViewTests(TestCase):
         self.assertEqual(PlanilhaEace.objects.count(), 0)
         self.assertContains(resp, "Colunas obrigatórias ausentes")
 
+    def test_upload_aceita_arquivo_bruto_exportado_direto_da_eace(self):
+        """RN-021 (ajuste 2026-09-02, pedido do usuário): a planilha
+        exportada direto do sistema da EACE vem com vírgula como
+        delimitador e campos entre aspas (a vírgula também aparece dentro
+        dos valores numéricos) — o sistema detecta e aceita sozinho, sem
+        o usuário precisar tratar o arquivo à mão antes de subir."""
+        self.client.force_login(self.admin)
+        arquivo = _csv_planilha_eace_bruta(
+            linhas=[_linha_planilha_eace_bruta("53004230", "Kit Cobertura Wi-Fi - 4 Access Points")]
+        )
+        resp = self.client.post(reverse("planilha_eace"), {"arquivo": arquivo})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(PlanilhaEace.objects.count(), 1)
+        self.assertEqual(PlanilhaEace.objects.first().nome_original, "Documento correto.csv")
+
+    def test_upload_bruto_com_coluna_faltando_e_rejeitado(self):
+        self.client.force_login(self.admin)
+        arquivo = SimpleUploadedFile(
+            "Documento correto.csv",
+            'Projeto,Descricao\n"53004230","Kit Wi-Fi"\n'.encode("utf-8"),
+            content_type="text/csv",
+        )
+        resp = self.client.post(reverse("planilha_eace"), {"arquivo": arquivo})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(PlanilhaEace.objects.count(), 0)
+        self.assertContains(resp, "Colunas obrigatórias ausentes")
+
     def test_novo_upload_substitui_anterior(self):
         self.client.force_login(self.admin)
         self.client.post(reverse("planilha_eace"), {
@@ -3585,8 +3992,8 @@ def _linha_planilha_eace(
     inep, descricao, qtd="1", num_osp="2919", validacao_osp="Aprovado", nota_fiscal="289",
     status_escola="",
 ):
-    # RN-024: `status_escola` vazio por padrão para não acionar a
-    # conclusão automática nos testes que não tratam dela.
+    # RN-046: `status_escola` vazio por padrão nos testes que não tratam
+    # dela (campo gravado por item, sem efeito no status do RI).
     return (
         f"{inep};19001;Fornecedor Teste;00.000.000/0001-00;OBRA;COD1;{descricao};{qtd};"
         f"100,00;100,00;Material;06/07/2026;3188;{num_osp};{validacao_osp};;{nota_fiscal};Não;"
@@ -3632,6 +4039,35 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
 
     def _upload_planilha(self, linhas):
         PlanilhaEace.substituir(_csv_planilha_eace(linhas=linhas), self.admin)
+
+    def test_sincroniza_a_partir_do_arquivo_bruto_exportado_direto_da_eace(self):
+        """RN-021 (ajuste 2026-09-02, pedido do usuário): mesmo
+        Sincronizador, agora alimentado por uma Planilha EACE no formato
+        BRUTO (vírgula + aspas, "Fornecedor" com vírgula dentro do valor)
+        — sem precisar tratar o arquivo à mão antes de subir; o resultado
+        é idêntico ao do formato já tratado."""
+        PlanilhaEace.substituir(
+            _csv_planilha_eace_bruta(linhas=[
+                _linha_planilha_eace_bruta(
+                    self.escola.inep, "Kit Cobertura Wi-Fi - 4 Access Points - Equip - MEGA - CO"
+                ),
+            ]),
+            self.admin,
+        )
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(len(resultado["criados"]), 1)
+        item = resultado["criados"][0]
+        self.assertEqual(item.descricao_item, "Kit Cobertura Wi-Fi - 4 Access Points")
+        self.assertTrue(item.eh_kit)
+        self.assertEqual(item.quantidade, 1)
+        # Valor vem sempre do catálogo (KitPadrao), nunca do valor bruto da
+        # planilha — confere que o "Fornecedor" com vírgula dentro do
+        # campo (só protegido pelas aspas) não descolou as colunas
+        # seguintes da linha.
+        self.assertEqual(item.valor_unitario, Decimal("300.00"))
+        self.assertEqual(item.num_osp, "2919")
+        self.assertEqual(item.validacao_osp, "Aprovado")
+        self.assertEqual(item.nota_fiscal, "289")
 
     def test_sincroniza_kit_apesar_do_sufixo_extra_no_texto(self):
         """RN-022: a Descrição real da planilha traz sufixo de fornecedor/
@@ -3714,12 +4150,11 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
         self.assertEqual(segunda["duplicados"], ["Nobreak"])
         self.assertEqual(RiItemRelatorioEace.objects.count(), 1)
 
-    def test_status_escola_conectada_conclui_o_ri_e_grava_concluido_em(self):
-        """RN-024: "Status escola" = "Conectada" muda o RI para
-        "Faturamento Concluído" e grava `concluido_em` — o RI do setUp já
-        nasce em "Implantação EACE", então este teste cobre também a
-        conclusão pulando as etapas intermediárias da RN-001."""
-        antes = timezone.now()
+    def test_sincronizar_nao_altera_status_do_ri(self):
+        """RN-024 (retirada, 2026-09-02, pedido do usuário): sincronizar o
+        Relatório EACE não altera mais o status do RI, nem quando alguma
+        linha traz "Status escola" = "Conectada" — só lança os itens do
+        Lado 3, sem nenhum efeito sobre o status."""
         self._upload_planilha([
             _linha_planilha_eace(
                 self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Conectada"
@@ -3727,15 +4162,16 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
         ])
         resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
         self.ri.refresh_from_db()
-        self.assertTrue(resultado["concluido_status_escola"])
-        self.assertEqual(self.ri.status, Ri.FATURAMENTO_CONCLUIDO)
-        self.assertIsNotNone(self.ri.concluido_em)
-        self.assertGreaterEqual(self.ri.concluido_em, antes)
+        self.assertEqual(self.ri.status, Ri.IMPLANTACAO_EACE)
+        self.assertIsNone(self.ri.concluido_em)
+        self.assertEqual(len(resultado["criados"]), 1)
+        self.assertFalse(
+            RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.LOG_STATUS).exists()
+        )
 
-    def test_status_escola_conectada_encerra_correcao_mega(self):
-        """RN-024: mesmo com o RI em "Correção MEGA", "Conectada" conclui
-        o RI sem exigir o retorno manual para "Andamento" (decisão
-        explícita do usuário)."""
+    def test_sincronizar_nao_encerra_correcao_mega(self):
+        """RN-024 (retirada): RI em "Correção MEGA" também não é mais
+        concluído automaticamente por "Status escola" = "Conectada"."""
         self.ri.status = Ri.CORRECAO_MEGA
         self.ri.save(update_fields=["status"])
         self._upload_planilha([
@@ -3743,85 +4179,16 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
                 self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Conectada"
             ),
         ])
-        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
-        self.ri.refresh_from_db()
-        self.assertTrue(resultado["concluido_status_escola"])
-        self.assertEqual(self.ri.status, Ri.FATURAMENTO_CONCLUIDO)
-
-    def test_status_escola_outro_valor_nao_muda_status_e_lanca_item_normalmente(self):
-        """RN-024: qualquer valor diferente de "Conectada" não aciona a
-        troca e não bloqueia o lançamento normal do item."""
-        self._upload_planilha([
-            _linha_planilha_eace(
-                self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Em implantação"
-            ),
-        ])
-        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
-        self.ri.refresh_from_db()
-        self.assertFalse(resultado["concluido_status_escola"])
-        self.assertEqual(self.ri.status, Ri.IMPLANTACAO_EACE)
-        self.assertIsNone(self.ri.concluido_em)
-        self.assertEqual(len(resultado["criados"]), 1)
-
-    def test_status_escola_conectada_mas_ri_ja_concluido_nao_muda_nada(self):
-        """RN-024: RI já em "Faturamento Concluído" não é afetado (mesma
-        exceção da RN-020) — checagem defensiva, sem erro."""
-        self.ri.status = Ri.FATURAMENTO_CONCLUIDO
-        self.ri.save(update_fields=["status"])
-        self._upload_planilha([
-            _linha_planilha_eace(
-                self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Conectada"
-            ),
-        ])
-        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
-        self.ri.refresh_from_db()
-        self.assertFalse(resultado["concluido_status_escola"])
-        self.assertEqual(self.ri.status, Ri.FATURAMENTO_CONCLUIDO)
-        self.assertIsNone(self.ri.concluido_em)
-
-    def test_status_escola_conectada_independe_do_lancamento_de_itens(self):
-        """RN-024: a troca de status ocorre mesmo quando o item da mesma
-        linha não tem correspondência no catálogo — são duas verificações
-        independentes sobre a mesma linha da planilha."""
-        self._upload_planilha([
-            _linha_planilha_eace(
-                self.escola.inep, "Produto Nunca Cadastrado - Equip - MEGA - CO",
-                status_escola="Conectada",
-            ),
-        ])
-        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
-        self.ri.refresh_from_db()
-        self.assertEqual(resultado["criados"], [])
-        self.assertIn(
-            "Produto Nunca Cadastrado - Equip - MEGA - CO", resultado["sem_correspondencia"]
-        )
-        self.assertTrue(resultado["concluido_status_escola"])
-        self.assertEqual(self.ri.status, Ri.FATURAMENTO_CONCLUIDO)
-
-    def test_status_escola_conectada_gera_log_no_historico(self):
-        """RN-024/RN-008: a troca automática vira uma entrada na linha do
-        tempo, igual a uma troca manual de status."""
-        self._upload_planilha([
-            _linha_planilha_eace(
-                self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Conectada"
-            ),
-        ])
         sincronizar_relatorio_eace_da_planilha(self.ri)
-        entrada = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.LOG_STATUS)
-        self.assertEqual(entrada.campo, "Status do RI (Sincronizador)")
-        self.assertEqual(entrada.valor_anterior, "Implantação EACE")
-        self.assertEqual(entrada.valor_novo, "Faturamento Concluído")
-        self.assertIsNone(entrada.autor)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.CORRECAO_MEGA)
 
-    def test_view_conclui_ri_e_mostra_mensagem_de_sucesso_mesmo_sem_item_novo(self):
-        """RN-024: quando a troca de status é o único efeito (item já
-        lançado antes), a mensagem continua como sucesso, não erro."""
-        RiItemRelatorioEace.objects.create(
-            ri=self.ri, descricao_item="Nobreak", quantidade=2, valor_unitario=Decimal("150.00"),
-        )
+    def test_view_sincronizador_nao_altera_status_e_mostra_mensagem_de_sucesso(self):
+        """Mesmo comportamento pela view (botão Sincronizador): item
+        lançado, status intacto, mensagem de sucesso."""
         self._upload_planilha([
             _linha_planilha_eace(
-                self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="2", status_escola="Conectada"
+                self.escola.inep, "Nobreak - Equip - MEGA - CO", status_escola="Conectada"
             ),
         ])
         self.client.force_login(self.analista)
@@ -3833,7 +4200,7 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
         mensagens = list(resp.context["messages"])
         self.assertEqual(mensagens[-1].tags, "success")
         self.ri.refresh_from_db()
-        self.assertEqual(self.ri.status, Ri.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(self.ri.status, Ri.IMPLANTACAO_EACE)
 
     def test_view_lanca_via_botao_sincronizador(self):
         self._upload_planilha([
@@ -4142,9 +4509,9 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
         self.assertEqual(len(resultados_por_ri[self.ri_1.pk]["criados"]), 1)
         self.assertEqual(len(resultados_por_ri[self.ri_2.pk]["criados"]), 1)
 
-    def test_status_escola_conectada_conclui_ri_tambem_no_lote(self):
-        """RN-024: mesma conclusão automática por "Status escola" vale
-        para o Sincronizador em lote, não só o individual."""
+    def test_status_escola_conectada_nao_conclui_ri_no_lote(self):
+        """RN-024 (retirada, 2026-09-02): "Status escola" = "Conectada"
+        não conclui mais o RI, nem no Sincronizador em lote."""
         self._upload_planilha([
             _linha_planilha_eace(
                 self.escola_1.inep, "Kit Cobertura Wi-Fi - 4 Access Points - MEGA - CO",
@@ -4152,13 +4519,10 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
             ),
             _linha_planilha_eace(self.escola_2.inep, "Kit Cobertura Wi-Fi - 4 Access Points - MEGA - CO"),
         ])
-        processados = sincronizar_relatorio_eace_de_todas_as_ri()
-        resultados_por_ri = {ri.pk: resultado for ri, resultado in processados}
-        self.assertTrue(resultados_por_ri[self.ri_1.pk]["concluido_status_escola"])
-        self.assertFalse(resultados_por_ri[self.ri_2.pk]["concluido_status_escola"])
+        sincronizar_relatorio_eace_de_todas_as_ri()
         self.ri_1.refresh_from_db()
-        self.assertEqual(self.ri_1.status, Ri.FATURAMENTO_CONCLUIDO)
-        self.assertIsNotNone(self.ri_1.concluido_em)
+        self.assertEqual(self.ri_1.status, Ri.IMPLANTACAO_EACE)
+        self.assertIsNone(self.ri_1.concluido_em)
 
     def test_status_escola_gravado_por_item_tambem_no_lote(self):
         """RN-046: mesma gravação por item vale para o lote — não é lógica
@@ -4209,6 +4573,32 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
         with self.assertRaises(PlanilhaEaceSincronizacaoError):
             sincronizar_relatorio_eace_de_todas_as_ri()
 
+    def test_escola_sem_ri_ganha_ri_novo_quando_tem_linha_na_planilha(self):
+        """RN-049 (2026-09-02): Escola sem nenhum RI ainda, mas com linha
+        na Planilha EACE ativa para o INEP dela, ganha um RI novo aqui —
+        nasce em "Implantação EACE" (mesmo status do "Iniciar RI" manual)
+        e já processa o item do Lado Relatório EACE nele, na mesma
+        passada."""
+        escola_sem_ri = Escola.objects.create(inep="70000009", nome="Escola Sem RI Ainda")
+        self._upload_planilha([
+            _linha_planilha_eace(escola_sem_ri.inep, "Kit Cobertura Wi-Fi - 4 Access Points - MEGA - CO"),
+        ])
+        processados = sincronizar_relatorio_eace_de_todas_as_ri()
+        ri_novo = Ri.objects.get(escola=escola_sem_ri)
+        self.assertEqual(ri_novo.status, Ri.IMPLANTACAO_EACE)
+        resultados_por_ri = {ri.pk: resultado for ri, resultado in processados}
+        self.assertEqual(len(resultados_por_ri[ri_novo.pk]["criados"]), 1)
+
+    def test_escola_sem_ri_e_sem_linha_na_planilha_continua_sem_ri(self):
+        """RN-049: sem nenhuma linha pra sincronizar, não cria RI vazio à
+        toa (CLAUDE.md §9) — mesmo comportamento de antes desta regra."""
+        escola_sem_ri = Escola.objects.create(inep="70000009", nome="Escola Sem RI Ainda")
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola_1.inep, "Kit Cobertura Wi-Fi - 4 Access Points - MEGA - CO"),
+        ])
+        sincronizar_relatorio_eace_de_todas_as_ri()
+        self.assertFalse(Ri.objects.filter(escola=escola_sem_ri).exists())
+
     def test_nao_gera_consulta_proporcional_ao_numero_de_escolas(self):
         """Mesmo prefetch do grid (FEAT-007): número de consultas não
         cresce junto com o número de Escolas/RIs processados."""
@@ -4218,7 +4608,10 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
         self._upload_planilha([
             _linha_planilha_eace(self.escola_1.inep, "Kit Cobertura Wi-Fi - 4 Access Points - MEGA - CO"),
         ])
-        with self.assertNumQueries(11):
+        # 10, não 11 (RN-003 ajustada em 2026-09-02): o KIT lançado aqui só
+        # entra no Lado Relatório EACE — Lado IXC vazio não gera mais
+        # `RiDivergencia` (1 INSERT a menos que antes da correção).
+        with self.assertNumQueries(10):
             sincronizar_relatorio_eace_de_todas_as_ri()
 
 
@@ -4320,10 +4713,10 @@ class PlanilhaEaceSincronizarTodasViewTests(TestCase):
         self.assertTrue(any("Nenhuma Planilha EACE ativa" in m for m in mensagens))
 
     @override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_SINCRONIZADOR)
-    def test_status_escola_conectada_entra_na_contagem_mesmo_sem_item_novo(self):
-        """RN-024/FEAT-025: RI concluído pela coluna "Status escola" conta
-        no resumo do lote mesmo sem item novo lançado (item já lançado
-        antes) — troca de status independe do lançamento de itens."""
+    def test_status_escola_conectada_nao_entra_na_contagem_sem_item_novo(self):
+        """RN-024 (retirada, 2026-09-02): sem item novo (já lançado antes)
+        e sem mais troca de status, o INEP não entra na contagem de
+        "atualizados" só por causa de "Status escola" = "Conectada"."""
         RiItemRelatorioEace.objects.create(
             ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
             quantidade=1, valor_unitario=Decimal("350.00"), eh_kit=True,
@@ -4340,11 +4733,11 @@ class PlanilhaEaceSincronizarTodasViewTests(TestCase):
         self.client.force_login(self.admin)
         resp = self.client.post(reverse("planilha_eace_sincronizar_todas"), follow=True)
         mensagens = [str(m) for m in resp.context["messages"]]
-        self.assertEqual(mensagens, ["Sincronização em lote: 1 INEP(s) atualizado(s)."])
+        self.assertEqual(mensagens, ["Sincronização em lote: 0 INEP(s) atualizado(s)."])
         self.ri.refresh_from_db()
-        self.assertEqual(self.ri.status, Ri.FATURAMENTO_CONCLUIDO)
-        self.assertIsNotNone(self.ri.concluido_em)
-        self.assertTrue(
+        self.assertEqual(self.ri.status, Ri.IMPLANTACAO_EACE)
+        self.assertIsNone(self.ri.concluido_em)
+        self.assertFalse(
             RiHistorico.objects.filter(
                 ri=self.ri, tipo=RiHistorico.LOG_STATUS, campo="Status do RI (Sincronizador)"
             ).exists()

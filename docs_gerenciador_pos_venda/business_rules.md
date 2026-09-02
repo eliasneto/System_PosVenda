@@ -289,6 +289,124 @@ confirmado em 2026-08-27, junto com a FEAT-006; a comparação nunca foi
 "item a item" nem envolveu Valor Unitário — "Kit declarado" sempre
 representou uma única descrição, nunca uma lista de itens)
 
+### RN-051 — Status do RI e ação "Enviar e-mail" na tela de detalhe
+
+**Descrição:** A tela de detalhe do RI (FEAT-004) ganha o status editável
+direto por lá — mesmo padrão já usado pelo campo "Responsável" (RN-012):
+`<select>` que salva sozinho ao trocar, via HTMX, sem sair da página. Ao
+entrar no status "Envio de Email para Faturamento", o botão/modal "Enviar
+e-mail" (mesmo modal de composição do Grid de INEPs — FEAT-008) aparece na
+própria tela de detalhe, sem precisar voltar para o Grid nem recarregar a
+página (F5). A opção "Envio de Email para Faturamento" só aparece na lista
+do `<select>` quando as regras de negócio de hoje permitem enviar de fato
+(RN-013).
+
+**Contexto:** Pedido do usuário em 2026-09-02 — evitar sair da tela de
+detalhe (onde ficam os 3 lados e o histórico) só para trocar o status e
+compor o e-mail, que antes só existia no Grid de INEPs. Ajuste de layout
+no mesmo dia: o bloco (status + "Enviar e-mail") saiu do cabeçalho, ao
+lado do título — ficou apertado perto do campo "Responsável" — e passou
+para logo abaixo dos 3 lados, acima do Histórico de Comunicação.
+
+**Critérios:**
+- `<select>` de status na tela de detalhe, abaixo dos 3 lados; troca salva
+  sozinha ao selecionar (sem botão "Salvar" separado), sem recarregar a
+  página.
+- Opção "Envio de Email para Faturamento" só aparece quando: há KIT
+  Instalado lançado no Lado IXC, Data de Ativação preenchida, Município e
+  Estado (Lado IXC) preenchidos, CNPJ e CNPJ Fictício (RN-048)
+  preenchidos, e não há divergência aberta bloqueante (RN-003) — mesma
+  checagem de `gerar_planilha_faturamento` (RN-013). Continua aparecendo
+  se já for o status atual do RI, mesmo que algo mude depois e deixe de
+  estar "pronto" (não esconde o próprio valor selecionado).
+- Ao entrar nesse status, o botão "Enviar e-mail" aparece automaticamente,
+  sem F5; ao sair dele (ex.: e-mail enviado, status muda sozinho para
+  "Aguardando financeiro"), o botão some do mesmo jeito.
+- A regra de quem pode trocar de/para qual status (RN-001/RN-003/RN-020)
+  não muda — só a disponibilidade da OPÇÃO nesta tela.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** `_status_ri_opcoes_disponiveis`/`_pronto_para_envio_
+email_financeiro` (apps/ri/views.py), reaproveita `itens_faltando_para_
+planilha_faturamento` extraída de `gerar_planilha_faturamento` (RN-013,
+apps/ri/services.py); partials `_status_pill_detail.html`,
+`_acao_envio_email_detail.html`, `_modal_enviar_email.html` (extraído do
+Grid — `grid_inep.html` passa a incluir o mesmo partial, sem duplicar
+HTML); delegação de evento em `core/base.html` (troca de status/clique no
+"Enviar e-mail" continuam funcionando mesmo depois de o próprio bloco ser
+reposto por uma troca HTMX).
+
+**Features relacionadas:** FEAT-004, FEAT-007, FEAT-008.
+
+**Status:** Ativa
+
+### RN-052 — Lado IXC só é editável com o RI em "Em Andamento"
+
+**Descrição:** O status "Andamento" (RN-001) passa a se chamar "Em
+Andamento" em toda a tela (rótulo de exibição — o valor interno gravado no
+banco continua `andamento`, nenhum dado existente muda). Os campos do Lado
+IXC (2º lado do RI: KIT Instalado + Produtos da RN-011, Município/Estado
+da RN-014, CNPJ/CNPJ Fictício da RN-048) só aceitam lançamento/edição/
+exclusão com o RI nesse status; em qualquer outro status (inclusive
+"Implantação EACE", o status inicial, e "Faturamento Concluído", que já
+tinha bloqueio próprio pela RN-020) os campos ficam somente leitura, para
+Administrador e Analista sem distinção. Os itens já lançados continuam
+visíveis — só deixam de ser editáveis/excluíveis — e o formulário de
+lançamento (KIT/Produtos/Data Ativação/CNPJ/Município/Estado) continua
+renderizado, com os campos desabilitados, em vez de sumir da tela: o
+usuário precisa continuar vendo os dados já preenchidos mesmo fora de "Em
+Andamento".
+
+**Contexto:** Pedido do usuário em 2026-09-02 — formaliza, no código, o que
+a RN-001 já descrevia (linha 2 da tabela do ciclo de vida: "chamado do IXC
+chega; usuário digita no sistema os dados do chamado (lado IXC)" só depois
+de o status virar "Andamento"), mas que nunca tinha sido tecnicamente
+travado; até aqui o Lado IXC só era bloqueado em "Faturamento Concluído"
+(RN-020).
+
+**Critérios:**
+- Bloqueio de campo: todo campo do formulário do Lado IXC (KIT Instalado +
+  Produtos + Data Ativação/Município/Estado/CNPJ/CNPJ Fictício) fica
+  somente leitura sempre que `ri.status != Ri.ANDAMENTO` — vale para
+  Administrador e Analista, sem exceção de perfil.
+- Diferente da RN-020 (Lado Relatório EACE, formulário some da tela), aqui
+  o formulário continua visível e desabilitado — não escondido — porque
+  Data de Ativação/CNPJ/Município/Estado são valores do próprio RI que o
+  usuário precisa continuar consultando mesmo sem poder editar.
+- Itens já lançados no Lado IXC continuam aparecendo na lista; só os
+  ícones de editar/excluir de cada item somem fora de "Em Andamento".
+- Backend também recusa a submissão fora desse status (bloqueio não é só
+  visual) — tanto o "Salvar" do formulário único quanto a edição/exclusão
+  direta de um item já lançado.
+- Assim que o RI volta para "Em Andamento" (troca manual, RN-001), o Lado
+  IXC volta a aceitar lançamento/edição normalmente — não é um travamento
+  permanente.
+- Não altera o Lado Relatório EACE (3º lado) — esse continua exclusivamente
+  sob a RN-020 (bloqueado só em "Faturamento Concluído"), sem relação com
+  esta regra.
+
+**Exceções:** não altera as demais regras do ciclo de vida (RN-001, RN-003,
+RN-020); não afeta campos fora do Lado IXC (ex.: Responsável, RN-012;
+Status do RI, RN-051).
+
+**Impacto técnico:** `apps/ri/models.py` — rótulo do `Ri.ANDAMENTO` muda
+para "Em Andamento" em `STATUS_CHOICES` (migração `0026_alter_ri_status`,
+só o `verbose_name` da choice, sem alterar o valor gravado). `apps/ri/
+views.py` — `_lado_ixc_editavel(ri)` (equivalente ao `_bloqueado_
+faturamento_concluido` da RN-020, mas para este lado); guarda a ação
+"salvar_ixc" em `ri_detail_view` e as views `ri_item_ixc_update_view`/
+`ri_item_ixc_delete_view`; campos de `kit_form`/`data_ativacao_form`/
+`produto_formset` ganham `field.disabled = True` quando não editável, para
+o template renderizar somente leitura sem esconder o formulário.
+`ri_detail.html` — variável de contexto `lado_ixc_editavel` substitui, só
+no bloco do Lado IXC, o antigo uso de `ri_bloqueado_faturamento_
+concluido` (que continua exclusivo do bloco do Lado Relatório EACE).
+
+**Features relacionadas:** FEAT-004, FEAT-006.
+
+**Status:** Ativa
+
 ## Confronto de Divergências
 
 ### RN-003 — Confronto de divergências (Relatório EACE × IXC)
@@ -320,12 +438,28 @@ itens que esta regra deixou em aberto desde 2026-08-22: com os dois lados
 escolhendo a descrição no mesmo catálogo `KitPadrao` (RN-011/RN-018), o
 casamento por Descrição igual deixou de ser uma aproximação arriscada.
 
+**Ajustada em 2026-09-02 (pedido do usuário):** o confronto só é feito
+quando os **dois** lados (IXC e Relatório EACE) já têm algum item lançado
+(KIT ou Produto). Com um dos dois lados totalmente vazio, não há
+divergência nenhuma — nem no KIT, nem nos Produtos — mesmo que o outro
+lado já tenha itens. Antes deste ajuste, um RI recém-sincronizado (só o
+Lado Relatório EACE preenchido, Lado IXC ainda não iniciado, ou o inverso)
+já entrava como "Com divergência" no Grid de INEPs (FEAT-007) só por o
+outro lado estar vazio — sem nenhuma inconsistência real entre os dois.
+Verificado nos dados reais em 2026-09-02: 473 divergências abertas hoje,
+471 delas (99,6%) eram esse falso positivo.
+
 **Critérios:**
+- Sem divergência quando o Lado IXC ou o Lado Relatório EACE está
+  totalmente vazio (nenhum KIT nem Produto lançado ainda nesse lado) —
+  ajuste de 2026-09-02, ver acima. Com os dois lados tendo algum item, os
+  critérios abaixo valem normalmente.
 - Comparação por Descrição (qual KIT/Produto do catálogo foi escolhido) +
   Quantidade — Valor Unitário não entra (ver esclarecimento acima).
 - "KIT Instalado": comparado isoladamente — no máximo 1 de cada lado
   (RN-015/RN-018). Divergência quando um lado tem KIT lançado e o outro
-  não, ou quando a Descrição do KIT difere entre os dois lados.
+  não (só quando os dois lados já têm algum item — ver acima), ou quando a
+  Descrição do KIT difere entre os dois lados.
 - "Produtos": comparados como conjunto — para cada Descrição de produto, a
   Quantidade total lançada no Lado IXC precisa ser igual à Quantidade
   total lançada no Lado Relatório EACE. Produto faltando, sobrando ou com
@@ -369,6 +503,13 @@ aqui. O grid de INEPs (FEAT-007) já destaca (fundo vermelho) o INEP com
 divergência aberta — também só falta o gerador alimentar isso. Destaque
 vermelho nos itens do Lado IXC (`ri_detail.html`) usa a mesma mecânica de
 acessibilidade já usada na RN-014 (borda + texto, não só cor).
+`comparar_kit_e_produtos_ixc_relatorio` (`apps/ri/services.py`) ganha a
+checagem de lado vazio (ajuste 2026-09-02) antes de montar o confronto.
+Correção pontual dos dados já gravados: management command
+`recalcular_divergencia_kit_relatorio` (modo simulação por padrão,
+`--aplicar` para gravar), já rodado com `--aplicar` (autorizado pelo
+usuário) contra o banco real em 2026-09-02 — das 473 divergências abertas,
+471 foram resolvidas (falso positivo), restam 2 divergências reais.
 
 **Features relacionadas:** FEAT-004, FEAT-005, FEAT-006, FEAT-007.
 
@@ -376,7 +517,8 @@ acessibilidade já usada na RN-014 (borda + texto, não só cor).
 Descrição + Quantidade, sem Valor Unitário; pendência de casamento entre
 itens encerrada) — **extensão (RN-018, 2026-08-27):** exceção de editar/
 excluir do Relatório EACE deixou de valer só para o KIT, passa a valer
-também para Produtos.
+também para Produtos — **ajuste (2026-09-02):** lado vazio deixa de ser
+divergência.
 
 ## Permissões
 
@@ -680,6 +822,29 @@ models.py` — `KitPadrao.aba_planilha_financeiro` (opcional, migration
 
 **Status:** Ativa
 
+### RN-050 — Assunto do e-mail ao financeiro inclui o nome da escola
+
+**Descrição:** O assunto sugerido do e-mail de faturamento ao financeiro
+(FEAT-008) passa a incluir o nome da escola, além do INEP — código de
+rastreio (RN-009) continua igual, no início do assunto.
+
+**Contexto:** Pedido do usuário em 2026-09-01 — o financeiro recebe
+muitos e-mails com INEPs parecidos; o nome da escola ajuda a identificar
+do que se trata sem precisar abrir o e-mail.
+
+**Critérios:** assunto sugerido segue o formato `#RI-AAAAMMDD-INEP -
+Faturamento EACE — INEP <inep> — <nome da escola>`; mesmo texto tanto no
+Grid de INEPs quanto na tela de detalhe do RI (RN-051).
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** `_assunto_sugerido_email` (apps/ri/views.py),
+reaproveitada pelo Grid (FEAT-007) e pela tela de detalhe (RN-051).
+
+**Features relacionadas:** FEAT-008.
+
+**Status:** Ativa
+
 ## Segunda Validação Financeira
 
 ### RN-005 — Segunda validação da Nota Fiscal recebida
@@ -972,7 +1137,15 @@ de remover uma linha de produto aberta por engano.
 - Formulário único, botão único "Salvar". Submissão sem nada preenchido
   (nenhum KIT, nenhum produto, Data Ativação sem mudança) mostra erro
   ("Selecione um KIT, um produto ou informe a Data de Ativação.") e não
-  grava nada.
+  grava nada. **Correção (2026-09-02, bug reportado pelo usuário — INEP
+  35275505):** essa mesma mensagem aparecia também quando o KIT e/ou a
+  Data de Ativação **já estavam lançados/preenchidos** e o usuário só
+  reenviava a tela sem mudar nada (ex.: clique duplo em "Salvar") — ficava
+  enganosa, dando a entender que nada tinha sido preenchido. Nesse caso
+  (KIT já lançado ou Data de Ativação já preenchida, mas nada novo na
+  submissão), a mensagem passa a ser "Nenhuma alteração para salvar."; a
+  mensagem original continua valendo só quando de fato nada foi
+  preenchido ainda.
 - "KIT Instalado": opcional a cada submissão (não trava o "Salvar" quando
   em branco). Quando selecionado, Quantidade é sempre 1 e a descrição vem
   de uma lista — catálogo `KitPadrao` (LPU) filtrado à Unidade
@@ -1181,12 +1354,22 @@ reprocessado a cada sincronização.
   no máximo 1 arquivo ativo por vez.
 - Tela exibe nome do arquivo ativo, data/hora e usuário do último upload.
 - Ação de upload restrita a Administrador (extensão da RN-004).
+- Ampliação (2026-09-02, pedido do usuário): aceita também o arquivo
+  **bruto**, exportado direto do sistema da EACE, sem precisar tratar à
+  mão antes de subir — vírgula como delimitador e campos entre aspas (a
+  vírgula também aparece dentro dos valores numéricos, formato BR:
+  `"21.765,83"`, só funciona por causa das aspas). O sistema detecta
+  sozinho, pelo cabeçalho, qual dos dois formatos foi enviado — o já
+  tratado (`;`, sem aspas) continua aceito do mesmo jeito.
 
 **Exceções:** nenhuma.
 
 **Impacto técnico:** novo model de metadado do arquivo ativo (nome,
 caminho, enviado_por, enviado_em) — sem tabela de linhas da planilha; nova
-rota/tela sob o grupo de menu "Administrador".
+rota/tela sob o grupo de menu "Administrador". Detecção de delimitador
+(2026-09-02): `detectar_delimitador_planilha_eace` (apps/ri/services.py),
+usada tanto na validação do upload (`PlanilhaEaceUploadForm`) quanto na
+leitura de fato (`_agrupar_linhas_planilha_eace_por_inep`, RN-022).
 
 **Features relacionadas:** FEAT-023.
 
@@ -1311,9 +1494,24 @@ N+1 (mesmo padrão do grid, FEAT-007).
 
 **Status:** Ativa
 
-### RN-024 — Conclusão automática do RI pela coluna "Status escola" da Planilha EACE
+### RN-024 — Conclusão automática do RI pela coluna "Status escola" da Planilha EACE (RETIRADA em 2026-09-02)
 
-**Descrição:** O Sincronizador individual (RN-022/FEAT-024) e o
+**Retirada em 2026-09-02, pedido do usuário:** esta regra foi removida —
+sincronizar o Relatório EACE (individual ou em lote) **não altera mais o
+status do RI**, nem quando a coluna "Status escola" traz "Conectada"; só
+lança os itens do Lado 3, como antes de existir esta regra. Motivo: o
+usuário identificou que a troca automática estava acontecendo sempre que
+havia KIT alterado no Lado 3, sem o controle esperado sobre quando o
+faturamento é de fato concluído. **Impacto conhecido, não resolvido nesta
+mudança:** os cards "Kits Instalados" (dashboard Equipamentos, RN-026-
+style) e "Valor já Faturado" (RN-026) contam a partir de
+`Ri.status == FATURAMENTO_CONCLUIDO` — sem a conclusão automática, esse
+status só é alcançado pelo ciclo manual completo (RN-001), então esses
+números tendem a ficar bem menores até o usuário decidir se quer uma nova
+fonte para eles. Texto original da regra preservado abaixo, para
+referência histórica — nada dele vale mais a partir desta data.
+
+**Descrição (histórico, não vale mais):** O Sincronizador individual (RN-022/FEAT-024) e o
 Sincronizador em lote (RN-023/FEAT-025) passam a ler também a coluna
 "Status escola" (coluna T) do arquivo ativo da Planilha EACE (RN-021).
 Quando o valor dessa coluna for exatamente "Conectada" para o INEP do RI,
@@ -1366,7 +1564,7 @@ RE/RI; RN-024 é automático, a partir da planilha).
 
 **Features relacionadas:** FEAT-024, FEAT-025.
 
-**Status:** Ativa
+**Status:** Retirada (2026-09-02) — ver nota no topo desta regra.
 
 ### RN-046 — Divergência de "Status escola" entre produtos do mesmo INEP (Lado 3)
 **Descrição:** Cada item lançado no Lado Relatório EACE (3º lado,
@@ -1417,6 +1615,67 @@ itens do mesmo RI (mesma camada de `sincronizar_divergencia_kit_relatorio`,
 RN-002/RN-003) exposta ao template do Lado 3.
 
 **Features relacionadas:** FEAT-024, FEAT-025.
+
+**Status:** Ativa
+
+### RN-048 — CNPJ e CNPJ Fictício do Lado IXC
+
+**Descrição:** O Lado IXC (2º lado) ganha dois campos de texto livre,
+digitados manualmente: CNPJ e CNPJ Fictício. Vão para a planilha de
+faturamento (RN-013): CNPJ na célula A16, CNPJ Fictício na B16, de cada
+aba gerada.
+
+**Contexto:** Pedido do usuário em 2026-09-01 — os dois valores precisam
+constar na planilha de faturamento enviada ao financeiro.
+
+**Critérios:**
+- Campos exibidos no formulário do Lado IXC, logo abaixo de "Data
+  Ativação".
+- Preenchimento opcional para "Salvar" o Lado IXC — mesmo padrão de
+  Município/Estado (RN-014): exigidos só na hora de gerar a planilha/
+  enviar o e-mail (RN-013), nunca a cada "Salvar".
+- Alteração de qualquer um dos dois gera entrada na linha do tempo
+  (RN-008).
+
+**Exceções:** texto livre — sem validação de dígito verificador (não
+pedida pelo usuário).
+
+**Impacto técnico:** campos `Ri.cnpj`/`Ri.cnpj_ficticio` (migration
+`0025`); `RiDataAtivacaoForm`; `gerar_planilha_faturamento` (RN-013) grava
+nas células A16/B16 de cada aba.
+
+**Features relacionadas:** FEAT-008, FEAT-017.
+
+**Status:** Ativa
+
+### RN-049 — RI criado pelo Sincronizador em lote nasce "Implantação EACE"
+
+**Descrição:** Ao rodar o Sincronizador em lote (FEAT-025) sobre uma
+Escola que ainda não tem nenhum RI, mas que tem linha na Planilha EACE
+ativa (RN-021) para o INEP dela, o sistema cria o RI ali mesmo — com
+status "Implantação EACE" (RN-001), mesmo status do "Iniciar RI" manual
+— e já processa os itens do Lado Relatório EACE nele, na mesma passada.
+
+**Contexto:** Pedido do usuário em 2026-09-02 — antes, uma Escola sem RI
+era sempre pulada silenciosamente pelo Sincronizador em lote, mesmo tendo
+dado pronto para sincronizar; alguém precisava abrir a tela e clicar
+"Iniciar RI" manualmente para cada Escola nova antes do lote conseguir
+processá-la.
+
+**Critérios:**
+- Escola sem RI e **sem** linha na Planilha EACE continua sem RI — não
+  cria um RI vazio sem motivo.
+- Escola sem RI e **com** linha: RI novo nasce "Implantação EACE".
+- RI recém-criado entra no restante do processamento do Sincronizador
+  daquela mesma passada (itens lançados, "Status escola" conferido,
+  RN-024).
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** `sincronizar_relatorio_eace_de_todas_as_ri`
+(apps/ri/services.py).
+
+**Features relacionadas:** FEAT-025.
 
 **Status:** Ativa
 
@@ -1515,6 +1774,12 @@ view/seção do dashboard da RN-025 (`apps/core`, `home.html`).
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-02 | RN-024 retirada (Sincronizador do Relatório EACE deixa de mudar o status do RI — só lança os itens do Lado 3, mesmo com "Status escola" = "Conectada"); RN-003 ajustada (Lado IXC ou Lado Relatório EACE totalmente vazio deixa de contar como divergência — confronto só faz sentido com os dois lados tendo algum valor) | Usuário pediu os dois ajustes explicitamente; RN-003 corrige bug real identificado nos dados (473 divergências "Com divergência" abertas, 471 delas falso positivo por lado vazio, já corrigidas nos dados gravados); afeta FEAT-024/FEAT-025 (RN-024) e FEAT-005/FEAT-007 (RN-003); impacto conhecido e não resolvido nesta mudança: cards "Kits Instalados"/"Valor já Faturado" (RN-026) dependem do RI estar "Faturamento Concluído", que agora só é alcançado pelo ciclo manual completo — usuário avisado |
+| 2026-09-02 | RN-052 criada (rótulo do status "Andamento" passa a "Em Andamento"; Lado IXC só aceita lançamento/edição/exclusão com o RI nesse status — qualquer outro status fica somente leitura, formulário continua visível e desabilitado, não escondido) | Usuário pediu explicitamente os dois ajustes; formaliza no código o que a RN-001 já descrevia (dados do Lado IXC digitados só depois do status virar "Andamento"), mas que nunca tinha sido tecnicamente travado — antes só "Faturamento Concluído" bloqueava (RN-020); Lado Relatório EACE não afetado, continua só sob a RN-020; afeta FEAT-004/FEAT-006 |
+| 2026-09-02 | RN-021 ampliada (aceita também o arquivo bruto exportado direto da EACE — vírgula + aspas, detectado sozinho pelo cabeçalho, sem precisar tratar à mão antes de subir) | Usuário anexou um arquivo real da EACE ("Documento correto.csv") mostrando que o formato bruto difere do já tratado só no delimitador (vírgula + aspas vs. ponto e vírgula sem aspas) — mesmas colunas/nomes nos dois; validado contra o arquivo real (1.783 linhas) sem alterar a Planilha EACE já ativa no ambiente local |
+| 2026-09-02 | RN-051 criada (status do RI e ação "Enviar e-mail" editáveis direto na tela de detalhe, sem sair da página); RN-049 criada (RI do Sincronizador em lote nasce "Implantação EACE"); RN-011 recebe correção (mensagem de erro ao reenviar formulário sem mudanças) | Usuário pediu trocar o status e compor o e-mail sem sair da tela de detalhe do RI (bloco reposicionado no mesmo dia, do cabeçalho para abaixo dos 3 lados); testando a tela, reportou bug real (INEP 35275505) — mensagem "Selecione um KIT..." aparecia mesmo com tudo já preenchido, ao reenviar sem mudar nada; RN-049 resolve um pedido separado: Escola sem RI, mas com linha na Planilha EACE, ganha um RI automaticamente ao rodar o Sincronizador em lote, em vez de ficar pulada até alguém abrir a tela e clicar "Iniciar RI" à mão; gera FEAT-031 |
+| 2026-09-01 | RN-048 criada (CNPJ e CNPJ Fictício do Lado IXC, gravados nas células A16/B16 da planilha de faturamento); RN-050 criada (assunto do e-mail ao financeiro passa a incluir o nome da escola) | Usuário pediu os dois campos novos no Lado IXC, mesmo padrão opcional de Município/Estado (RN-014) — confirmado com o usuário: exigidos só na hora de gerar a planilha/enviar o e-mail (RN-013), não a cada "Salvar"; assunto do e-mail ganhou o nome da escola no mesmo pedido, pra facilitar identificação pelo financeiro |
+| 2026-09-01 | Correção pontual de dados (sem RN nova): importadas 96 escolas novas de "Nova BASE EACE.xlsx" (formato de planilha diferente do CONSOLIDADO EACE.xlsx já coberto pela RN-007) | Usuário autorizou explicitamente rodar em produção; comando novo (`importar_nova_base_eace`) segue a mesma regra de segurança do importador existente — só cria INEP que ainda não existe, nunca sobrescreve; backup do banco tirado antes, validado contra o banco real antes de aplicar; estende FEAT-002 |
 | 2026-08-31 | RN-002 consolidada — confronto 1 (Kit declarado × IXC) é comparação de campo único (descrição do KIT), não item a item; fecha a pendência da FEAT-005 sem código novo | Investigação confirmou que `RiItemEace` nunca guardou lista de produtos avulsos (RN-010 removeu o lançamento manual em 2026-08-24) e que o alerta (`divergencia_kit`) já estava implementado e confirmado desde 2026-08-27 (FEAT-006); usuário confirmou que não há mais nada a fazer |
 | 2026-08-31 | RN-006, campo "Exceções" atualizado | FEAT-011 entregue pelo Dev — decisão de implementação exercida (estendeu o `apps/auditoria` já existente, sem log específico à parte); aguardando QA |
 | 2026-08-28 | RN-047 criada (usuário já autenticado que acessar `/login/` deve ser redirecionado ao dashboard, sem ver o formulário) | Usuário reportou, com print, que a tela de login aparecia com o menu lateral (sidebar) sobreposto; causa: `LoginView` do Django não redireciona por padrão quem já tem sessão ativa; gera `FEAT-030`, correção pendente do Dev |

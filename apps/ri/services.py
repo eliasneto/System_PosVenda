@@ -247,6 +247,39 @@ def _item_lpu_e_aba(descricao, eh_kit, catalogo):
     return nome, nome
 
 
+def itens_faltando_para_planilha_faturamento(ri, itens=None):
+    """RN-013/RN-014/RN-048: lista o que falta preencher no Lado IXC para
+    gerar a planilha de faturamento (KIT Instalado, Data de Ativação,
+    Município, Estado, CNPJ, CNPJ Fictício) — lista vazia quando está
+    tudo pronto. Extraída de `gerar_planilha_faturamento` (RN-051,
+    2026-09-02) para ser reaproveitada pela tela de detalhe do RI, que
+    usa a mesma checagem para decidir se a opção de status "Envio de
+    Email para Faturamento" pode aparecer — sem isso, o RI iria para
+    esse status sem conseguir de fato enviar.
+
+    `itens`, quando informado (já carregado pelo chamador), evita 1
+    consulta repetida — usado por `gerar_planilha_faturamento`, que
+    precisa da mesma lista logo em seguida para montar as abas."""
+    if itens is None:
+        itens = list(ri.itens_ixc.all())
+    faltando = []
+    if not itens:
+        faltando.append("nenhum item lançado (KIT ou produto)")
+    elif not any(item.eh_kit for item in itens):
+        faltando.append("o KIT Instalado")
+    if not ri.data_ativacao:
+        faltando.append("a Data de Ativação")
+    if not (ri.municipio_ixc or "").strip():
+        faltando.append("o Município (Lado IXC)")
+    if not (ri.estado_ixc or "").strip():
+        faltando.append("o Estado (Lado IXC)")
+    if not (ri.cnpj or "").strip():
+        faltando.append("o CNPJ (Lado IXC)")
+    if not (ri.cnpj_ficticio or "").strip():
+        faltando.append("o CNPJ Fictício (Lado IXC)")
+    return faltando
+
+
 def gerar_planilha_faturamento(ri, data_vencimento):
     """RN-013: cópia preenchida da planilha-modelo do financeiro
     (`doc/FATURAMENTO MATERIAS EACE.xlsx`), uma aba por produto distinto
@@ -272,21 +305,7 @@ def gerar_planilha_faturamento(ri, data_vencimento):
     valor da aba soma o subtotal (quantidade × valor do catálogo) de cada
     um deles, não só a quantidade de um produto só."""
     itens = list(ri.itens_ixc.all())
-    faltando = []
-    if not itens:
-        faltando.append("nenhum item lançado (KIT ou produto)")
-    elif not any(item.eh_kit for item in itens):
-        faltando.append("o KIT Instalado")
-    if not ri.data_ativacao:
-        faltando.append("a Data de Ativação")
-    if not (ri.municipio_ixc or "").strip():
-        faltando.append("o Município (Lado IXC)")
-    if not (ri.estado_ixc or "").strip():
-        faltando.append("o Estado (Lado IXC)")
-    if not (ri.cnpj or "").strip():
-        faltando.append("o CNPJ (Lado IXC)")
-    if not (ri.cnpj_ficticio or "").strip():
-        faltando.append("o CNPJ Fictício (Lado IXC)")
+    faltando = itens_faltando_para_planilha_faturamento(ri, itens=itens)
     if faltando:
         raise PlanilhaFaturamentoError(
             "Antes de enviar o e-mail ou baixar a planilha, preencha no "
@@ -369,10 +388,7 @@ def trocar_status_com_log(ri, novo_status, usuario):
     `usuario=None` é válido (RiHistorico.autor aceita nulo) — a leitura da
     caixa de e-mail é uma rotina automática, sem usuário logado.
 
-    FEAT-010/RF-11: ao concluir manualmente, grava `concluido_em` — mesmo
-    carimbo já gravado na conclusão automática (RN-024,
-    `_concluir_ri_por_status_escola_conectada` abaixo), para o campo
-    refletir a conclusão real independente de como ela aconteceu."""
+    FEAT-010/RF-11: ao concluir manualmente, grava `concluido_em`."""
     status_anterior = ri.get_status_display()
     ri.status = novo_status
     campos_alterados = ["status", "atualizado_em"]
@@ -425,9 +441,32 @@ def comparar_kit_e_produtos_ixc_relatorio(ri):
 
     Retorna um dicionário usado tanto para persistir a divergência formal
     (`sincronizar_divergencia_kit_relatorio`, abaixo) quanto para destacar
-    em vermelho os itens do Lado IXC na tela (`ri_detail_view`)."""
+    em vermelho os itens do Lado IXC na tela (`ri_detail_view`).
+
+    RN-003 (ajustada em 2026-09-02, pedido do usuário): com um dos dois
+    lados (IXC ou Relatório EACE) totalmente vazio — nenhum KIT nem
+    Produto lançado ainda nesse lado — não há divergência nenhuma; o
+    confronto só faz sentido quando os dois lados já têm algum valor
+    lançado. Antes desta correção, um RI com só o Lado Relatório EACE
+    preenchido (ex.: recém-sincronizado, Lado IXC ainda não iniciado)
+    entrava como "Com divergência" no Grid de INEPs (FEAT-007) só por o
+    outro lado estar vazio, sem nenhuma inconsistência real entre os dois."""
     itens_ixc = list(RiItemIxc.objects.filter(ri=ri))
     itens_eace = list(RiItemRelatorioEace.objects.filter(ri=ri))
+
+    if not itens_ixc or not itens_eace:
+        return {
+            "diverge": False,
+            "kit_diverge": False,
+            "kit_ixc_descricao": next(
+                (item.descricao_item for item in itens_ixc if item.eh_kit), None
+            ),
+            "kit_eace_descricao": next(
+                (item.descricao_item for item in itens_eace if item.eh_kit), None
+            ),
+            "produtos_divergentes": {},
+            "itens_ixc_divergentes_pks": set(),
+        }
 
     kit_ixc = next((item for item in itens_ixc if item.eh_kit), None)
     kit_eace = next((item for item in itens_eace if item.eh_kit), None)
@@ -549,6 +588,41 @@ class PlanilhaEaceSincronizacaoError(Exception):
     dado — mesma família de `PlanilhaFaturamentoError`."""
 
 
+# RN-021 (ajuste 2026-09-02, pedido do usuário): a Planilha EACE chega em
+# 2 formatos possíveis — já "tratada" à mão (`;`, sem aspas, formato que
+# este sistema sempre aceitou) ou o arquivo bruto exportado direto do
+# sistema da EACE (`,`, campos entre aspas — a vírgula também aparece
+# dentro dos valores numéricos, formato BR: "21.765,83", só funciona por
+# causa das aspas). Detecta sozinho qual dos dois foi enviado, pelo
+# cabeçalho — usuário não precisa mais tratar o arquivo à mão antes de
+# subir, só anexar o que a EACE manda mesmo.
+DELIMITADORES_PLANILHA_EACE = (";", ",")
+
+
+def _cabecalho_planilha_eace(texto, delimitador):
+    """Colunas da 1ª linha de `texto`, já separadas pelo `delimitador`
+    informado — usado só para descobrir qual delimitador o arquivo usa de
+    fato (`detectar_delimitador_planilha_eace`, abaixo). `csv.reader`
+    (não split manual) para respeitar aspas quando houver — a Planilha
+    EACE bruta cita os campos, e um título de coluna nunca tem o
+    delimitador dentro dele, mas um valor de dado poderia."""
+    primeira_linha = texto.split("\n", 1)[0]
+    linha = next(csv.reader(io.StringIO(primeira_linha), delimiter=delimitador), [])
+    return {coluna.strip() for coluna in linha}
+
+
+def detectar_delimitador_planilha_eace(texto):
+    """RN-021: tenta cada delimitador suportado, nesta ordem, e usa o
+    primeiro cujo cabeçalho reconhece todas as colunas obrigatórias
+    (`PlanilhaEace.COLUNAS_OBRIGATORIAS`). `None` quando nenhum dos dois
+    reconhece — arquivo fora do padrão dos dois formatos aceitos."""
+    obrigatorias = set(PlanilhaEace.COLUNAS_OBRIGATORIAS)
+    for delimitador in DELIMITADORES_PLANILHA_EACE:
+        if obrigatorias <= _cabecalho_planilha_eace(texto, delimitador):
+            return delimitador
+    return None
+
+
 def _agrupar_linhas_planilha_eace_por_inep(planilha):
     """RN-022/RN-023: lê o arquivo ativo da Planilha EACE (RN-021) uma
     única vez e agrupa as linhas por "Projeto" (INEP) — mesma normalização
@@ -558,7 +632,13 @@ def _agrupar_linhas_planilha_eace_por_inep(planilha):
     cada RI."""
     with planilha.arquivo.open("rb") as arquivo:
         texto = arquivo.read().decode("utf-8-sig")
-    leitor = csv.DictReader(io.StringIO(texto), delimiter=";")
+    # RN-021: o upload (`PlanilhaEaceUploadForm`) já validou que o
+    # arquivo está num dos 2 formatos aceitos — aqui só detecta de novo
+    # qual dos dois é, sem guardar estado extra no model. `;` como último
+    # recurso defensivo (nunca deveria faltar os dois, dado o que o
+    # upload já exigiu).
+    delimitador = detectar_delimitador_planilha_eace(texto) or ";"
+    leitor = csv.DictReader(io.StringIO(texto), delimiter=delimitador)
     agrupado = {}
     for linha in leitor:
         projeto_bruto = (linha.get("Projeto") or "").strip()
@@ -621,57 +701,6 @@ def _quantidade_planilha_eace(valor_bruto):
     except Exception:
         return None
     return quantidade if quantidade > 0 else None
-
-
-# RN-024: valor exato da coluna "Status escola" (coluna T da Planilha
-# EACE) que dispara a conclusão automática do RI — comparação com
-# `.strip()`, sem case-fold (a planilha sempre traz esta grafia).
-STATUS_ESCOLA_CONECTADA = "Conectada"
-
-
-def _concluir_ri_por_status_escola_conectada(ri, linhas):
-    """RN-024: quando alguma linha do INEP trouxer "Status escola" (coluna
-    T) exatamente "Conectada", conclui o RI — a partir de qualquer status
-    atual (RN-001), inclusive encerrando uma "Correção MEGA" em aberto sem
-    exigir o retorno manual para "Andamento" (decisão explícita do
-    usuário, ver `business_rules.md`). Grava `concluido_em` como numa
-    conclusão manual e registra o log na linha do tempo (RN-008) com o
-    mesmo padrão de `trocar_status_com_log`, só ajustando o rótulo do
-    campo para indicar que a origem foi o Sincronizador.
-
-    RI já em "Faturamento Concluído" não é afetado — os dois botões já não
-    chegam a chamar esta função nesse caso (RN-020: lote pula antes,
-    template individual esconde o próprio botão), checagem aqui é só
-    defensiva. Devolve `True` quando a conclusão foi aplicada."""
-    if ri.status == Ri.FATURAMENTO_CONCLUIDO:
-        return False
-    if not any(
-        (linha.get("Status escola") or "").strip() == STATUS_ESCOLA_CONECTADA for linha in linhas
-    ):
-        return False
-
-    status_anterior = ri.get_status_display()
-    ri.status = Ri.FATURAMENTO_CONCLUIDO
-    ri.concluido_em = timezone.now()
-    ri.save(update_fields=["status", "concluido_em", "atualizado_em"])
-    RiHistorico.objects.create(
-        ri=ri,
-        tipo=RiHistorico.LOG_STATUS,
-        autor=None,
-        campo="Status do RI (Sincronizador)",
-        valor_anterior=status_anterior,
-        valor_novo=ri.get_status_display(),
-    )
-    auditar(
-        None,
-        Auditoria.TRANSICAO_STATUS,
-        entidade="Ri",
-        entidade_id=ri.pk,
-        campo="Status do RI (Sincronizador)",
-        valor_anterior=status_anterior,
-        valor_novo=ri.get_status_display(),
-    )
-    return True
 
 
 def _valores_fechados_da_linha(linha):
@@ -743,17 +772,17 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
     linha) — campos fechados, só para exibição, nunca preenchidos fora do
     Sincronizador.
 
-    RN-024 (2026-08-27): também confere a coluna "Status escola" das
-    mesmas linhas — "Conectada" conclui o RI automaticamente
-    (`_concluir_ri_por_status_escola_conectada`), independente do
-    resultado do lançamento de itens acima (duas verificações
-    independentes sobre a mesma linha da planilha).
+    RN-046 (2026-08-28): a coluna "Status escola" é gravada por item
+    (`RiItemRelatorioEace.status_escola`), para exibição no Lado 3 e para
+    o alerta de divergência entre produtos do mesmo RI
+    (`comparar_status_escola_relatorio`).
 
-    RN-046 (2026-08-28): a mesma coluna "Status escola" também é gravada
-    por item (`RiItemRelatorioEace.status_escola`), para exibição no Lado
-    3 e para o alerta de divergência entre produtos do mesmo RI
-    (`comparar_status_escola_relatorio`) — não substitui a verificação da
-    RN-024 acima, que continua olhando todas as linhas do INEP.
+    RN-024 (2026-08-27, **retirada em 2026-09-02**): esta função chegou a
+    concluir o RI automaticamente (`Ri.status = FATURAMENTO_CONCLUIDO`)
+    quando alguma linha trazia "Status escola" = "Conectada". Usuário
+    pediu a remoção — sincronizar o Relatório EACE não deve mais alterar
+    o status do RI, só lançar os itens do Lado 3. Ver `business_rules.md`
+    (RN-024 marcada como retirada).
 
     `planilha`/`linhas_por_inep` são atalhos internos do Sincronizador em
     lote (RN-023/FEAT-025): quando informados, pulam a busca da Planilha
@@ -800,7 +829,6 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
         "sem_correspondencia": [],
         "kit_ignorado": [],
         "quantidade_invalida": [],
-        "concluido_status_escola": False,
     }
 
     for linha in linhas:
@@ -857,9 +885,6 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
     if resultado["criados"]:
         sincronizar_divergencia_kit_relatorio(ri)
 
-    # RN-024: independe do resultado do lançamento de itens acima.
-    resultado["concluido_status_escola"] = _concluir_ri_por_status_escola_conectada(ri, linhas)
-
     return resultado
 
 
@@ -879,6 +904,14 @@ def sincronizar_relatorio_eace_de_todas_as_ri():
     Concluído", RN-020) nunca interrompe os demais — entra no resumo
     devolvido, para o Administrador decidir/agir manualmente (CLAUDE.md
     §9).
+
+    RN-049 (2026-09-02): Escola sem nenhum RI ainda, mas com linha na
+    Planilha EACE ativa para o INEP dela, ganha um RI novo aqui mesmo —
+    nasce com status "Implantação EACE" (`Ri.IMPLANTACAO_EACE`, mesmo
+    padrão do "Iniciar RI" manual, `ri_iniciar_view`), e o Sincronizador
+    processa os itens do Lado Relatório EACE nele em seguida, na mesma
+    passada. Escola sem nenhuma linha na planilha continua sem RI — não
+    cria um RI vazio sem motivo (CLAUDE.md §9).
 
     Devolve uma lista de `(ri, resultado)`, na mesma ordem de `Escola`
     (por nome); `resultado` é o dicionário de
@@ -907,8 +940,14 @@ def sincronizar_relatorio_eace_de_todas_as_ri():
     for escola in escolas:
         ris_da_escola = list(escola.ris.all())
         if not ris_da_escola:
-            continue
-        ri = ris_da_escola[0]
+            # RN-049: só cria o RI quando há de fato algo pra sincronizar
+            # (linha na planilha pra este INEP) — senão continua sem RI,
+            # igual ao comportamento de antes.
+            if not linhas_por_inep.get(escola.inep):
+                continue
+            ri = Ri.objects.create(escola=escola, status=Ri.IMPLANTACAO_EACE)
+        else:
+            ri = ris_da_escola[0]
         if ri.status == Ri.FATURAMENTO_CONCLUIDO:
             processados.append((ri, RI_BLOQUEADO_FATURAMENTO_CONCLUIDO))
             continue

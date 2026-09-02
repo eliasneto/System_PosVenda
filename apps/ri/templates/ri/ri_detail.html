@@ -22,11 +22,7 @@
     </div>
 
     {% if ri %}
-    <div class="flex gap-4">
-        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
-            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Status do RI</p>
-            <p class="text-sm font-black italic text-pv-yellow">{{ ri.get_status_display }}</p>
-        </div>
+    <div class="flex flex-wrap gap-4">
         {% include "ri/_responsavel_form_detail.html" with ri=ri next_url=request.get_full_path usuarios=usuarios %}
     </div>
     {% endif %}
@@ -97,8 +93,8 @@
     <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6">
         <div class="flex items-center justify-between mb-4">
             <h2 class="text-sm font-black uppercase text-gray-800 dark:text-gray-200">IXC <span class="text-gray-400 dark:text-gray-500">(2º lado)</span></h2>
-            {% if ri_bloqueado_faturamento_concluido %}
-            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-020">Bloqueado (Faturamento Concluído)</span>
+            {% if not lado_ixc_editavel %}
+            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-052">Somente visualização (fora de "Em Andamento")</span>
             {% endif %}
         </div>
 
@@ -119,7 +115,7 @@
                     <span class="text-xs font-bold text-gray-700 dark:text-gray-300">{{ item.descricao_item }}</span>
                     <div class="flex items-center gap-3">
                         <span class="text-xs font-bold text-gray-500 dark:text-gray-400">{{ item.quantidade }} un.</span>
-                        {% if not ri_bloqueado_faturamento_concluido %}
+                        {% if lado_ixc_editavel %}
                         <button type="button" onclick="document.getElementById('editar-ixc-{{ item.pk }}').classList.toggle('hidden')" class="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" title="Editar">
                             <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                         </button>
@@ -168,21 +164,23 @@
             {% endfor %}
         </div>
 
-        <!-- RN-020 (2026-08-27): com o RI em "Faturamento Concluído", o
-             formulário de lançamento/edição deste lado some — só o
-             Administrador troca o status para liberar de novo. -->
-        {% if ri_bloqueado_faturamento_concluido %}
+        <!-- RN-052 (2026-09-02): fora de "Em Andamento", o formulário
+             continua visível (usuário precisa ver Data Ativação/CNPJ/
+             Município/Estado já lançados) mas os campos ficam com
+             `disabled` (view) e "+"/"Salvar" somem — não tem o que
+             adicionar/enviar em modo visualização. -->
+        {% if not lado_ixc_editavel %}
         <p class="text-[11px] font-bold text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-800 pt-4">
-            RI em "Faturamento Concluído" — lançamento bloqueado até o Administrador trocar o status (RN-020).
+            RI fora de "Em Andamento" — campos do Lado IXC em modo visualização (RN-052).
         </p>
-        {% else %}
+        {% endif %}
         <!-- RN-011 (formulário único, 2026-08-24): KIT Instalado (Unidade
              "Escola" do catálogo KitPadrao, + opção "Outro"), Produtos via
              "+" e Data Ativação — um só formulário, um só botão de salvar.
              RN-011 (ajuste, 2026-08-26): 1 KIT por INEP — com um já
              lançado, o seletor some (só edita/exclui o item lançado
              acima, mesmo padrão de RN-004). -->
-        {% if not kit_ja_lancado and not kit_form.tem_catalogo %}
+        {% if not kit_ja_lancado and not kit_form.tem_catalogo and lado_ixc_editavel %}
         <p class="text-[11px] font-bold text-amber-600 dark:text-amber-400 border-t border-gray-100 dark:border-gray-800 pt-4">
             Nenhum KIT (Unidade "Escola") cadastrado no catálogo para o Lote desta escola ainda — use "Outro".
         </p>
@@ -220,11 +218,13 @@
 
             <div class="flex items-center justify-between mt-2">
                 <h3 class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Produtos</h3>
+                {% if lado_ixc_editavel %}
                 <button type="button" id="btn-add-produto-ixc"
                     class="w-6 h-6 flex items-center justify-center rounded-full bg-pv-black text-pv-yellow hover:bg-gray-800 transition"
                     title="Adicionar produto" aria-label="Adicionar produto">
                     <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                 </button>
+                {% endif %}
             </div>
             {{ produto_formset.management_form }}
 
@@ -328,11 +328,12 @@
             <p class="text-[11px] font-bold text-red-500 dark:text-red-400">{{ data_ativacao_form.estado_ixc.errors.0 }}</p>
             {% endif %}
 
+            {% if lado_ixc_editavel %}
             <button type="submit" class="self-start px-5 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-xl hover:bg-gray-800 transition shadow mt-2">
                 Salvar
             </button>
+            {% endif %}
         </form>
-        {% endif %}
     </div>
 
     <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6">
@@ -539,22 +540,29 @@
 
 </div>
 
+{% comment %}
+RN-051 (ajuste 2026-09-02, pedido do usuário): status do RI e ação
+"Enviar e-mail" saem do cabeçalho (ficavam apertados perto do título) e
+passam pra logo abaixo dos 3 lados — mesma linha visual do início do
+Histórico de Comunicação, mais espaço pra respirar.
+{% endcomment %}
+<div class="flex flex-wrap items-center gap-4 mt-6">
+    {% include "ri/_status_pill_detail.html" with ri=ri next_url=request.get_full_path status_ri_manuais=status_ri_manuais status_ri_opcoes_disponiveis=status_ri_opcoes_disponiveis usuario_administrador=usuario_administrador %}
+    {% include "ri/_acao_envio_email_detail.html" with ri=ri escola=escola next_url=request.get_full_path assunto_sugerido=assunto_sugerido %}
+</div>
+
 {% include "ri/_historico_panel.html" %}
 {% endif %}
 {% endblock %}
 
 {% block extra_js %}
 <script>
-// "Responsável" salva direto ao trocar a opção da lista — sem botão de
-// salvar (mesmo padrão do drill-down do grid, FEAT-007). `requestSubmit()`
-// dispara o evento "submit" que o HTMX escuta para atualizar sem
-// recarregar a página (FEAT-019); sem HTMX, o comportamento é o mesmo de
-// antes (POST tradicional).
-document.querySelectorAll('form[data-salvar-ao-trocar] select').forEach(function (select) {
-    select.addEventListener('change', function () {
-        select.form.requestSubmit();
-    });
-});
+// "Status do RI"/"Responsável" salvam direto ao trocar a opção da lista, e
+// "Enviar e-mail" (RN-051) abre o modal de composição — os dois wired em
+// `core/base.html` (delegados no <body>), não aqui: os dois blocos podem
+// ser trocados via HTMX (troca de status recarrega o próprio bloco de
+// status e o de "Enviar e-mail"), e um binding preso ao elemento carregado
+// na primeira renderização não funcionaria no que for trocado depois.
 
 // RN-011/RN-018: select "KIT Instalado" — ao escolher "Outro", revela o
 // campo "Número de Access Points"; nas demais opções, o campo fica

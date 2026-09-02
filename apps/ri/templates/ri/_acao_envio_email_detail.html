@@ -1,0 +1,20 @@
+{% comment %}
+RN-051 (2026-09-02): botão "Enviar e-mail" + modal de composição
+(`_modal_enviar_email.html`) — aparecem na tela de detalhe do RI só
+quando o status é "Envio de Email para Faturamento". Mesmo id sempre
+presente (mesmo vazio) para a troca de status via HTMX conseguir repor
+este bloco por completo (hx-swap-oob), sem precisar de F5: o botão
+aparece assim que o status muda para "Envio de Email para Faturamento"
+e some assim que o e-mail é enviado (o status vira "Aguardando
+financeiro" automaticamente).
+{% endcomment %}
+<div id="acao-envio-email-{{ ri.pk }}" hx-swap-oob="true">
+    {% if ri.status == 'envio_email_faturamento' %}
+    <button type="button" data-abrir-modal-email="modal-email-{{ ri.pk }}"
+            class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-pv-yellow font-black uppercase italic text-xs hover:bg-gray-800 transition flex flex-col items-start">
+        <span class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1 not-italic">Financeiro</span>
+        Enviar e-mail
+    </button>
+    {% include "ri/_modal_enviar_email.html" with ri=ri escola=escola assunto_sugerido=assunto_sugerido next_url=next_url %}
+    {% endif %}
+</div>

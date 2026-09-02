@@ -47,7 +47,7 @@ class Ri(models.Model):
 
     STATUS_CHOICES = [
         (IMPLANTACAO_EACE, "Implantação EACE"),
-        (ANDAMENTO, "Andamento"),
+        (ANDAMENTO, "Em Andamento"),
         (ENVIO_EMAIL_FATURAMENTO, "Envio de Email para faturamento"),
         (AGUARDANDO_FINANCEIRO, "Aguardando financeiro"),
         (AGUARDANDO_ANEXO_PORTAL_EACE, "Resposta Financeiro"),

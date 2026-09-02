@@ -152,6 +152,15 @@ do repositório — banco já tinha as 2.622 escolas; resultado: `0 criada(s),
 2622 já existente(s), 0 linha(s) inválida(s)`. Confirma que a planilha atual
 não traz INEP novo nem diverge do que já está migrado.
 
+**Ampliada em 2026-09-01 (Dev, a pedido/autorização explícita do usuário):**
+planilha nova ("Nova BASE EACE.xlsx", formato de coluna diferente do
+`CONSOLIDADO EACE.xlsx`) trazia 96 escolas de um Lote novo, ainda não
+cadastradas. Comando novo (`importar_nova_base_eace`, mesma regra de
+segurança — só cria INEP que ainda não existe) e executado direto em
+produção, sob autorização explícita do usuário: backup do banco antes,
+simulação conferida (96 novas, bate com o esperado) e só então aplicado.
+Resultado: `Escola.objects.count()` foi de 2.622 para 2.718.
+
 ---
 
 ### FEAT-003 — Usuários e permissões
@@ -526,6 +535,18 @@ de aceite acima — ainda não implementado pelo Dev.
 - **Fora do escopo do Dev:** registrar o ajuste em `business_rules.md`
   (RN-011/RN-018) é do Orquestrador.
 
+**Entrega do Dev (2026-09-02) — RN-052:**
+- Status "Andamento" passa a se chamar "Em Andamento" (só o rótulo — o
+  dado já gravado não muda).
+- Lado IXC (2º lado) só é editável com o RI em "Em Andamento"; em
+  qualquer outro status os campos continuam visíveis, mas somente
+  leitura, para os dois perfis.
+- Lado Relatório EACE (3º lado) não foi afetado — continua sob a regra já
+  existente (bloqueio só em "Faturamento Concluído").
+- Testes automatizados cobrindo bloqueio, liberação ao voltar para "Em
+  Andamento" e a confirmação de que o 3º lado não mudou.
+- **Pendência:** validação visual em navegador ainda não feita.
+
 ---
 
 ### FEAT-005 — Confronto de divergências (2 confrontos: RN-002 e RN-003)
@@ -600,6 +621,18 @@ Aguardando QA` — condição para o casamento por Descrição ser confiável).
 - O alerta de KIT (`divergencia_kit`) já estava implementado e confirmado
   em 2026-08-27, junto com a entrega da FEAT-006.
 - **Pendência:** nenhuma — FEAT-005 completa (os dois confrontos).
+
+**Correção (2026-09-02) — RN-003 ajustada:** usuário reportou que o card
+"Com divergência" do Grid de INEPs acusava divergência mesmo quando só um
+dos dois lados (IXC ou Relatório EACE) tinha item lançado.
+- Confronto passa a exigir os dois lados com algum KIT/Produto lançado —
+  um lado vazio deixa de contar como divergência.
+- Correção pontual aplicada aos dados já gravados: das 473 divergências
+  abertas, 471 (99,6%) eram esse falso positivo e foram resolvidas;
+  restam as 2 divergências reais.
+- Testes automatizados cobrindo a regra nova e a regressão dos casos de
+  divergência real.
+- **Pendência:** nenhuma.
 
 ---
 
@@ -975,6 +1008,10 @@ para 🔄 Em andamento — a entrega anterior não chegou a passar por QA.
 **Pendência:** nenhuma na feature. FEAT-009 (leitura da resposta) já pode
 reaproveitar `extrair_codigos_rastreio` de `apps/core/email_tracking.py`
 quando for implementada.
+
+**Ampliada em 2026-09-01 (Dev, RN-050):** assunto sugerido do e-mail passa
+a incluir o nome da escola, além do INEP — pedido do usuário para
+facilitar identificação pelo financeiro.
 
 ---
 
@@ -1687,6 +1724,11 @@ e-mail (texto) mostrava todo item e o total zerados — usava
 buscar o valor do catálogo também no texto; suíte `ri`+`core`: 156 testes
 passando.
 
+**Ampliada em 2026-09-01 (Dev, RN-048):** dois campos novos no Lado IXC —
+CNPJ e CNPJ Fictício — gravados nas células A16/B16 de cada aba da
+planilha de faturamento; mesmo padrão opcional de Município/Estado
+(RN-014), exigidos só na hora de gerar a planilha/enviar o e-mail.
+
 ---
 
 ### FEAT-018 — Município e Estado manuais no Lado IXC
@@ -2010,6 +2052,15 @@ decisão de como tratar (aceitar as duas grafias, normalizar acentos, ou
 manter só a versão acentuada) depende do usuário, por afetar a integração
 com o arquivo real da EACE (CLAUDE.md §9).
 
+**Ampliada em 2026-09-02 (Dev, RN-021):** upload passa a aceitar também o
+arquivo **bruto** exportado direto do sistema da EACE (vírgula como
+delimitador, campos entre aspas) — detectado sozinho pelo cabeçalho, sem
+precisar tratar à mão antes de subir; formato já tratado (`;`) continua
+aceito do mesmo jeito. Validado contra um arquivo real anexado pelo
+usuário ("Documento correto.csv", 1.783 linhas). **Não resolve** a
+pendência acima (2026-08-27, acento do cabeçalho de `doc/EACE.csv`) — é um
+problema diferente (delimitador, não acentuação); segue em aberto.
+
 ---
 
 ### FEAT-024 — Sincronizador do Lado Relatório EACE (Planilha EACE × INEP)
@@ -2157,6 +2208,19 @@ RN-022 ampliada (Num OSP/Validação OSP/Nota Fiscal eram descritos como
 gravados só na criação) — os 4 campos fechados agora são atualizados a
 cada sincronização, não só na primeira; falta refletir isso no texto da
 RN-022 ampliada/RN-046 em `business_rules.md`.
+**Retirada (2026-09-02) — RN-024:** usuário pediu que sincronizar o
+Relatório EACE deixe de alterar o status do RI — passa a só lançar os
+itens do Lado 3, mesmo com "Status escola" = "Conectada" na planilha.
+- Sincronizador individual e em lote (FEAT-025) ajustados; mensagens da
+  tela não citam mais conclusão automática.
+- Testes automatizados atualizados para a regra nova.
+- **Impacto conhecido, não resolvido nesta mudança:** os cards "Kits
+  Instalados" (Equipamentos) e "Valor já Faturado" (RN-026) contam a
+  partir do RI estar "Faturamento Concluído" — sem a conclusão
+  automática, esse status só é alcançado pelo ciclo manual completo
+  (RN-001), tendendo a reduzir bastante esses números; usuário avisado.
+- **Pendência:** decisão sobre a fonte desses dois cards fica para outro
+  atendimento.
 
 ---
 
@@ -2251,6 +2315,12 @@ regressão.
 **Entrega do Dev (2026-08-28, RN-046):** confirmado que o campo
 `status_escola` é gravado igual no lote (1 teste novo); suíte completa do
 app `ri` (262 testes) sem regressão.
+
+**Ampliada em 2026-09-02 (Dev, RN-049):** Escola sem nenhum RI ainda, mas
+com linha na Planilha EACE ativa para o INEP dela, ganha um RI novo direto
+no lote — nasce "Implantação EACE" e já entra no processamento da mesma
+passada. Antes, essa Escola era pulada silenciosamente (nunca aparecia no
+resumo) até alguém abrir a tela e clicar "Iniciar RI" manualmente.
 
 ---
 
@@ -2563,6 +2633,13 @@ por Kit/Equipamento espelhado no Faturamento).
 **Pendência:** usuário sinalizou que pode trazer mais cards para este
 dashboard (dentro de Faturamento ou Equipamentos, ou no submenu ainda
 vazio Relatórios) — critérios de aceite podem crescer antes do QA.
+**Alerta (2026-09-02):** a RN-024 (conclusão automática do RI pela
+planilha) foi retirada nesta data (ver FEAT-024) — os cards "Kits
+Instalados" e "Valor já Faturado" (RN-026) continuam somando a partir do
+RI estar "Faturamento Concluído", que agora só é alcançado pelo ciclo
+manual completo (RN-001). Os números tendem a cair bastante a partir de
+agora; usuário já avisado pelo Dev. Decisão de manter esta fonte ou trocar
+por outra ainda não foi tomada.
 
 ---
 
@@ -2764,9 +2841,54 @@ login (fluxo entregue pela FEAT-001).
 
 ---
 
+### FEAT-031 — Status do RI e ação "Enviar e-mail" na tela de detalhe
+**Descrição:** A tela de detalhe do RI ganha o status do RI editável
+direto por lá (mesmo padrão já usado pelo campo "Responsável") e, quando
+o status é "Envio de Email para Faturamento", o botão/modal "Enviar
+e-mail" (mesmo da FEAT-008) aparece na própria tela — sem precisar voltar
+ao Grid de INEPs nem recarregar a página.
+**Tipo:** frontend-functional
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média — pedido do usuário para agilizar o fluxo; o Grid de
+INEPs continua funcionando do mesmo jeito de antes, em paralelo.
+**Critérios de aceite:**
+- `<select>` de status na tela de detalhe (abaixo dos 3 lados, RN-051),
+  salva sozinho ao trocar, sem reload.
+- "Envio de Email para Faturamento" só aparece como opção quando as
+  regras de negócio do envio (RN-013) estão satisfeitas hoje; continua
+  visível se já for o status atual, mesmo que deixe de estar "pronto"
+  depois.
+- Botão/modal "Enviar e-mail" aparece/some automaticamente conforme o
+  status muda, sem F5.
+**Regras relacionadas:** RN-051 (nova), RN-013, RN-014, RN-048.
+**Dependências:** FEAT-004, FEAT-007, FEAT-008.
+**Tipo de validação:** QA (QA-031).
+**Entrega do Dev (2026-09-02):**
+- Status editável e ação "Enviar e-mail" implementados via HTMX,
+  reaproveitando o modal de composição já existente no Grid (extraído
+  para um componente só, usado nos dois lugares).
+- Testes novos cobrindo a opção aparecendo/escondendo conforme as regras
+  de negócio, e o botão aparecendo/sumindo via HTMX; suíte completa (404
+  testes) sem regressão.
+- Validado no navegador real (desktop e celular): preencheu os
+  requisitos pela tela real, trocou o status pelo `<select>` (0
+  recarregamentos de página), botão "Enviar e-mail" apareceu e abriu o
+  modal com os dados certos.
+- **Ajuste de layout no mesmo dia (a pedido do usuário):** bloco (status +
+  "Enviar e-mail") saiu do cabeçalho, ao lado do título — ficava apertado
+  perto do campo "Responsável" — e passou para logo abaixo dos 3 lados,
+  acima do Histórico de Comunicação.
+**Pendência atual:** aguardando revisão do QA.
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-02 | RN-024 retirada (Sincronizador do Relatório EACE deixa de alterar o status do RI — só lança os itens do Lado 3) e RN-003 ajustada (divergência do Lado IXC × Lado Relatório EACE deixa de acusar falso positivo quando um dos dois lados está vazio), entregues pelo Dev nas FEAT-005/FEAT-024/FEAT-025 | Usuário pediu os dois ajustes explicitamente; correção pontual aplicada aos dados já gravados (das 473 divergências abertas, 471 eram falso positivo e foram resolvidas); impacto conhecido, não resolvido nesta mudança: os cards "Kits Instalados" e "Valor já Faturado" (RN-026) dependem do RI chegar a "Faturamento Concluído", que agora só acontece pelo ciclo manual completo — usuário avisado |
+| 2026-09-02 | RN-052 criada (status "Andamento" passa a se chamar "Em Andamento"; Lado IXC só aceita lançamento/edição/exclusão com o RI nesse status — qualquer outro status fica somente leitura), entregue pelo Dev na FEAT-004 | Usuário pediu os dois ajustes explicitamente; Lado Relatório EACE não foi afetado, continua só sob a RN-020 |
+| 2026-09-02 | Criada FEAT-031 (status do RI e ação "Enviar e-mail" editáveis direto na tela de detalhe, sem sair da página) e já entregue pelo Dev, `🔍 Aguardando QA`; layout ajustado no mesmo dia (bloco reposicionado do cabeçalho para abaixo dos 3 lados); `business_rules.md` recebe RN-051 (nova) e RN-049 (nova — RI do Sincronizador em lote nasce "Implantação EACE"), RN-011 recebe correção (mensagem de erro ao reenviar formulário do Lado IXC sem alterações); RN-021 ampliada (upload aceita também o arquivo bruto exportado direto da EACE); 404 testes passando | Usuário testou a tela nova e reportou um bug real (INEP 35275505: mensagem "Selecione um KIT..." mesmo com tudo já preenchido) — corrigido no mesmo atendimento; RN-049 resolve pedido separado do mesmo dia; RN-021 valida contra arquivo real anexado pelo usuário ("Documento correto.csv", 1.783 linhas), sem tocar na Planilha EACE já ativa no ambiente local — Orquestrador só documentou, código já entregue pelo Dev |
+| 2026-09-01 | `business_rules.md` recebe RN-048 (nova — CNPJ/CNPJ Fictício do Lado IXC, gravados na planilha de faturamento) e RN-050 (nova — assunto do e-mail ao financeiro inclui o nome da escola); FEAT-002 recebe nota de ampliação (96 escolas novas importadas de "Nova BASE EACE.xlsx", já rodado em produção sob autorização explícita do usuário, com backup prévio) | Usuário pediu os 2 campos novos e o ajuste do assunto, testados e entregues pelo Dev no mesmo atendimento; import de escolas autorizado e executado direto em produção (backup + simulação conferida antes de aplicar); Orquestrador só documentou, código já entregue pelo Dev |
 | 2026-08-29 | FEAT-030 entregue pelo Dev, `🔍 Aguardando QA` — `LoginView` ganhou `redirect_authenticated_user=True`; 3 testes novos, suíte completa (367 testes) sem regressão | Correção de uma linha em `apps/core/urls.py`, sem tela nova; validação visual em navegador não se aplica (bug era de redirecionamento, não de layout) |
 | 2026-08-28 | Criada FEAT-030 (bug: usuário autenticado via o menu lateral sobreposto na tela de login) a partir de print enviado pelo usuário; `business_rules.md` recebe RN-047 (nova) | Causa identificada por leitura direta do template (`core/base.html` já condiciona o menu a `user.is_authenticated` corretamente) e da rota (`apps/core/urls.py` usa `LoginView` padrão do Django, que não redireciona usuário já logado); `⬜ Pendente`, sem código ainda — fora do escopo do Orquestrador corrigir |
 | 2026-08-28 | FEAT-029 entregue pelo Dev, `🔍 Aguardando QA` — bloqueio por middleware cobrindo toda tela autenticada, ação de ligar/desligar na tela "Administrador > Usuários", migração liga usuário já existente; 15 testes novos, suíte completa (352 testes) sem regressão | Validado ponta a ponta contra o servidor real (usuário criado como no `/admin/` nasceu desligado, viu o aviso, Administrador ligou, dado passou a aparecer); Dev deixou nota técnica para o Orquestrador formalizar em RN-045: criação de usuário direto por código (bootstrap/testes) nasce Ligada, para sempre existir um Administrador capaz de liberar os demais; validação visual em navegador não executada (mesma limitação da FEAT-028) |

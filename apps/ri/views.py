@@ -66,6 +66,10 @@ from .services import (
     # Lado Relatório EACE, que (diferente do Lado IXC) precisa de um valor
     # real, não 0,00.
     _resolver_catalogo_ixc,
+    # RN-051 (2026-09-02): mesma checagem usada por `gerar_planilha_
+    # faturamento` — reaproveitada aqui para decidir se a opção de status
+    # "Envio de Email para Faturamento" pode aparecer na tela de detalhe.
+    itens_faltando_para_planilha_faturamento,
 )
 
 User = get_user_model()
@@ -106,18 +110,78 @@ HISTORICO_ITENS_POR_PAGINA = 10
 # Lado IXC e do Lado Relatório EACE ficam bloqueados para os dois perfis —
 # mensagem única reaproveitada por toda view que mexe nesses dois lados.
 MENSAGEM_BLOQUEIO_FATURAMENTO_CONCLUIDO = (
-    'RI em "Faturamento Concluído" — os campos do Lado IXC e do Lado '
-    "Relatório EACE ficam bloqueados até o Administrador trocar o status (RN-020)."
+    'RI em "Faturamento Concluído" — os campos do Lado Relatório EACE '
+    "ficam bloqueados até o Administrador trocar o status (RN-020)."
 )
+
+# RN-052 (2026-09-02): Lado IXC só é editável com o RI em "Em Andamento" —
+# mensagem única reaproveitada por toda view que mexe nesse lado.
+MENSAGEM_LADO_IXC_SOMENTE_LEITURA = (
+    'Os campos do Lado IXC só são editáveis com o RI em "Em Andamento" (RN-052).'
+)
+
+
+def _assunto_sugerido_email(escola, hoje):
+    """FEAT-008 (RN-009/RN-050): assunto sugerido do e-mail ao financeiro
+    — código de rastreio + INEP + nome da escola. Reaproveitado pelo grid
+    (RF-05) e pela tela de detalhe do RI (RN-051), para os dois montarem
+    o mesmo texto."""
+    codigo = montar_codigo_rastreio(escola.inep, hoje)
+    return montar_assunto_com_codigo(codigo, f"Faturamento EACE — INEP {escola.inep} — {escola.nome}")
+
+
+def _pronto_para_envio_email_financeiro(ri):
+    """RN-051 (2026-09-02): True quando o RI pode ir para "Envio de Email
+    para Faturamento" hoje — mesma regra usada por `_validar_transicao_
+    status_ri` (divergência aberta bloqueante + pré-requisitos da
+    planilha de faturamento, RN-013). Usada pela tela de detalhe do RI
+    para decidir se essa opção aparece no <select> de status — sem
+    esconder, o usuário poderia escolher um destino que o backend ia
+    recusar de qualquer forma."""
+    if ri.divergencias.filter(resolvida_em__isnull=True, bloqueia=True).exists():
+        return False
+    return not itens_faltando_para_planilha_faturamento(ri)
+
+
+def _status_ri_opcoes_disponiveis(ri):
+    """RN-051 (2026-09-02): opções manuais de status para o <select> da
+    tela de detalhe — "Envio de Email para Faturamento" só entra quando
+    pronto para envio hoje (`_pronto_para_envio_email_financeiro`) OU
+    quando já é o status atual do RI (mantém visível/selecionado mesmo
+    que algo tenha mudado depois, ex.: item excluído — mesmo tratamento
+    gracioso já usado para status automático em `_status_form.html`)."""
+    return [
+        (valor, rotulo)
+        for valor, rotulo in STATUS_RI_EDITAVEIS
+        if valor != Ri.ENVIO_EMAIL_FATURAMENTO
+        or ri.status == Ri.ENVIO_EMAIL_FATURAMENTO
+        or _pronto_para_envio_email_financeiro(ri)
+    ]
 
 
 def _bloqueado_faturamento_concluido(ri):
     """RN-020: True quando o RI está em "Faturamento Concluído" — os
-    campos do Lado IXC e do Lado Relatório EACE ficam bloqueados para os
-    dois perfis (Administrador e Analista) enquanto o RI estiver nesse
-    status; voltam a ficar liberados assim que o status muda (só o
-    Administrador troca, ver `_validar_transicao_status_ri`)."""
+    campos do Lado Relatório EACE ficam bloqueados para os dois perfis
+    (Administrador e Analista) enquanto o RI estiver nesse status; voltam
+    a ficar liberados assim que o status muda (só o Administrador troca,
+    ver `_validar_transicao_status_ri`). O Lado IXC não usa mais esta
+    função — tem regra própria e mais restritiva (RN-052,
+    `_lado_ixc_editavel`), que já cobre este status como um dos "qualquer
+    outro status" bloqueados."""
     return ri.status == Ri.FATURAMENTO_CONCLUIDO
+
+
+def _lado_ixc_editavel(ri):
+    """RN-052 (2026-09-02): True só quando `ri.status == Ri.ANDAMENTO`
+    ("Em Andamento") — os campos do Lado IXC (2º lado: RN-011 KIT
+    Instalado + Produtos, RN-014 Município/Estado, RN-048 CNPJ/CNPJ
+    Fictício) só são lançados/editados nesse status, para os dois perfis
+    (Administrador e Analista); em qualquer outro status (inclusive
+    "Faturamento Concluído", que antes tinha bloqueio próprio na RN-020)
+    ficam somente leitura — os itens já lançados continuam visíveis, só
+    não editáveis/excluíveis. Não afeta o Lado Relatório EACE (RN-020,
+    `_bloqueado_faturamento_concluido`, segue valendo sem alteração)."""
+    return ri.status == Ri.ANDAMENTO
 
 
 def _requisicao_htmx(request):
@@ -152,15 +216,27 @@ def _validar_transicao_status_ri(ri, novo_status, usuario):
             return None
         return "Esse status só é alterado automaticamente pelo sistema."
     if novo_status == Ri.CORRECAO_MEGA and ri.status != Ri.ANDAMENTO:
-        return 'Só é possível marcar "Correção MEGA" a partir de "Andamento".'
+        return 'Só é possível marcar "Correção MEGA" a partir de "Em Andamento".'
     if ri.status == Ri.CORRECAO_MEGA and novo_status != Ri.ANDAMENTO:
-        return '"Correção MEGA" só retorna manualmente para "Andamento".'
+        return '"Correção MEGA" só retorna manualmente para "Em Andamento".'
     if (
         ri.status == Ri.ANDAMENTO
         and novo_status == Ri.ENVIO_EMAIL_FATURAMENTO
         and ri.divergencias.filter(resolvida_em__isnull=True, bloqueia=True).exists()
     ):
         return "Bloqueado: há divergência aberta que impede o envio ao financeiro (RN-003)."
+    # RN-051 (2026-09-02) — decisão deliberada, não esquecimento: KIT/Data
+    # de Ativação/Município/Estado/CNPJ/CNPJ Fictício NÃO travam esta
+    # transição — mesmo espírito da RN-013/RN-014 (esses campos só são
+    # exigidos na hora de GERAR a planilha/enviar o e-mail, nunca a cada
+    # mudança de status/campo). A tela de detalhe só ESCONDE a opção
+    # "Envio de Email para Faturamento" do <select> quando não está pronta
+    # (`_status_ri_opcoes_disponiveis`) — não bloqueia aqui, para não
+    # repetir o mesmo problema que a RN-014 já corrigiu uma vez (usuário
+    # ficando travado por um campo sem relação com a ação que queria
+    # fazer). Quem enviar direto por fora da tela (ou com a opção ainda
+    # visível de uma checagem desatualizada) esbarra do mesmo jeito no
+    # `PlanilhaFaturamentoError` de `gerar_planilha_faturamento`.
     # FEAT-010/RF-10: marcação manual do anexo no portal EACE só a partir
     # de "Resposta Financeiro" — mesmo destino do gatilho automático
     # (RF-19). `FATURAMENTO_CONCLUIDO` também é aceito como origem para
@@ -353,11 +429,11 @@ def grid_inep_view(request):
         # FEAT-008: assunto sugerido (com o código de rastreio RN-009) para
         # pré-preencher a tela de composição de e-mail — só quando o botão
         # "Compor e-mail" pode aparecer para esse INEP.
+        # RN-050 (2026-09-02): nome da escola incluído no assunto, a pedido
+        # do usuário — o financeiro recebe muitos e-mails por INEP e o
+        # nome ajuda a identificar a escola sem abrir o e-mail.
         if ri_atual and ri_atual.status == Ri.ENVIO_EMAIL_FATURAMENTO:
-            codigo = montar_codigo_rastreio(escola.inep, hoje)
-            linha["assunto_sugerido"] = montar_assunto_com_codigo(
-                codigo, f"Faturamento EACE — INEP {escola.inep}"
-            )
+            linha["assunto_sugerido"] = _assunto_sugerido_email(escola, hoje)
         linhas.append(linha)
 
     paginator = Paginator(linhas, 25)
@@ -411,6 +487,10 @@ def ri_status_update_view(request, pk):
     next_url = request.POST.get("next") or ""
     if not next_url.startswith("/"):
         next_url = reverse("grid_inep")
+    # RN-051 (2026-09-02): mesmo padrão de `ri_responsavel_update_view` —
+    # qual dos dois formulários (drill-down do grid ou tela de detalhe)
+    # deve ser reposto na resposta HTMX.
+    origem = request.POST.get("origem") or "grid"
 
     if request.method == "POST":
         novo_status = request.POST.get("status")
@@ -422,6 +502,8 @@ def ri_status_update_view(request, pk):
             messages.success(request, "Status do RI atualizado.")
 
     if _requisicao_htmx(request):
+        if origem == "detail":
+            return _fragmento_status_detail_htmx(request, ri, next_url)
         return _fragmento_status_htmx(request, ri, next_url)
     return redirect(next_url)
 
@@ -451,6 +533,41 @@ def _fragmento_status_htmx(request, ri, next_url):
             "ri": ri,
             "escola": ri.escola,
             "divergencia_aberta": ri.divergencias.filter(resolvida_em__isnull=True).exists(),
+        },
+        request=request,
+    )
+    html += render_to_string("core/_messages.html", request=request)
+    return HttpResponse(html)
+
+
+def _fragmento_status_detail_htmx(request, ri, next_url):
+    """RN-051 (2026-09-02): fragmento out-of-band devolvido a
+    `ri_status_update_view` quando a troca vem da tela de detalhe do RI —
+    repõe o pill de status do cabeçalho (com a lista de opções já
+    filtrada pela regra de negócio de hoje) e o bloco de ação "Enviar
+    e-mail" (aparece/some conforme o novo status, sem precisar de F5)."""
+    status_ri_opcoes_disponiveis = _status_ri_opcoes_disponiveis(ri)
+    html = render_to_string(
+        "ri/_status_pill_detail.html",
+        {
+            "ri": ri,
+            "next_url": next_url,
+            "status_ri_manuais": STATUS_RI_MANUAIS,
+            "status_ri_opcoes_disponiveis": status_ri_opcoes_disponiveis,
+            "usuario_administrador": request.user.is_administrador,
+        },
+        request=request,
+    )
+    html += render_to_string(
+        "ri/_acao_envio_email_detail.html",
+        {
+            "ri": ri,
+            "escola": ri.escola,
+            "next_url": next_url,
+            "assunto_sugerido": _assunto_sugerido_email(ri.escola, timezone.localdate()),
+            "remetente_financeiro": settings.DEFAULT_FROM_EMAIL,
+            "para_financeiro_sugestao": ", ".join(DESTINATARIOS_FINANCEIRO),
+            "cc_financeiro_sugestao": ", ".join(COPIA_FINANCEIRO),
         },
         request=request,
     )
@@ -739,10 +856,15 @@ def ri_detail_view(request, inep):
 
     if ri and request.method == "POST":
         acao = request.POST.get("acao")
+        if acao == "salvar_ixc" and not _lado_ixc_editavel(ri):
+            # RN-052: Lado IXC só aceita lançamento/edição com o RI em "Em
+            # Andamento" — checado antes de instanciar/validar o formulário.
+            messages.error(request, MENSAGEM_LADO_IXC_SOMENTE_LEITURA)
+            return redirect("ri_detail", inep=inep)
         if acao in (
-            "salvar_ixc", "salvar_relatorio_eace", "sincronizar_planilha_eace",
+            "salvar_relatorio_eace", "sincronizar_planilha_eace",
         ) and _bloqueado_faturamento_concluido(ri):
-            # RN-020: bloqueio vale para os dois lados e os dois perfis —
+            # RN-020: bloqueio do Lado Relatório EACE, para os dois perfis —
             # checado antes de instanciar/validar qualquer formulário.
             messages.error(request, MENSAGEM_BLOQUEIO_FATURAMENTO_CONCLUIDO)
             return redirect("ri_detail", inep=inep)
@@ -829,10 +951,23 @@ def ri_detail_view(request, inep):
                     sincronizar_divergencia_kit_relatorio(ri)
                     messages.success(request, "Atendimento IXC atualizado.")
                     return redirect("ri_detail", inep=inep)
-                messages.error(
-                    request,
-                    "Selecione um KIT, um produto ou informe a Data de Ativação.",
-                )
+                if kit_ja_lancado or ri.data_ativacao:
+                    # RN-011 (correção 2026-09-02, bug reportado pelo
+                    # usuário): reenviar o formulário sem nenhuma alteração
+                    # nova (ex.: clique duplo em "Salvar", ou visitar a tela
+                    # já preenchida e clicar "Salvar" sem mudar nada) caía
+                    # sempre na mensagem "Selecione um KIT..." — enganosa
+                    # quando o KIT e/ou a Data de Ativação já estão
+                    # lançados/preenchidos (visíveis na própria tela).
+                    # Mensagem neutra quando já existe algo salvo; mantém a
+                    # original só quando realmente nada foi preenchido
+                    # ainda (nem KIT, nem Data de Ativação).
+                    messages.error(request, "Nenhuma alteração para salvar.")
+                else:
+                    messages.error(
+                        request,
+                        "Selecione um KIT, um produto ou informe a Data de Ativação.",
+                    )
                 # Post/Redirect/Get: sem isso, a resposta do POST fica na
                 # mesma URL e um F5 do usuário reenvia o formulário — o
                 # navegador repete a submissão (e a mensagem de erro volta
@@ -966,13 +1101,8 @@ def ri_detail_view(request, inep):
                 partes.append(
                     f"{len(resultado['quantidade_invalida'])} com quantidade inválida na planilha"
                 )
-            # RN-024: troca de status independente do lançamento de itens
-            # — some no resumo mesmo quando nenhum item foi criado/já
-            # estava tudo lançado antes.
-            if resultado["concluido_status_escola"]:
-                partes.append('RI concluído (Status escola "Conectada")')
             resumo = "Sincronização: " + (", ".join(partes) if partes else "nada para lançar") + "."
-            if resultado["criados"] or resultado["concluido_status_escola"]:
+            if resultado["criados"]:
                 messages.success(request, resumo)
             else:
                 messages.error(request, resumo)
@@ -1060,6 +1190,29 @@ def ri_detail_view(request, inep):
     ):
         return _fragmento_historico_htmx(request, ri, historico_form, historico_page_obj)
 
+    # RN-051 (2026-09-02): status do RI editável direto na tela de detalhe
+    # (mesmo padrão do drill-down do grid) — "Envio de Email para
+    # Faturamento" só aparece no <select> quando as regras de negócio do
+    # envio (RN-013) estão satisfeitas hoje; o botão/modal "Enviar e-mail"
+    # aparece logo abaixo quando o RI já está nesse status. Os dois
+    # atualizam via HTMX ao trocar o status, sem precisar de F5.
+    status_ri_opcoes_disponiveis = _status_ri_opcoes_disponiveis(ri) if ri else []
+
+    # RN-052: fora de "Em Andamento", os campos do Lado IXC continuam
+    # visíveis (usuário precisa ver Data Ativação/CNPJ/Município/Estado já
+    # lançados) mas ganham o atributo `disabled` — protege também no
+    # back-end, já que um campo `disabled` do Django ignora valor
+    # submetido e sempre usa o inicial.
+    lado_ixc_editavel = bool(ri) and _lado_ixc_editavel(ri)
+    if ri and not lado_ixc_editavel:
+        for campo in kit_form.fields.values():
+            campo.disabled = True
+        for campo in data_ativacao_form.fields.values():
+            campo.disabled = True
+        for subform in produto_formset.forms:
+            for campo in subform.fields.values():
+                campo.disabled = True
+
     return render(
         request,
         "ri/ri_detail.html",
@@ -1070,8 +1223,10 @@ def ri_detail_view(request, inep):
             "kit_form": kit_form,
             "kit_ja_lancado": kit_ja_lancado,
             # RN-020: com o RI em "Faturamento Concluído", os campos do
-            # Lado IXC e do Lado Relatório EACE ficam somente leitura.
+            # Lado Relatório EACE ficam somente leitura.
             "ri_bloqueado_faturamento_concluido": bool(ri) and _bloqueado_faturamento_concluido(ri),
+            # RN-052: Lado IXC só é editável com o RI em "Em Andamento".
+            "lado_ixc_editavel": lado_ixc_editavel,
             "produto_formset": produto_formset,
             "data_ativacao_form": data_ativacao_form,
             "divergencia_municipio_ixc": divergencia_municipio_ixc,
@@ -1087,6 +1242,14 @@ def ri_detail_view(request, inep):
             # RN-012: usuários do sistema para o <select> de reatribuição do
             # responsável.
             "usuarios": User.objects.order_by("username"),
+            # RN-051: status editável + ação "Enviar e-mail" na própria tela.
+            "status_ri_manuais": STATUS_RI_MANUAIS,
+            "status_ri_opcoes_disponiveis": status_ri_opcoes_disponiveis,
+            "usuario_administrador": request.user.is_administrador,
+            "assunto_sugerido": _assunto_sugerido_email(escola, timezone.localdate()) if ri else "",
+            "remetente_financeiro": settings.DEFAULT_FROM_EMAIL,
+            "para_financeiro_sugestao": ", ".join(DESTINATARIOS_FINANCEIRO),
+            "cc_financeiro_sugestao": ", ".join(COPIA_FINANCEIRO),
         },
     )
 
@@ -1169,10 +1332,7 @@ def planilha_eace_sincronizar_todas_view(request):
                 _resumo_item_ixc(item.descricao_item, item.quantidade, item.valor_unitario),
             )
 
-        # RN-024: RI concluído automaticamente pela coluna "Status escola"
-        # entra na contagem mesmo sem item novo lançado (troca de status é
-        # independente do lançamento de itens).
-        if resultado["criados"] or resultado["concluido_status_escola"]:
+        if resultado["criados"]:
             total_atualizados += 1
 
     # RN-023 (ajustada em 2026-08-27): usuário pediu só a contagem de
@@ -1202,8 +1362,8 @@ def ri_item_ixc_update_view(request, item_pk):
     """Edição do item do lado IXC — Administrador e Analista (RN-004)."""
     item = get_object_or_404(RiItemIxc, pk=item_pk)
     inep = item.ri.escola.inep
-    if _bloqueado_faturamento_concluido(item.ri):
-        messages.error(request, MENSAGEM_BLOQUEIO_FATURAMENTO_CONCLUIDO)
+    if not _lado_ixc_editavel(item.ri):
+        messages.error(request, MENSAGEM_LADO_IXC_SOMENTE_LEITURA)
         return redirect("ri_detail", inep=inep)
     if request.method == "POST":
         valor_anterior = _resumo_item_ixc(item.descricao_item, item.quantidade, item.valor_unitario)
@@ -1230,8 +1390,8 @@ def ri_item_ixc_delete_view(request, item_pk):
     """Exclusão do item do lado IXC — só Administrador (RN-004)."""
     item = get_object_or_404(RiItemIxc, pk=item_pk)
     inep = item.ri.escola.inep
-    if _bloqueado_faturamento_concluido(item.ri):
-        messages.error(request, MENSAGEM_BLOQUEIO_FATURAMENTO_CONCLUIDO)
+    if not _lado_ixc_editavel(item.ri):
+        messages.error(request, MENSAGEM_LADO_IXC_SOMENTE_LEITURA)
         return redirect("ri_detail", inep=inep)
     if not request.user.is_administrador:
         return HttpResponseForbidden("Somente Administrador pode excluir itens.")

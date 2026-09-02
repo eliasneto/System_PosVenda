@@ -104,7 +104,7 @@
                 </button>
                 <div id="submenu-projeto" class="{% if request.resolver_match.url_name != 'grid_inep' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
                     <a href="{% url 'grid_inep' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'grid_inep' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
-                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'grid_inep' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> EACE
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'grid_inep' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Equipamentos
                     </a>
                 </div>
             </div>
@@ -245,6 +245,41 @@
         document.body.addEventListener('htmx:afterSwap', function () {
             lucide.createIcons();
             ativarAutoDismissMensagens();
+        });
+
+        // RN-051 (2026-09-02): "Status do RI"/"Responsável" (grid e tela de
+        // detalhe do RI) salvam direto ao trocar a opção da lista, sem botão
+        // de salvar — `requestSubmit()` dispara o evento "submit" que o HTMX
+        // escuta pra atualizar sem recarregar a página (FEAT-019). Delegado
+        // no <body> (em vez de um listener por <select>, preso ao elemento
+        // carregado na 1ª renderização): o próprio bloco de status/
+        // responsável é reposto por uma troca HTMX (hx-swap-oob) a cada
+        // salvamento, e o <select> novo, vindo do servidor, não teria
+        // listener nenhum sem a delegação — sem HTMX carregado, o
+        // comportamento é o mesmo de antes (POST tradicional, sem
+        // auto-submit).
+        document.body.addEventListener('change', function (evento) {
+            var select = evento.target.closest('form[data-salvar-ao-trocar] select');
+            if (select) select.form.requestSubmit();
+        });
+
+        // FEAT-008/RN-051: abre/fecha o modal "Enviar e-mail"/"Compor
+        // e-mail" ao financeiro — mesmo motivo da delegação acima: o botão
+        // que abre o modal pode chegar depois, numa troca HTMX (ex.: tela
+        // de detalhe do RI, ao mudar o status para "Envio de Email para
+        // Faturamento").
+        document.body.addEventListener('click', function (evento) {
+            var abrir = evento.target.closest('[data-abrir-modal-email]');
+            if (abrir) {
+                var modal = document.getElementById(abrir.getAttribute('data-abrir-modal-email'));
+                if (modal) modal.classList.remove('hidden');
+                return;
+            }
+            var fechar = evento.target.closest('[data-fechar-modal-email]');
+            if (fechar) {
+                var modalFechar = fechar.closest('[data-modal-email]');
+                if (modalFechar) modalFechar.classList.add('hidden');
+            }
         });
     </script>
     {% block extra_js %}{% endblock %}

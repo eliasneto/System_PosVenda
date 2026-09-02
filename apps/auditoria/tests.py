@@ -101,7 +101,7 @@ class TransicaoStatusAuditoriaTests(TestCase):
         )
         registro = Auditoria.objects.get(acao=Auditoria.TRANSICAO_STATUS, entidade="Ri", entidade_id=ri.pk)
         self.assertEqual(registro.usuario, self.user)
-        self.assertEqual(registro.valor_anterior, "Andamento")
+        self.assertEqual(registro.valor_anterior, "Em Andamento")
         self.assertEqual(registro.valor_novo, "Envio de Email para faturamento")
 
     def test_transicao_bloqueada_nao_gera_registro(self):
@@ -164,6 +164,8 @@ class EnvioEmailAuditoriaTests(TestCase):
             municipio_ixc="Fortaleza",
             estado_ixc="CE",
             data_ativacao=date(2026, 8, 1),
+            cnpj="00.000.000/0001-00",
+            cnpj_ficticio="11.111.111/0001-11",
         )
         RiItemIxc.objects.create(
             ri=self.ri,
