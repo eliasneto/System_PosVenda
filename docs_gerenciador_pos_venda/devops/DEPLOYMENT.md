@@ -126,10 +126,19 @@ sobrescrever (o `reset --hard` descarta qualquer alteração local).
 ```bash
 docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml up -d --build
 docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml up -d --wait db
+docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml restart nginx
 ```
 
 Nunca usar `down -v` nem remover volume nesta etapa — o dado real do
 projeto (2.622 escolas, RIs, faturamento) está nele.
+
+**O `restart nginx` no final não é opcional** — o Nginx resolve o
+hostname `web` (DNS interno do Docker) só uma vez, quando o próprio
+processo dele inicia, e guarda esse IP em memória. Como o `web` quase
+sempre é recriado no `up --build` (o Nginx normalmente não, se a imagem
+dele não mudou), sem esse `restart` o Nginx continua apontando pro IP
+antigo e o site responde `502 Bad Gateway` (incidente confirmado em
+2026-09-02, ver `TROUBLESHOOTING.md`).
 
 ### 4. Migrations
 

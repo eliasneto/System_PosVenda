@@ -46,6 +46,15 @@ docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" up -d --build
 echo "==> Aguardando o banco ficar saudavel"
 docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" up -d --wait db
 
+# O Nginx resolve o hostname "web" (DNS interno do Docker) só uma vez, no
+# proprio start dele, e guarda o IP em memoria. Como o "web" quase sempre
+# e recriado no "up --build" (o Nginx normalmente nao, se a imagem dele
+# nao mudou), sem este restart o Nginx fica apontando pro IP antigo e o
+# site responde 502 Bad Gateway (incidente confirmado em 2026-09-02, ver
+# TROUBLESHOOTING.md).
+echo "==> Reiniciando Nginx (re-resolve o IP novo do web)"
+docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" restart nginx
+
 echo "==> Rodando migrations"
 docker compose "${COMPOSE_ARGS[@]}" --env-file "${ENV_FILE}" exec -T web python manage.py migrate --noinput
 

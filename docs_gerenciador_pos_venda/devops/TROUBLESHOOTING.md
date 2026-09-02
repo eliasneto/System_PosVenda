@@ -265,12 +265,37 @@ precisar deles de volta (ex.: emergência), religar manualmente já muda
 esse comportamento, então reaplicar o `docker update --restart=no` depois
 de terminar.
 
-**Pendência (não bloqueia o site, mas falta preencher):**
-`GRAPH_FINANCEIRO_CLIENT_ID`/`_SECRET`/`_TENANT_ID` em `.env.hml`
-continuam com `TODO` — envio de e-mail do financeiro via Graph API
-(FEAT-008) não deve funcionar no stack `hml` até alguém preencher essas 3
-chaves com a credencial real (mesmo padrão dos casos de AD/SMTP
-documentados acima); DevOps não inventa esse valor.
+**Atualização (2026-09-02, mesmo dia):** usuário confirmou que os valores
+reais das 3 chaves já existiam no `.env` local de desenvolvimento (mesma
+credencial serve os dois ambientes) — copiadas para `.env.hml` no
+servidor (`GRAPH_FINANCEIRO_ENABLED=True` + as 3 chaves), mesmo padrão já
+usado para AD/SMTP nesta página. Validado com um `_obter_token()` real
+(token do Azure AD obtido com sucesso, sem ler/processar e-mail nenhum) —
+pendência encerrada.
+
+### `502 Bad Gateway` depois de recriar o `web` (Nginx não acha o container novo)
+
+**Caso real confirmado (2026-09-02, servidor `192.168.90.109:8000`):**
+depois de `docker compose ... up -d --force-recreate web`, o `web` subia
+normal (log do Gunicorn mostrando `Listening at: http://0.0.0.0:8000`),
+mas `/login/` respondia `502` através do Nginx.
+
+**Causa:** o Nginx resolve o hostname `web` (nome do serviço, DNS interno
+do Docker) só uma vez, quando o próprio processo do Nginx inicia, e
+guarda o IP resolvido em memória. Recriar o `web` (`--force-recreate`,
+ou qualquer `up` que troque o container) muda o IP interno dele — o
+Nginx continua tentando falar com o IP antigo até ser reiniciado.
+
+**Correção:** reiniciar o Nginx depois de recriar `web`:
+```
+docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml restart nginx
+```
+**Prevenção:** todo `--force-recreate web` (ou `--force-recreate
+email_scheduler`, que não passa pelo Nginx mas é bom manter o hábito)
+neste servidor deve terminar com esse `restart nginx` — não é opcional,
+é sempre necessário depois de recriar o `web` especificamente. Validar
+com `curl -I http://192.168.90.109:8000/login/` (esperado `200`) antes de
+considerar o deploy concluído.
 
 ### Deploy automático (push na branch `homolog`) não dispara ou falha no job "deploy"
 
