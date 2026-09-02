@@ -844,7 +844,7 @@ def ri_detail_view(request, inep):
 
     kit_form = RiItemIxcKitForm(escola=escola)
     produto_formset = RiItemIxcProdutoFormSet(form_kwargs={"escola": escola})
-    data_ativacao_form = RiDataAtivacaoForm(instance=ri)
+    data_ativacao_form = RiDataAtivacaoForm(instance=ri, escola=escola)
     # RN-018: mesmos campos do bloco do Lado IXC acima, com prefixo próprio
     # para não colidir com os ids/nomes do outro formulário na mesma
     # página (os dois usam a mesma classe de campo "kit"/"produto").

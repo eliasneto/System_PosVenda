@@ -232,7 +232,17 @@ class RiDataAtivacaoForm(forms.ModelForm):
     (`gerar_planilha_faturamento`), onde a exigência de fato mora.
 
     RN-048 (2026-09-01): mesmo formulário ganha CNPJ/CNPJ Fictício, mesmo
-    padrão opcional aqui — mesma exigência só na hora de gerar a planilha."""
+    padrão opcional aqui — mesma exigência só na hora de gerar a planilha.
+
+    RN-014 (2026-09-02; revista): Município/Estado nascem preenchidos com
+    `Escola.municipio`/`Escola.estado` (dado do INEP) em vez de vazios —
+    usuário pediu para não digitar de novo algo que o sistema já tem.
+    Continuam campo livre e editável: é só o valor inicial (`initial`) que
+    muda, o usuário pode sobrescrever e o que for salvo em `Ri` continua
+    sendo o dono da comparação de divergência acima, sem alterar esse
+    comportamento. Só pré-preenche quando o Lado IXC ainda não tem valor
+    próprio salvo — uma vez editado/salvo pelo usuário, o valor do Lado IXC
+    passa a mandar (não é sobrescrito a cada renderização)."""
 
     class Meta:
         model = Ri
@@ -258,6 +268,28 @@ class RiDataAtivacaoForm(forms.ModelForm):
                 attrs={"class": CAMPO_TEXTO, "placeholder": "Ex.: 00.000.000/0000-00"}
             ),
         }
+
+    def __init__(self, *args, escola=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # RN-014 (2026-09-02): pré-preenche com o cadastro da Escola (INEP)
+        # só quando o Lado IXC ainda não tem valor próprio — instância nova
+        # ou já salva mas com o campo vazio. Uma vez que o usuário salvar um
+        # valor (igual ou diferente do da Escola), esse valor passa a vir do
+        # `instance` e não é mais sobrescrito por este `initial`.
+        #
+        # Só se aplica ao formulário não vinculado (GET, tela de exibição) —
+        # o formulário vinculado ao POST (`RiDataAtivacaoForm(request.POST,
+        # instance=ri)`) não recebe `escola` na view exatamente para não
+        # afetar `self.initial`: o log por campo alterado (RN-008) usa
+        # `has_changed()`/`changed_data` comparando o valor submetido contra
+        # `initial`, e esse cálculo depende de `initial` refletir só o valor
+        # anterior de verdade do RI — nunca um valor da Escola usado apenas
+        # como sugestão visual.
+        if escola and not self.is_bound:
+            if not self.initial.get("municipio_ixc"):
+                self.initial["municipio_ixc"] = escola.municipio
+            if not self.initial.get("estado_ixc"):
+                self.initial["estado_ixc"] = escola.estado
 
     def clean_cnpj(self):
         return (self.cleaned_data.get("cnpj") or "").strip()

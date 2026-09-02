@@ -1398,14 +1398,15 @@ class SincronizarEmailFinanceiroTests(TestCase):
     """FEAT-009/FEAT-020 (RF-08/RF-09/RF-19, RN-005/RN-009/RN-016): uma
     passada de polling (delta query do Microsoft Graph — IMAP com
     usuário/senha não funciona mais nessa caixa, testado em 2026-08-25)
-    identifica o RI pelo código de rastreio do assunto, valida a estrutura
-    da resposta (1 PDF + 1 XML) e sempre avança o status para "Resposta
-    Financeiro" — só quando está no padrão é que anexa os documentos.
-    Fora do padrão, sem código ou sem RI aguardando nunca bloqueia; fora do
-    padrão só gera alerta (mas avança o status do mesmo jeito, RN-016), sem
-    código ou sem RI aguardando não altera nada. Credenciais e chamadas de
-    rede são todas dublês — não há como (nem se deve) testar contra o Graph
-    de verdade."""
+    identifica o RI pelo código de rastreio do assunto, confirma que o
+    remetente é do domínio do financeiro (RN-016, correção 2026-09-02),
+    valida a estrutura da resposta (1 PDF + 1 XML) e avança o status para
+    "Resposta Financeiro" — só quando está no padrão é que anexa os
+    documentos. Fora do padrão só gera alerta (mas avança o status do mesmo
+    jeito, RN-016); sem código, sem RI aguardando ou remetente fora do
+    domínio do financeiro não altera nada. Credenciais e chamadas de rede
+    são todas dublês — não há como (nem se deve) testar contra o Graph de
+    verdade."""
 
     @classmethod
     def tearDownClass(cls):
@@ -1449,7 +1450,8 @@ class SincronizarEmailFinanceiroTests(TestCase):
 
         self.assertEqual(resultado, {
             "processados": 1, "identificados": 1, "fora_do_padrao": 0,
-            "sem_codigo": 0, "sem_ri_aguardando": 0, "duplicados": 0,
+            "sem_codigo": 0, "sem_ri_aguardando": 0,
+            "remetente_nao_reconhecido": 0, "duplicados": 0,
         })
         self.ri.refresh_from_db()
         self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
@@ -1500,11 +1502,38 @@ class SincronizarEmailFinanceiroTests(TestCase):
         self.assertEqual(resultado["sem_ri_aguardando"], 1)
         self.assertFalse(EmailFinanceiroLog.objects.exists())
 
+    def test_resposta_de_remetente_fora_do_dominio_do_financeiro_nao_altera_nada(self):
+        """RN-016 (correção 2026-09-02): código de rastreio no assunto (RN-009)
+        não basta — usuário reportou falso positivo (INEP 35271561) em que um
+        e-mail de remetente qualquer (não do financeiro) avançava o status do
+        RI. Remetente fora do domínio do financeiro não muda o status, não
+        grava `EmailFinanceiroLog` nem entrada na linha do tempo — só alerta
+        no log do servidor."""
+        bruto = _montar_email_bytes(self.assunto_padrao, remetente="Elias Neto <eliasnetoce@gmail.com>")
+        resultado = self._rodar_sync([("<msg-externo@gmail.com>", bruto)])
+
+        self.assertEqual(resultado["remetente_nao_reconhecido"], 1)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_FINANCEIRO)
+        self.assertFalse(EmailFinanceiroLog.objects.exists())
+        self.assertFalse(RiHistorico.objects.filter(ri=self.ri).exists())
+
+    def test_resposta_de_subdominio_diferente_nao_conta_como_financeiro(self):
+        """RN-016: comparação de domínio é exata (`speedcsc.com.br`), não por
+        substring — evita um domínio parecido (mas diferente) ser aceito por
+        engano."""
+        bruto = _montar_email_bytes(self.assunto_padrao, remetente="alguem@outrospeedcsc.com.br")
+        resultado = self._rodar_sync([("<msg-externo-2@dominio-parecido>", bruto)])
+
+        self.assertEqual(resultado["remetente_nao_reconhecido"], 1)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_FINANCEIRO)
+
     def test_resposta_fora_do_padrao_gera_alerta_e_avanca_status(self):
-        """RN-005/RN-016: resposta sem exatamente 1 PDF + 1 XML não bloqueia
-        o fluxo, só gera alerta — aqui, só o PDF veio anexado — mas, desde a
-        RN-016, o status avança para "Resposta Financeiro" do mesmo jeito
-        que a resposta no padrão, sem anexar os documentos."""
+        """RN-005/RN-016: resposta com quantidade de PDF diferente da de XML
+        não bloqueia o fluxo, só gera alerta — aqui, só o PDF veio anexado —
+        mas, desde a RN-016, o status avança para "Resposta Financeiro" do
+        mesmo jeito que a resposta no padrão, sem anexar os documentos."""
         bruto = _montar_email_bytes(
             self.assunto_padrao,
             anexos=[("nota_fiscal.pdf", "application", "pdf", b"%PDF-1.4 conteudo")],
@@ -1528,6 +1557,55 @@ class SincronizarEmailFinanceiroTests(TestCase):
         # do tempo) — só o alerta.
         self.assertFalse(RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.ANEXO).exists())
         self.assertFalse(RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.EMAIL).documentos.exists())
+
+    def test_resposta_com_mais_de_uma_nota_fiscal_anexa_todos_os_documentos(self):
+        """RN-005 (correção 2026-09-02): financeiro pode responder com mais
+        de 1 Nota Fiscal no mesmo e-mail (usuário reportou, INEP 35095874) —
+        2 PDF + 2 XML é "no padrão" (quantidade igual, não precisa ser
+        exatamente 1+1) e os 4 arquivos são salvos como `Documento`, sem
+        substituir um pelo outro."""
+        bruto = _montar_email_bytes(
+            self.assunto_padrao,
+            anexos=[
+                ("1573.pdf", "application", "pdf", b"%PDF-1.4 nf 1573"),
+                ("1573.xml", "text", "xml", b"<nfe>1573</nfe>"),
+                ("1575.pdf", "application", "pdf", b"%PDF-1.4 nf 1575"),
+                ("1575.xml", "text", "xml", b"<nfe>1575</nfe>"),
+            ],
+        )
+        resultado = self._rodar_sync([("<msg-multi-nf@financeiro>", bruto)])
+
+        self.assertEqual(resultado["identificados"], 1)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+        pdfs_ativos = Documento.objects.filter(ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF, ativo=True)
+        xmls_ativos = Documento.objects.filter(ri=self.ri, tipo=Documento.XML, ativo=True)
+        self.assertEqual(pdfs_ativos.count(), 2)
+        self.assertEqual(xmls_ativos.count(), 2)
+
+        log = EmailFinanceiroLog.objects.get(ri=self.ri)
+        self.assertEqual(log.status_leitura, EmailFinanceiroLog.OK)
+
+        entrada_email = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.EMAIL)
+        self.assertEqual(entrada_email.documentos.count(), 4)
+
+    def test_resposta_com_quantidade_de_pdf_diferente_de_xml_continua_fora_do_padrao(self):
+        """RN-005: quantidade de PDF diferente da de XML continua fora do
+        padrão (algo de fato incompleto), mesmo com mais de 1 arquivo — não
+        é só "diferente de 1+1"."""
+        bruto = _montar_email_bytes(
+            self.assunto_padrao,
+            anexos=[
+                ("1573.pdf", "application", "pdf", b"%PDF-1.4 nf 1573"),
+                ("1575.pdf", "application", "pdf", b"%PDF-1.4 nf 1575"),
+                ("1573.xml", "text", "xml", b"<nfe>1573</nfe>"),
+            ],
+        )
+        resultado = self._rodar_sync([("<msg-desbalanceado@financeiro>", bruto)])
+
+        self.assertEqual(resultado["fora_do_padrao"], 1)
+        self.assertFalse(Documento.objects.filter(ri=self.ri).exists())
 
     def test_mensagem_repetida_nao_e_processada_duas_vezes(self):
         """O delta query do Graph garante "ao menos uma vez", não
@@ -2684,6 +2762,32 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
         self.assertNotContains(resp, "diferem do cadastro da Escola")
+
+    def test_municipio_estado_ixc_vem_preenchido_com_dado_da_escola_quando_ainda_vazio(self):
+        """RN-014 (revista em 2026-09-02): Município/Estado do Lado IXC
+        nascem preenchidos com o cadastro da Escola (INEP) quando o RI ainda
+        não tem valor próprio salvo — evita digitar de novo algo que o
+        sistema já tem. Continua editável: é só o valor inicial que muda."""
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(
+            resp.context["data_ativacao_form"].initial.get("municipio_ixc"), "Fortaleza"
+        )
+        self.assertEqual(resp.context["data_ativacao_form"].initial.get("estado_ixc"), "CE")
+
+    def test_municipio_estado_ixc_ja_salvo_nao_e_sobrescrito_pelo_dado_da_escola(self):
+        """RN-014: uma vez que o Lado IXC tem valor próprio salvo (mesmo
+        diferente do cadastro da Escola), o pré-preenchimento não entra em
+        ação — só vale quando o campo do Lado IXC ainda está vazio."""
+        Ri.objects.create(
+            escola=self.escola, status=Ri.ANDAMENTO,
+            municipio_ixc="Recife", estado_ixc="PE",
+        )
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(resp.context["data_ativacao_form"].initial.get("municipio_ixc"), "Recife")
+        self.assertEqual(resp.context["data_ativacao_form"].initial.get("estado_ixc"), "PE")
 
     def test_divergencia_kit_declarado_e_instalado_mostra_alerta_sem_bloquear(self):
         """RN-002 (esclarecida em 2026-08-26): KIT instalado diferente do

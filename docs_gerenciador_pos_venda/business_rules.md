@@ -118,6 +118,22 @@ filtro).
 
 **Status:** Ativa
 
+**Correção (2026-09-02):** usuário reportou falso positivo (INEP 35271561)
+— o RI avançava para "Resposta Financeiro" sem o financeiro ter respondido
+de verdade. Causa: o código de rastreio (RN-009) identifica só o RI de
+origem a partir do assunto, mas não confirma quem enviou a mensagem —
+qualquer remetente com o código no assunto (reencaminhamento, "Responder a
+todos", teste manual a partir de e-mail pessoal) avançava o status.
+Corrigido exigindo que o remetente (cabeçalho "From") seja do domínio do
+financeiro (`speedcsc.com.br`, mesmo domínio de `DESTINATARIOS_FINANCEIRO`
+em `apps/ri/views.py`) para a mensagem contar como resposta de verdade;
+remetente de outro domínio não muda o status, não grava
+`EmailFinanceiroLog` nem entrada na linha do tempo — só alerta no log do
+servidor, mesmo padrão já usado para "sem código"/"sem RI aguardando".
+Decisão confirmada com o usuário (CLAUDE.md §9): validar por domínio, não
+por lista fixa de endereços nem pelos destinatários do e-mail enviado
+naquele RI específico.
+
 ### RN-019 — Exceção do Administrador: saída manual de "Aguardando financeiro"
 **Descrição:** Enquanto o RI está no status "Aguardando financeiro" (RN-001),
 a transição para o próximo status continua sendo, por padrão, só
@@ -859,9 +875,10 @@ correspondem ao que foi solicitado no e-mail enviado para aquele INEP.
 EACE"); encontrar divergência classifica como o tipo "NF × financeiro" no
 catálogo de divergências (RN-003).
 
-**Exceções:** e-mail de resposta fora do padrão (sem 1 PDF + 1 XML, ou sem
-INEP identificável) não bloqueia o fluxo, só gera alerta no log de e-mail —
-mas, a partir da RN-016, também muda o status para "Resposta Financeiro".
+**Exceções:** e-mail de resposta fora do padrão (quantidade de PDF
+diferente da de XML, ou sem INEP identificável) não bloqueia o fluxo, só
+gera alerta no log de e-mail — mas, a partir da RN-016, também muda o
+status para "Resposta Financeiro".
 
 **Impacto técnico:** tabelas `email_financeiro_log` e `documento`
 (`modelo-dados.md`).
@@ -869,6 +886,21 @@ mas, a partir da RN-016, também muda o status para "Resposta Financeiro".
 **Features relacionadas:** FEAT-009, FEAT-020.
 
 **Status:** Ativa
+
+**Correção (2026-09-02):** usuário reportou (INEP 35095874) que o
+financeiro respondeu com 2 Notas Fiscais no mesmo e-mail (2 PDF + 2 XML,
+pareados pelo número da NF no nome do arquivo) e o sistema descartou os 4
+arquivos — "no padrão" exigia **exatamente** 1 PDF + 1 XML; qualquer outra
+quantidade (mesmo 2+2, corretamente detectado) não salvava nenhum
+`Documento`, só avançava o status (RN-016) sem guardar os anexos de
+verdade. Corrigido: "no padrão" passa a ser quantidade de PDF igual à de
+XML (1+1, 2+2, N+N), todos salvos como `Documento`; fora do padrão de
+verdade volta a ser só quantidade diferente (algo de fato incompleto, ex.:
+2 PDF e 1 XML). `Documento` também deixou de aposentar (`ativo=False`) o
+anterior do mesmo tipo ao salvar um novo — antes pensado para "resposta
+corrigida" substituindo a antiga, mas isso apagaria a 1ª NF ao salvar a
+2ª dentro da mesma resposta; decisão confirmada com o usuário (CLAUDE.md
+§9): guardar todos os pares PDF+XML, sem substituir os anteriores.
 
 ## Auditoria
 
@@ -1273,6 +1305,18 @@ usado no alerta de KIT divergente (RN-002, informal, não bloqueia).
 **Features relacionadas:** FEAT-017, FEAT-018.
 
 **Status:** Ativa
+
+**Revisão (2026-09-02):** Município/Estado do Lado IXC nascem preenchidos
+com `Escola.municipio`/`Escola.estado` (dado do INEP) em vez de vazios —
+usuário pediu para não repetir na digitação um dado que o sistema já tem.
+Continuam campo livre e editável pelo usuário; o pré-preenchimento só
+acontece quando o Lado IXC ainda não tem valor próprio salvo (uma vez
+salvo, esse valor passa a mandar) e só no formulário exibido (GET) — o
+formulário que processa o "Salvar" (POST) não recebe esse valor no
+`initial`, para o log por campo alterado (RN-008) continuar comparando
+contra o valor anterior de verdade do RI, não contra a sugestão da Escola.
+Não muda a comparação de divergência (ainda contra o valor salvo em `Ri`)
+nem a exigência de preenchimento da RN-013.
 
 ### RN-018 — Lado Relatório EACE: mesmo formulário do Lado IXC (KIT Instalado + Produtos)
 **Descrição:** O lançamento do Lado Relatório EACE (3º lado do RI) passa a
@@ -1774,6 +1818,10 @@ view/seção do dashboard da RN-025 (`apps/core`, `home.html`).
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-02 | Correção pontual de dados em produção (sem RN nova), 2ª rodada: usuário reportou que o financeiro respondeu o INEP 52032043 e a resposta não apareceu no sistema nem deu baixa no status — investigação revelou uma consequência mais grave do mesmo bug: quando o eco falso avança o status antes da resposta real chegar, a resposta real é descartada silenciosamente (`Ri` deixa de estar "Aguardando financeiro", único status aceito pra receber resposta), sem gravar nada, só aviso no log do servidor; varredura completa em produção encontrou mais 6 RIs com o mesmo eco ainda pendente (INEPs 52008649, 53005384, 17002109, 52049574, 17004810, 35278312, revertidos para "Aguardando financeiro") e, ao buscar direto na caixa de e-mail (Graph, fora da delta query já consumida) por resposta real perdida em cada um, recuperou 2 respostas genuínas do financeiro que tinham sido descartadas (INEP 52032043, RI 546; INEP 17002109, RI 1396) — reprocessadas com a mesma função de produção (`_processar_mensagem`), avançando o status corretamente para "Resposta Financeiro"; os outros 4 INEPs revertidos não tinham nenhuma resposta real na caixa ainda, então ficam corretamente em "Aguardando financeiro" | Usuário autorizou expressamente a varredura completa após reportar o caso do INEP 52032043; critério confirmado: reverter só quando for de fato eco (sem resposta legítima registrada), recuperar quando houver resposta real perdida; pendência: a correção de código (domínio do remetente) ainda não foi implantada em produção — enquanto isso não acontecer, o mesmo problema (inclusive descarte de resposta real) pode voltar a ocorrer a cada novo envio |
+| 2026-09-02 | Correção pontual de dados em produção (sem RN nova): 9 RIs revertidos de "Resposta Financeiro" para "Aguardando financeiro" (INEPs 35009730, 35417051, 52032043, 52108880, 35050611, 35010337, 35399474, 35095874, 35234643) | Mesma causa da correção da RN-016 (linha abaixo): a cópia do e-mail enviado (remetente `posvendas@megainfraestrutura.com.br`) estava voltando para a própria caixa monitorada e sendo lida como resposta do financeiro; confirmado por leitura direta (só leitura) que nenhum dos 9 tinha resposta real do domínio `speedcsc.com.br` antes de reverter; usuário autorizou explicitamente a correção em produção, com o critério "se for falso positivo corrige, se realmente veio do financeiro deixa"; RiHistorico de cada RI ganhou entrada explicando o motivo; correção de código (fix do domínio) ainda não implantada em produção nesta data — pendência de deploy formal (DEPLOYMENT.md) para não repetir |
+| 2026-09-02 | RN-016 corrigida (resposta do financeiro só conta se o remetente for do domínio `speedcsc.com.br`) | Usuário reportou falso positivo real (INEP 35271561): RI avançava para "Resposta Financeiro" sem o financeiro ter respondido — o código de rastreio (RN-009) identificava o RI pelo assunto, mas não validava o remetente; qualquer e-mail com o código (mesmo de fora do financeiro) avançava o status; confirmado com o usuário (CLAUDE.md §9): validar por domínio, não por lista fixa de endereços nem pelos destinatários específicos daquele envio |
+| 2026-09-02 | RN-014 revisada (Município/Estado do Lado IXC nascem preenchidos com o cadastro da Escola — INEP —, continuam campo livre e editável) | Usuário pediu para não precisar digitar de novo Município/Estado quando o sistema já tem o dado do INEP; muda só o valor inicial exibido (`initial` do formulário) — não altera a comparação de divergência nem a exigência de preenchimento na hora de gerar a planilha/enviar o e-mail (RN-013), que continuam olhando o valor de fato salvo em `Ri`; pré-preenchimento só se aplica quando o campo do Lado IXC ainda está vazio, e só na renderização (GET) — o formulário do POST continua sem esse valor no `initial`, para não afetar o log por campo alterado (RN-008) |
 | 2026-09-02 | RN-024 retirada (Sincronizador do Relatório EACE deixa de mudar o status do RI — só lança os itens do Lado 3, mesmo com "Status escola" = "Conectada"); RN-003 ajustada (Lado IXC ou Lado Relatório EACE totalmente vazio deixa de contar como divergência — confronto só faz sentido com os dois lados tendo algum valor) | Usuário pediu os dois ajustes explicitamente; RN-003 corrige bug real identificado nos dados (473 divergências "Com divergência" abertas, 471 delas falso positivo por lado vazio, já corrigidas nos dados gravados); afeta FEAT-024/FEAT-025 (RN-024) e FEAT-005/FEAT-007 (RN-003); impacto conhecido e não resolvido nesta mudança: cards "Kits Instalados"/"Valor já Faturado" (RN-026) dependem do RI estar "Faturamento Concluído", que agora só é alcançado pelo ciclo manual completo — usuário avisado |
 | 2026-09-02 | RN-052 criada (rótulo do status "Andamento" passa a "Em Andamento"; Lado IXC só aceita lançamento/edição/exclusão com o RI nesse status — qualquer outro status fica somente leitura, formulário continua visível e desabilitado, não escondido) | Usuário pediu explicitamente os dois ajustes; formaliza no código o que a RN-001 já descrevia (dados do Lado IXC digitados só depois do status virar "Andamento"), mas que nunca tinha sido tecnicamente travado — antes só "Faturamento Concluído" bloqueava (RN-020); Lado Relatório EACE não afetado, continua só sob a RN-020; afeta FEAT-004/FEAT-006 |
 | 2026-09-02 | RN-021 ampliada (aceita também o arquivo bruto exportado direto da EACE — vírgula + aspas, detectado sozinho pelo cabeçalho, sem precisar tratar à mão antes de subir) | Usuário anexou um arquivo real da EACE ("Documento correto.csv") mostrando que o formato bruto difere do já tratado só no delimitador (vírgula + aspas vs. ponto e vírgula sem aspas) — mesmas colunas/nomes nos dois; validado contra o arquivo real (1.783 linhas) sem alterar a Planilha EACE já ativa no ambiente local |

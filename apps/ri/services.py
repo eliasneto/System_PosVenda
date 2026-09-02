@@ -14,6 +14,7 @@ from datetime import timezone as dt_timezone
 from decimal import Decimal
 from email import message_from_bytes, policy
 from email.header import decode_header
+from email.utils import parseaddr
 from urllib.parse import quote
 
 import openpyxl
@@ -1166,11 +1167,12 @@ def corrigir_valor_itens_relatorio_eace(desatualizados):
 # si (agendamento) é responsabilidade do DevOps; esta rotina só faz uma
 # passada e devolve.
 #
-# Escopo desta primeira versão (RN-005): confere que a resposta tem
-# exatamente 1 PDF + 1 XML e que o INEP é identificável pelo código de
+# Escopo desta primeira versão (RN-005): confere que a resposta tem a
+# mesma quantidade de PDF e XML — 1 ou mais Notas Fiscais no mesmo e-mail,
+# correção 2026-09-02 — e que o INEP é identificável pelo código de
 # rastreio do assunto (RN-009) — isso já é o critério completo descrito na
-# exceção da RN-005 ("sem 1 PDF + 1 XML, ou sem INEP identificável" não
-# bloqueia, só alerta). Comparar o CONTEÚDO da Nota Fiscal/XML contra os
+# exceção da RN-005 ("quantidade de PDF diferente da de XML, ou sem INEP
+# identificável" não bloqueia, só alerta). Comparar o CONTEÚDO da Nota Fiscal/XML contra os
 # itens do lado IXC para detectar divergência "NF × financeiro" (RN-003)
 # não está implementado aqui: a RN-003 já registra em aberto o critério
 # exato de casamento entre itens, e não há especificação de que campo do
@@ -1310,9 +1312,16 @@ def _classificar_anexos(mensagem):
 
 
 def _salvar_documento(ri, tipo, nome_arquivo, payload):
-    """RF-08: grava a nova versão como vigente e aposenta a anterior — o
-    próprio model já prevê múltiplas versões (`Documento.versao/ativo`)."""
-    Documento.objects.filter(ri=ri, tipo=tipo, ativo=True).update(ativo=False)
+    """RF-08/RN-005 (correção 2026-09-02): grava cada arquivo recebido como
+    um novo `Documento`, sem aposentar os anteriores do mesmo tipo. Antes,
+    salvar um novo PDF/XML desativava o anterior (pensado para "resposta
+    corrigida" substituindo a antiga) — mas o financeiro pode responder com
+    mais de 1 Nota Fiscal no mesmo e-mail (usuário reportou, INEP
+    35095874: vieram 2 NFs, 2 PDF + 2 XML), e desativar o 1º PDF ao salvar
+    o 2º, na mesma resposta, perderia a primeira NF. `versao` continua
+    incrementando por tipo, só como registro histórico de ordem de
+    chegada — `ativo` fica sempre `True` (o model já expõe o campo para uma
+    eventual necessidade futura de aposentar algum documento à parte)."""
     ultima_versao = (
         Documento.objects.filter(ri=ri, tipo=tipo).order_by("-versao").values_list("versao", flat=True).first()
         or 0
@@ -1323,11 +1332,32 @@ def _salvar_documento(ri, tipo, nome_arquivo, payload):
     return documento
 
 
+# RN-016 (correção 2026-09-02): domínio de e-mail do financeiro de verdade
+# (mesmo domínio de `DESTINATARIOS_FINANCEIRO`, em `apps/ri/views.py`) —
+# único remetente aceito para uma mensagem contar como "resposta do
+# financeiro" e avançar o status do RI. Usuário reportou falso positivo
+# (INEP 35271561): o código de rastreio (RN-009) identifica só o RI de
+# origem, não confirma quem respondeu — qualquer remetente com o código no
+# assunto (reencaminhamento, "Responder a todos", teste manual) avançava o
+# status sem o financeiro ter respondido de fato.
+DOMINIO_FINANCEIRO = "speedcsc.com.br"
+
+
+def _remetente_e_do_financeiro(remetente):
+    """True só quando o endereço do cabeçalho "From" é do domínio do
+    financeiro (`DOMINIO_FINANCEIRO`) — ignora nome de exibição
+    ("Fulano <fulano@dominio>") e caixa (maiúsculas/minúsculas)."""
+    _, endereco = parseaddr(remetente or "")
+    dominio = endereco.rsplit("@", 1)[-1].lower() if "@" in endereco else ""
+    return dominio == DOMINIO_FINANCEIRO
+
+
 def _processar_mensagem(bruto, mensagem_id_externo):
     """Processa uma mensagem já baixada do Graph (bytes RFC822, formato
     igual ao de um `.eml`). Devolve uma string com o resultado
     (`"identificados"`, `"fora_do_padrao"`, `"sem_codigo"`,
-    `"sem_ri_aguardando"` ou `"duplicado"`) — usada só para contagem."""
+    `"sem_ri_aguardando"`, `"remetente_nao_reconhecido"` ou `"duplicado"`)
+    — usada só para contagem."""
     if mensagem_id_externo and EmailFinanceiroLog.objects.filter(
         mensagem_id_externo=mensagem_id_externo
     ).exists():
@@ -1357,15 +1387,39 @@ def _processar_mensagem(bruto, mensagem_id_externo):
         )
         return "sem_ri_aguardando"
 
+    if not _remetente_e_do_financeiro(remetente):
+        # RN-016 (correção 2026-09-02): código de rastreio no assunto não
+        # basta — só remetente do domínio do financeiro conta como resposta
+        # de verdade. Não altera o status nem grava log/histórico (mesmo
+        # padrão de "sem_codigo"/"sem_ri_aguardando" acima): alerta só no
+        # log do servidor, para não bloquear nada nem gerar ruído na linha
+        # do tempo do RI.
+        logger.warning(
+            "E-mail com código de rastreio do RI %s veio de remetente fora do "
+            "domínio do financeiro (%s) — ignorado, remetente: %r",
+            ri.pk, DOMINIO_FINANCEIRO, remetente,
+        )
+        return "remetente_nao_reconhecido"
+
     pdfs, xmls = _classificar_anexos(mensagem)
-    padrao_ok = len(pdfs) == 1 and len(xmls) == 1
+    # RN-005 (correção 2026-09-02): financeiro pode responder com mais de 1
+    # Nota Fiscal no mesmo e-mail (1 PDF + 1 XML por NF, pareados pelo
+    # número da NF no nome do arquivo) — usuário reportou (INEP 35095874)
+    # que vinham 2 NFs (2 PDF + 2 XML) e os 4 arquivos eram descartados por
+    # não bater com o padrão antigo (exatamente 1 PDF + 1 XML). "No
+    # padrão" passa a ser quantidade de PDF igual à de XML, qualquer
+    # quantidade ≥ 1 — fora do padrão de verdade é quantidade diferente
+    # (algo de fato incompleto, ex.: 2 PDF e 1 XML).
+    padrao_ok = len(pdfs) == len(xmls) and len(pdfs) >= 1
     status_leitura = EmailFinanceiroLog.OK if padrao_ok else EmailFinanceiroLog.FORA_DO_PADRAO
 
-    anexo_pdf_nome = pdfs[0][0] if padrao_ok else ""
+    anexo_pdf_nome = ", ".join(nome for nome, _ in pdfs) if padrao_ok else ""
     documentos_recebidos = []
     if padrao_ok:
-        documentos_recebidos.append(_salvar_documento(ri, Documento.NOTA_FISCAL_PDF, pdfs[0][0], pdfs[0][1]))
-        documentos_recebidos.append(_salvar_documento(ri, Documento.XML, xmls[0][0], xmls[0][1]))
+        for nome, payload in pdfs:
+            documentos_recebidos.append(_salvar_documento(ri, Documento.NOTA_FISCAL_PDF, nome, payload))
+        for nome, payload in xmls:
+            documentos_recebidos.append(_salvar_documento(ri, Documento.XML, nome, payload))
 
     EmailFinanceiroLog.objects.create(
         ri=ri,
@@ -1385,12 +1439,18 @@ def _processar_mensagem(bruto, mensagem_id_externo):
         valor_novo=assunto,
     )
 
-    if padrao_ok:
+    if padrao_ok and len(pdfs) == 1:
         resumo = f"E-mail de resposta do financeiro recebido. Assunto: {assunto}"
+    elif padrao_ok:
+        resumo = (
+            f"E-mail de resposta do financeiro recebido ({len(pdfs)} Notas Fiscais). "
+            f"Assunto: {assunto}"
+        )
     else:
         resumo = (
-            f"E-mail de resposta do financeiro fora do padrão (esperado 1 PDF + 1 XML; "
-            f"recebido {len(pdfs)} PDF e {len(xmls)} XML). Assunto: {assunto}"
+            f"E-mail de resposta do financeiro fora do padrão (quantidade de PDF "
+            f"diferente da de XML; recebido {len(pdfs)} PDF e {len(xmls)} XML). "
+            f"Assunto: {assunto}"
         )
     entrada_email = RiHistorico.objects.create(ri=ri, tipo=RiHistorico.EMAIL, autor=None, mensagem=resumo)
     if documentos_recebidos:
@@ -1416,9 +1476,11 @@ def _processar_mensagem(bruto, mensagem_id_externo):
 def sincronizar_respostas_financeiro():
     """Uma passada de polling (RF-08/RF-19): lê as mensagens novas da caixa
     do financeiro desde a última passada (delta query do Microsoft Graph),
-    identifica o RI pelo código de rastreio (RN-009) e processa a resposta
-    (RN-005). Mensagem sem código reconhecível, sem RI correspondente
-    aguardando, ou fora do padrão nunca bloqueia — só gera alerta no log
+    identifica o RI pelo código de rastreio (RN-009), confirma que o
+    remetente é do domínio do financeiro (RN-016, correção 2026-09-02) e
+    processa a resposta (RN-005). Mensagem sem código reconhecível, sem RI
+    correspondente aguardando, de remetente fora do domínio do financeiro,
+    ou fora do padrão de anexo nunca bloqueia — só gera alerta no log
     (`logger.warning`, visível em `docker compose logs web`)."""
     if not _graph_habilitado():
         raise EmailFinanceiroSyncError(
@@ -1432,6 +1494,7 @@ def sincronizar_respostas_financeiro():
         "fora_do_padrao": 0,
         "sem_codigo": 0,
         "sem_ri_aguardando": 0,
+        "remetente_nao_reconhecido": 0,
         "duplicados": 0,
     }
 

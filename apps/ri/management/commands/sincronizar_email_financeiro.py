@@ -45,6 +45,8 @@ class Command(BaseCommand):
                 f"fora do padrão: {resultado['fora_do_padrao']}); "
                 f"sem código de rastreio: {resultado['sem_codigo']}; "
                 f"sem RI aguardando financeiro: {resultado['sem_ri_aguardando']}; "
+                f"remetente fora do domínio do financeiro (RN-016): "
+                f"{resultado['remetente_nao_reconhecido']}; "
                 f"duplicados (já processados antes): {resultado['duplicados']}."
             )
         )
