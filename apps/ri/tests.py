@@ -1590,6 +1590,28 @@ class SincronizarEmailFinanceiroTests(TestCase):
         entrada_email = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.EMAIL)
         self.assertEqual(entrada_email.documentos.count(), 4)
 
+    def test_resposta_com_cinco_notas_fiscais_anexa_todos_os_dez_documentos(self):
+        """RN-005: não é um limite de 2 — qualquer quantidade N de Notas
+        Fiscais no mesmo e-mail (N PDF + N XML) salva todos os pares,
+        usuário pediu confirmação explícita de que N funciona, não só 2."""
+        anexos = []
+        for numero in range(1, 6):
+            anexos.append((f"{numero}.pdf", "application", "pdf", f"%PDF-1.4 nf {numero}".encode()))
+            anexos.append((f"{numero}.xml", "text", "xml", f"<nfe>{numero}</nfe>".encode()))
+        bruto = _montar_email_bytes(self.assunto_padrao, anexos=anexos)
+        resultado = self._rodar_sync([("<msg-cinco-nf@financeiro>", bruto)])
+
+        self.assertEqual(resultado["identificados"], 1)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+        self.assertEqual(
+            Documento.objects.filter(ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF, ativo=True).count(), 5
+        )
+        self.assertEqual(Documento.objects.filter(ri=self.ri, tipo=Documento.XML, ativo=True).count(), 5)
+        entrada_email = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.EMAIL)
+        self.assertEqual(entrada_email.documentos.count(), 10)
+
     def test_resposta_com_quantidade_de_pdf_diferente_de_xml_continua_fora_do_padrao(self):
         """RN-005: quantidade de PDF diferente da de XML continua fora do
         padrão (algo de fato incompleto), mesmo com mais de 1 arquivo — não
