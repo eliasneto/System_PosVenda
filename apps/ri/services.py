@@ -204,7 +204,14 @@ def _obter_ou_criar_aba(workbook, nome, aba_modelo):
     conhecida da biblioteca. Sem isso, a logo do financeiro (a mesma
     imagem já presente em toda aba da planilha-modelo) sumia de toda aba
     criada automaticamente, ficando só na primeira aba (a que já existia
-    no modelo, nunca clonada). Copiada manualmente aqui."""
+    no modelo, nunca clonada). Copiada manualmente aqui.
+
+    RN-054 (2026-09-03): mesma limitação do `copy_worksheet` vale para
+    `sheet_view` — a aba nova nascia com as linhas de grade do Excel
+    visíveis (padrão do openpyxl) mesmo a `aba_modelo` tendo essa opção
+    desligada (toda aba do modelo nasce sem grade); usuário via a "NF
+    KIT" sem grade e qualquer aba criada automaticamente (produto sem aba
+    cadastrada) com grade. Copiada manualmente aqui, igual à imagem."""
     aba = _encontrar_aba(workbook, nome)
     if aba is not None:
         return aba
@@ -212,6 +219,7 @@ def _obter_ou_criar_aba(workbook, nome, aba_modelo):
     nova.title = _nome_aba_valido(nome)
     for imagem in aba_modelo._images:
         nova.add_image(copy.deepcopy(imagem))
+    nova.sheet_view.showGridLines = aba_modelo.sheet_view.showGridLines
     return nova
 
 
@@ -304,7 +312,15 @@ def gerar_planilha_faturamento(ri, data_vencimento):
     produtos do catálogo (ex.: "Rack 3U", "Rack 5U") podem apontar para a
     mesma aba (ex.: "RACK", via `KitPadrao.aba_planilha_financeiro`) — o
     valor da aba soma o subtotal (quantidade × valor do catálogo) de cada
-    um deles, não só a quantidade de um produto só."""
+    um deles, não só a quantidade de um produto só.
+
+    RN-053 (2026-09-03): célula `A20` de cada aba ("OPERAÇÃO COMPRA E
+    VENDA  - <MÊS>/<ANO>") passa a ser escrita a cada geração, no lugar do
+    texto fixo copiado do modelo. Mês vem de `Ri.mes_operacao_ixc`
+    (select do Lado IXC, nasce no mês corrente — RiDataAtivacaoForm); sem
+    valor salvo (RI antigo, nunca reaberto pelo Lado IXC), usa o mês
+    corrente no momento de gerar. Ano NUNCA vem do RI — é sempre
+    `timezone.now().year`, para virar sozinho depois de 31/12."""
     itens = list(ri.itens_ixc.all())
     faltando = itens_faltando_para_planilha_faturamento(ri, itens=itens)
     if faltando:
@@ -340,10 +356,20 @@ def gerar_planilha_faturamento(ri, data_vencimento):
         )
     aba_modelo = workbook.worksheets[0]
 
+    # RN-053: mês vem do Lado IXC (select, nasce no mês corrente); ano é
+    # sempre o corrente no momento de gerar, nunca o do RI — dobra
+    # sozinho para o ano seguinte assim que vira 1º de janeiro.
+    agora = timezone.now()
+    mes_nome = dict(Ri.MESES_OPERACAO_CHOICES).get(
+        ri.mes_operacao_ixc or agora.month, ""
+    )
+    texto_operacao = f"OPERAÇÃO COMPRA E VENDA  - {mes_nome.upper()}/{agora.year}"
+
     abas_usadas = set()
     for aba_nome, dados in grupos.items():
         aba = _obter_ou_criar_aba(workbook, aba_nome, aba_modelo)
 
+        aba["A20"] = texto_operacao
         aba["E10"] = data_vencimento
         aba["F10"] = _substituir_observacoes_nf(
             aba["F10"].value or "",

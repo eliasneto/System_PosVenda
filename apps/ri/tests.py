@@ -1113,6 +1113,50 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         self.assertNotIn("ITEM LPU: RACK (3)", aba_rack["F10"].value)
         self.assertEqual(len(aba_rack._images), 1)
 
+    def test_a20_usa_mes_selecionado_do_lado_ixc_e_ano_atual(self):
+        """RN-053: célula A20 ("OPERAÇÃO COMPRA E VENDA - <MÊS>/<ANO>")
+        usa o mês salvo em `Ri.mes_operacao_ixc` — ano nunca vem do RI, é
+        sempre o corrente na hora de gerar."""
+        self.ri.mes_operacao_ixc = 8  # Agosto
+        self.ri.save(update_fields=["mes_operacao_ixc"])
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba_kit = next(ws for ws in workbook.worksheets if ws.title.strip() == "NF KIT")
+        ano_atual = timezone.now().year
+        self.assertEqual(
+            aba_kit["A20"].value, f"OPERAÇÃO COMPRA E VENDA  - AGOSTO/{ano_atual}"
+        )
+
+    def test_a20_sem_mes_salvo_usa_mes_corrente(self):
+        """RN-053: RI antigo, nunca reaberto pelo Lado IXC depois desta
+        feature (`mes_operacao_ixc` nulo) — cai no mês corrente, mesmo
+        fallback usado para pré-preencher o select."""
+        self.assertIsNone(self.ri.mes_operacao_ixc)
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba_kit = next(ws for ws in workbook.worksheets if ws.title.strip() == "NF KIT")
+        agora = timezone.now()
+        mes_nome = dict(Ri.MESES_OPERACAO_CHOICES)[agora.month]
+        self.assertEqual(
+            aba_kit["A20"].value, f"OPERAÇÃO COMPRA E VENDA  - {mes_nome.upper()}/{agora.year}"
+        )
+
+    def test_aba_criada_automaticamente_herda_linhas_de_grade_ocultas(self):
+        """RN-054: aba clonada na hora (produto sem aba cadastrada) copia
+        a configuração de grade da aba-modelo (oculta em toda aba do
+        modelo) — sem a correção, `Workbook.copy_worksheet` (openpyxl)
+        nascia com a grade visível, diferente da "NF KIT"."""
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Enlace de Rádio",
+            quantidade=1, valor_unitario="0", eh_kit=False,
+        )
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba_kit = next(ws for ws in workbook.worksheets if ws.title.strip() == "NF KIT")
+        aba_nova = workbook["Enlace de Rádio"]
+        self.assertFalse(aba_kit.sheet_view.showGridLines)
+        self.assertEqual(aba_nova.sheet_view.showGridLines, aba_kit.sheet_view.showGridLines)
+
     def test_soma_subtotal_de_produtos_diferentes_na_mesma_aba(self):
         """RN-013: 2 produtos diferentes do catálogo que apontam para a
         MESMA aba (ex.: 2 tamanhos de Rack) somam o subtotal de cada um —
@@ -2190,7 +2234,9 @@ class RiDetailViewTests(TestCase):
             ri=ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
             quantidade=1, valor_unitario="0", eh_kit=True,
         )
-        cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
+        cabo = KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro", valor_equipamento="10.00"
+        )
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2272,7 +2318,9 @@ class RiDetailViewTests(TestCase):
         """RN-011 (3ª correção, 2026-08-24): o select de "KIT Instalado"
         só mostra o catálogo cuja Unidade é "Escola" — nunca item avulso."""
         KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
-        KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
+        KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro", valor_equipamento="10.00"
+        )
         Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
@@ -2301,7 +2349,9 @@ class RiDetailViewTests(TestCase):
         """RN-011: o select de "Produto" nunca mostra o KIT (Unidade
         "Escola") do catálogo — só itens avulsos."""
         KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
-        KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
+        KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro", valor_equipamento="10.00"
+        )
         Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
@@ -2310,6 +2360,46 @@ class RiDetailViewTests(TestCase):
         ]
         self.assertTrue(any("Cabo de rede" in opcao for opcao in opcoes_produto))
         self.assertFalse(any("Kit Wi-Fi Indoor" in opcao for opcao in opcoes_produto))
+
+    def test_produto_sem_valor_de_equipamento_sai_da_lista_do_lado_ixc(self):
+        """RN-055: produto sem "Equipamentos (R$)" na LPU
+        (`valor_equipamento` nulo) — só "Serviços (R$)" preenchido — não
+        aparece no select de "Produto" do Lado IXC; ele nunca é faturado
+        aqui (RN-013 usa só `valor_faturavel` = valor_equipamento) e ia
+        sempre gerar R$ 0,00 sem explicação."""
+        KitPadrao.objects.create(
+            descricao="Injetor PoE", unidade="Unidade",
+            valor_equipamento=None, valor_servico="564.04",
+        )
+        KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro",
+            valor_equipamento="10.00", valor_servico="2.00",
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        opcoes_produto = [
+            choice[1] for choice in resp.context["produto_formset"].empty_form.fields["produto"].choices
+        ]
+        self.assertTrue(any("Cabo de rede" in opcao for opcao in opcoes_produto))
+        self.assertFalse(any("Injetor PoE" in opcao for opcao in opcoes_produto))
+
+    def test_produto_sem_valor_de_equipamento_continua_no_lado_relatorio_eace(self):
+        """RN-055: o filtro é só do Lado IXC — o Lado Relatório EACE (3º
+        lado, RN-018) usa `valor_total` (Equipamento + Serviço), então um
+        produto só-com-Serviço continua faturável ali e continua na lista."""
+        KitPadrao.objects.create(
+            descricao="Injetor PoE", unidade="Unidade",
+            valor_equipamento=None, valor_servico="564.04",
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        opcoes_produto_eace = [
+            choice[1]
+            for choice in resp.context["produto_formset_eace"].empty_form.fields["produto"].choices
+        ]
+        self.assertTrue(any("Injetor PoE" in opcao for opcao in opcoes_produto_eace))
 
     def test_catalogo_filtra_por_lote_da_escola(self):
         """RN-011: o catálogo mostra só as entradas do Lote desta escola —
@@ -2333,8 +2423,12 @@ class RiDetailViewTests(TestCase):
         manualmente. Valor unitário (ajuste do usuário, 2026-08-24):
         tirado do formulário — nasce 0."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
-        roteador = KitPadrao.objects.create(descricao="Roteador extra", unidade="Unidade")
-        cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
+        roteador = KitPadrao.objects.create(
+            descricao="Roteador extra", unidade="Unidade", valor_equipamento="50.00"
+        )
+        cabo = KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro", valor_equipamento="10.00"
+        )
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2364,7 +2458,9 @@ class RiDetailViewTests(TestCase):
         um com o próprio rótulo — não só a mudança de status."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
-        cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
+        cabo = KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro", valor_equipamento="10.00"
+        )
         self.client.force_login(self.analista)
         self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2410,7 +2506,8 @@ class RiDetailViewTests(TestCase):
         parênteses do catálogo."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         nobreak = KitPadrao.objects.create(
-            descricao="Nobreak (serviço, material, equipamento)", unidade="Unidade"
+            descricao="Nobreak (serviço, material, equipamento)", unidade="Unidade",
+            valor_equipamento="1551.93",
         )
         self.client.force_login(self.analista)
         self.client.post(
@@ -2436,8 +2533,12 @@ class RiDetailViewTests(TestCase):
         meio some da submissão (como se nunca tivesse sido preenchido) e
         os outros dois continuam lançando normalmente."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
-        roteador = KitPadrao.objects.create(descricao="Roteador extra", unidade="Unidade")
-        cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
+        roteador = KitPadrao.objects.create(
+            descricao="Roteador extra", unidade="Unidade", valor_equipamento="50.00"
+        )
+        cabo = KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro", valor_equipamento="10.00"
+        )
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2585,7 +2686,9 @@ class RiDetailViewTests(TestCase):
         """RN-011: Data Ativação e lançamento de produto podem ser salvos
         juntos, na mesma submissão."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
-        cabo = KitPadrao.objects.create(descricao="Cabo de rede", unidade="metro")
+        cabo = KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro", valor_equipamento="10.00"
+        )
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -2810,6 +2913,50 @@ class RiDetailViewTests(TestCase):
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
         self.assertEqual(resp.context["data_ativacao_form"].initial.get("municipio_ixc"), "Recife")
         self.assertEqual(resp.context["data_ativacao_form"].initial.get("estado_ixc"), "PE")
+
+    def test_mes_operacao_ixc_vem_preenchido_com_mes_corrente_quando_ainda_vazio(self):
+        """RN-053: select "Mês da Operação" nasce selecionado no mês
+        corrente quando o RI ainda não tem valor próprio salvo — mesmo
+        padrão de pré-preenchimento de Município/Estado (RN-014)."""
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(
+            resp.context["data_ativacao_form"].initial.get("mes_operacao_ixc"),
+            timezone.now().month,
+        )
+
+    def test_mes_operacao_ixc_ja_salvo_nao_e_sobrescrito_pelo_mes_corrente(self):
+        """RN-053: uma vez que o Lado IXC tem valor próprio salvo (RI de
+        operação retroativa/futura), o pré-preenchimento com o mês
+        corrente não entra em ação."""
+        mes_diferente = 1 if timezone.now().month != 1 else 2
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO, mes_operacao_ixc=mes_diferente)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(
+            resp.context["data_ativacao_form"].initial.get("mes_operacao_ixc"), mes_diferente
+        )
+
+    def test_salvar_mes_operacao_ixc_gera_entrada_no_historico_com_nome_do_mes(self):
+        """RN-008/RN-053: cadastro do Mês da Operação gera entrada no
+        histórico com o NOME do mês (ex.: "Agosto"), não o número salvo."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {
+                "acao": "salvar_ixc",
+                **self.FORMSET_PRODUTO_VAZIO,
+                "data_ativacao": "",
+                "municipio_ixc": "",
+                "estado_ixc": "",
+                "mes_operacao_ixc": "8",
+            },
+        )
+        entrada = RiHistorico.objects.get(ri=ri, campo="Mês da Operação (Lado IXC)")
+        self.assertEqual(entrada.valor_anterior, "")
+        self.assertEqual(entrada.valor_novo, "Agosto")
 
     def test_divergencia_kit_declarado_e_instalado_mostra_alerta_sem_bloquear(self):
         """RN-002 (esclarecida em 2026-08-26): KIT instalado diferente do

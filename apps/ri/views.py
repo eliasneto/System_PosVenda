@@ -312,6 +312,7 @@ def _resumo_item_ixc(descricao, quantidade, valor_unitario=None):
 # (`RiDataAtivacaoForm`).
 ROTULOS_CAMPO_ATIVACAO_IXC = {
     "data_ativacao": "Data de Ativação",
+    "mes_operacao_ixc": "Mês da Operação (Lado IXC)",
     "municipio_ixc": "Município (Lado IXC)",
     "estado_ixc": "Estado (Lado IXC)",
     "cnpj": "CNPJ (Lado IXC)",
@@ -319,11 +320,15 @@ ROTULOS_CAMPO_ATIVACAO_IXC = {
 }
 
 
-def _texto_campo_ativacao(valor):
-    """Formata valor anterior/novo do log de Data de Ativação/Município/
-    Estado (RN-008) — data em dd/mm/aaaa, texto vazio para `None`."""
+def _texto_campo_ativacao(valor, campo=None):
+    """Formata valor anterior/novo do log de Data de Ativação/Mês da
+    Operação/Município/Estado (RN-008) — data em dd/mm/aaaa, Mês da
+    Operação (RN-053) pelo nome (ex.: "Agosto") em vez do número salvo,
+    texto vazio para `None`."""
     if hasattr(valor, "strftime"):
         return valor.strftime("%d/%m/%Y")
+    if campo == "mes_operacao_ixc" and valor:
+        return dict(Ri.MESES_OPERACAO_CHOICES).get(valor, str(valor))
     return str(valor or "")
 
 
@@ -943,8 +948,8 @@ def ri_detail_view(request, inep):
                         for campo in campos_alterados:
                             _registrar_log_campo(
                                 ri, request.user, ROTULOS_CAMPO_ATIVACAO_IXC[campo],
-                                _texto_campo_ativacao(valores_anteriores[campo]),
-                                _texto_campo_ativacao(getattr(ri, campo)),
+                                _texto_campo_ativacao(valores_anteriores[campo], campo=campo),
+                                _texto_campo_ativacao(getattr(ri, campo), campo=campo),
                             )
                     # RN-003: recalcula o confronto formal contra o Lado
                     # Relatório EACE a cada mudança do Lado IXC.

@@ -277,6 +277,16 @@
             <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Data de Ativação inválida.</p>
             {% endif %}
 
+            <!-- RN-053 (2026-09-03): Mês da Operação — select dos 12 meses,
+                 nasce no mês corrente (RiDataAtivacaoForm), usado no texto
+                 fixo "OPERAÇÃO COMPRA E VENDA" da planilha (RN-013); o ano
+                 dessa mesma célula não vem daqui, é sempre o ano corrente
+                 na hora de gerar a planilha. -->
+            <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                Mês da Operação
+                {{ data_ativacao_form.mes_operacao_ixc }}
+            </label>
+
             <!-- RN-048 (2026-09-01): CNPJ/CNPJ Fictício do Lado IXC —
                  preenchimento manual, mesmo padrão opcional de Município/
                  Estado logo abaixo (não trava o Salvar). Exigidos só na

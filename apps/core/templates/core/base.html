@@ -35,6 +35,17 @@
         .bg-pv-yellow { background-color: #FFC107; }
         .text-pv-yellow { color: #FFC107; }
 
+        /* Select amarelo sobre card preto (ex.: "Status do RI"/"Responsável"
+           da tela de detalhe do RI) — sem isso, a lista aberta pelo
+           navegador usa fundo branco padrão do sistema operacional, mas
+           herda a cor amarela do texto: fica amarelo sobre branco, fora do
+           padrão do projeto (preto + amarelo). Estiliza as opções para
+           manter o mesmo par de cores também com a lista aberta. */
+        .select-pv-dark option {
+            background-color: #0F0F0F;
+            color: #FFC107;
+        }
+
         .sidebar-link-active {
             background-color: rgba(255, 193, 7, 0.1);
             color: #FFC107 !important;

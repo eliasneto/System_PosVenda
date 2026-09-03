@@ -1,5 +1,5 @@
 # Regras de Negócio — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-09-02_ (RN-014 revisada — Município/Estado do Lado IXC pré-preenchidos do INEP; RN-016 corrigida — validação de domínio do remetente; RN-005 corrigida — aceita N Notas Fiscais no mesmo e-mail)
+_Última atualização: 2026-09-03_ (RN-053 criada — Mês da Operação do Lado IXC na planilha, ano sempre corrente; RN-054 criada — linhas de grade ocultas em toda aba criada automaticamente; RN-055 criada — produto sem valor de Equipamento sai da lista do Lado IXC)
 
 ## Ciclo de Vida do RI
 
@@ -787,6 +787,8 @@ campo sem relação com aquela ação.
   `F16` (ENDEREÇO) o endereço da escola, `G16` (MUNICIPIO) e `H16` (UF)
   os valores do Lado IXC (RN-014), `I16` (ITEM LPU) o mesmo nome do
   produto/KIT usado no `F10`.
+- `A20` ("OPERAÇÃO COMPRA E VENDA - MÊS/ANO") passa a ser gerada a cada
+  geração — ver RN-053.
 - Demais células da planilha-modelo (inclusive `G10`, "CONTRATO EACE")
   são copiadas exatamente como estão — o sistema não gera nem altera o
   que não foi listado acima.
@@ -836,6 +838,120 @@ models.py` — `KitPadrao.aba_planilha_financeiro` (opcional, migration
 `gerar_pdf_dados_financeiro` (removida).
 
 **Features relacionadas:** FEAT-008, FEAT-017, FEAT-018.
+
+**Status:** Ativa
+
+### RN-053 — Mês da Operação (Lado IXC) na planilha de faturamento
+
+**Descrição:** A célula `A20` de cada aba da planilha de faturamento
+(RN-013), texto fixo "OPERAÇÃO COMPRA E VENDA - MÊS/ANO", deixa de vir
+copiada sem alteração do modelo e passa a ser gerada a cada envio de
+e-mail/"Baixar planilha". O MÊS vem de um novo campo do Lado IXC — select
+com os 12 meses, no mesmo bloco de Data de Ativação/Município/Estado/CNPJ
+— nasce selecionado no mês corrente, mas continua editável. O ANO nunca
+vem de campo nenhum: é sempre o ano corrente no momento de gerar a
+planilha.
+
+**Contexto:** Pedido do usuário em 2026-09-03 — o texto vinha fixo do
+arquivo-modelo (`doc/FATURAMENTO MATERIAS EACE.xlsx`) e exigia edição
+manual do modelo todo mês para não sair desatualizado na Nota Fiscal.
+
+**Critérios:**
+- Novo campo `Ri.mes_operacao_ixc` (1 a 12, opcional) — mesmo bloco do
+  Lado IXC de Data de Ativação/Município/Estado (RN-014)/CNPJ (RN-048),
+  mesmo formulário (`RiDataAtivacaoForm`). Nasce com o mês corrente como
+  valor inicial quando o RI ainda não tem valor próprio salvo (mesmo
+  padrão de pré-preenchimento do Município/Estado a partir do INEP,
+  RN-014) — uma vez salvo, o pré-preenchimento não entra mais em ação.
+  Não trava o "Salvar" do Lado IXC (mesmo padrão de Município/Estado/
+  CNPJ) nem a geração da planilha — sem valor salvo, `gerar_planilha_
+  faturamento` usa o mês corrente direto, nunca fica sem texto.
+- `A20` de cada aba recebe `"OPERAÇÃO COMPRA E VENDA  - <MÊS>/<ANO>"`
+  (mesmo espaçamento do texto original do modelo) — MÊS em maiúsculas
+  por extenso (ex.: "AGOSTO"), ANO sempre `timezone.now().year` no
+  momento da geração — não o ano de `data_vencimento` nem de nenhum outro
+  campo do RI. Depois de 31/12, a próxima geração já usa o ano seguinte
+  sozinha, sem qualquer ação manual.
+- Alteração do campo gera entrada na linha do tempo (RN-008), com o NOME
+  do mês (ex.: "Agosto"), não o número salvo.
+
+**Exceções:** nenhuma além do critério acima — não altera nenhuma outra
+célula ou regra da RN-013.
+
+**Impacto técnico:** `apps/ri/models.py` — `Ri.mes_operacao_ixc`
+(`MESES_OPERACAO_CHOICES`, migration `0027`); `apps/ri/forms.py` —
+`RiDataAtivacaoForm` (campo `mes_operacao_ixc`, pré-preenchimento no
+`__init__`); `apps/ri/services.py` — `gerar_planilha_faturamento` (monta
+o texto e grava `A20`); `apps/ri/views.py` —
+`ROTULOS_CAMPO_ATIVACAO_IXC`/`_texto_campo_ativacao` (log com o nome do
+mês); `ri_detail.html` (novo campo no bloco do Lado IXC).
+
+**Features relacionadas:** FEAT-008, FEAT-017, FEAT-018.
+
+**Status:** Ativa
+
+### RN-054 — Linhas de grade ocultas em toda aba criada automaticamente na planilha de faturamento
+
+**Descrição:** Toda aba da planilha-modelo (RN-013) nasce sem linhas de
+grade do Excel visíveis (visual mais limpo, igual à Nota Fiscal final).
+Uma aba criada na hora — produto sem aba já cadastrada, clonada de
+`aba_modelo` (RN-013) — nascia com a grade visível, diferente da aba "NF
+KIT" e das demais já existentes no modelo: limitação do `Workbook.
+copy_worksheet` do openpyxl, que não copia a configuração de exibição da
+aba (mesma limitação já conhecida para imagem, RN-013).
+
+**Contexto:** Usuário reportou em 2026-09-03: a aba "NF KIT" (sempre já
+existente no modelo) vinha sem grade, mas qualquer aba criada na hora
+para um produto novo vinha com grade — inconsistência visual entre abas
+da mesma planilha.
+
+**Critérios:** ao clonar uma aba nova, `nova.sheet_view.showGridLines`
+recebe o mesmo valor de `aba_modelo.sheet_view.showGridLines` (hoje,
+sempre desligado) — mesmo padrão já usado para copiar a imagem/logo.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** `apps/ri/services.py` — `_obter_ou_criar_aba`.
+
+**Features relacionadas:** FEAT-008, FEAT-017, FEAT-018.
+
+**Status:** Ativa
+
+### RN-055 — Produto sem valor de Equipamento sai da lista do Lado IXC
+
+**Descrição:** O select "Produtos" do Lado IXC (RN-011) deixa de listar
+item do catálogo `KitPadrao` sem valor de Equipamento cadastrado na LPU
+(`valor_equipamento` nulo — coluna "Equipamentos (R$)" vazia no
+`CONSOLIDADO EACE.xlsx`, aba LPU).
+
+**Contexto:** Pedido do usuário em 2026-09-03 — parte do catálogo real
+(ex.: item 19 "Manutenção de Rede Interna", item 25 "Injetor PoE", item
+26 "Interligação por fibra-drop", entre outros com só a coluna "Serviços
+(R$)" preenchida) aparecia na lista de Produtos do Lado IXC, mas a
+planilha de faturamento (RN-013) usa só `KitPadrao.valor_faturavel`
+(= valor de Equipamento, ajuste de 2026-08-31) — lançar um desses
+produtos sempre gerava R$ 0,00 na Nota Fiscal, sem nenhuma explicação
+visível pra quem lançou.
+
+**Critérios:**
+- `KitPadrao` sem `valor_equipamento` sai só do select "Produtos"
+  (`kit=False`) do Lado IXC — não do select "KIT Instalado" (`kit=True`,
+  sem necessidade prática: todo KIT real da LPU já tem valor de
+  Equipamento, e a opção "Outro" continua funcionando fora do catálogo).
+- Item já lançado antes desta regra (`RiItemIxc` existente) não é
+  afetado — o filtro vale só para a lista de opções de um lançamento
+  novo, não apaga nem bloqueia o que já está salvo.
+
+**Exceções:** o Lado Relatório EACE (3º lado, RN-018) continua sem esse
+filtro — usa `KitPadrao.valor_total` (Equipamento + Serviço), então um
+produto só-com-Serviço continua faturável e continua na lista de lá.
+
+**Impacto técnico:** `apps/ri/forms.py` — `_catalogo_ixc` (parâmetro
+`exigir_valor_equipamento`, `True` só na chamada de `RiItemIxcProdutoForm`
+— Produtos do Lado IXC; `RiItemIxcKitForm`, o Lado Relatório EACE e o
+próprio filtro de KIT continuam sem alteração).
+
+**Features relacionadas:** FEAT-004, FEAT-015.
 
 **Status:** Ativa
 

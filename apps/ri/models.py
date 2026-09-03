@@ -56,6 +56,17 @@ class Ri(models.Model):
         (CORRECAO_MEGA, "Correção MEGA"),
     ]
 
+    # RN-053 (2026-09-03): mês da "OPERAÇÃO COMPRA E VENDA" (célula A20 de
+    # cada aba da planilha de faturamento, RN-013) — lista fixa dos 12
+    # meses, não ligada a nenhuma data já existente no RI (o ano dessa
+    # mesma célula não vem daqui, é sempre o ano corrente no momento de
+    # gerar a planilha — ver `gerar_planilha_faturamento`).
+    MESES_OPERACAO_CHOICES = [
+        (1, "Janeiro"), (2, "Fevereiro"), (3, "Março"), (4, "Abril"),
+        (5, "Maio"), (6, "Junho"), (7, "Julho"), (8, "Agosto"),
+        (9, "Setembro"), (10, "Outubro"), (11, "Novembro"), (12, "Dezembro"),
+    ]
+
     escola = models.ForeignKey(
         Escola, on_delete=models.PROTECT, related_name="ris", verbose_name="Escola"
     )
@@ -89,6 +100,15 @@ class Ri(models.Model):
     # o e-mail (ver `gerar_planilha_faturamento`, apps/ri/services.py).
     cnpj = models.CharField("CNPJ (Lado IXC)", max_length=20, blank=True)
     cnpj_ficticio = models.CharField("CNPJ Fictício (Lado IXC)", max_length=20, blank=True)
+    # RN-053 (2026-09-03): mês da "OPERAÇÃO COMPRA E VENDA" (A20 de cada
+    # aba da planilha de faturamento, RN-013) — select com os 12 meses,
+    # nasce preenchido com o mês corrente (RiDataAtivacaoForm), continua
+    # editável (RI de operação retroativa/futura). Opcional aqui, mesmo
+    # padrão de município_ixc/estado_ixc — ver `gerar_planilha_faturamento`
+    # (usa o mês corrente quando este campo nunca foi salvo).
+    mes_operacao_ixc = models.PositiveSmallIntegerField(
+        "Mês da Operação (Lado IXC)", choices=MESES_OPERACAO_CHOICES, null=True, blank=True
+    )
     # FEAT-008/RF-16: "dados a enviar ao financeiro" reaproveitam os itens
     # já lançados do lado IXC (sem redigitar); este campo guarda o texto
     # livre digitado no campo "Mensagem" da tela de composição de e-mail

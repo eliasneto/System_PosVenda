@@ -547,6 +547,15 @@ de aceite acima — ainda não implementado pelo Dev.
   Andamento" e a confirmação de que o 3º lado não mudou.
 - **Pendência:** validação visual em navegador ainda não feita.
 
+**Entrega do Dev (2026-09-03) — RN-055:**
+- Select "Produtos" do Lado IXC deixa de listar item do catálogo LPU sem
+  valor de Equipamento cadastrado (ex.: "Manutenção de Rede Interna",
+  "Injetor PoE") — esses itens sempre geravam R$ 0,00 na planilha de
+  faturamento (RN-013), sem explicação.
+- Select "KIT Instalado" e o catálogo do Lado Relatório EACE (3º lado)
+  não foram afetados.
+- Suíte completa do app `ri` (322 testes) passando.
+
 ---
 
 ### FEAT-005 — Confronto de divergências (2 confrontos: RN-002 e RN-003)
@@ -1744,6 +1753,17 @@ passando.
 CNPJ e CNPJ Fictício — gravados nas células A16/B16 de cada aba da
 planilha de faturamento; mesmo padrão opcional de Município/Estado
 (RN-014), exigidos só na hora de gerar a planilha/enviar o e-mail.
+
+**Ampliada em 2026-09-03 (Dev, RN-053/RN-054):** célula `A20` ("OPERAÇÃO
+COMPRA E VENDA - MÊS/ANO") deixa de vir copiada do modelo sem alteração e
+passa a ser gerada a cada geração — MÊS vem de campo novo do Lado IXC
+(select, nasce no mês corrente), ANO é sempre o ano corrente no momento
+de gerar (RN-053). Corrigida também a linha de grade do Excel: aba
+criada automaticamente (produto sem aba cadastrada) nascia com a grade
+visível, diferente das demais abas do modelo — `_obter_ou_criar_aba`
+passa a copiar a mesma configuração de `aba_modelo` (RN-054). Suíte
+`ri`: 322 testes passando; validado no navegador real (Docker), desktop
+e celular.
 
 ---
 

@@ -3,6 +3,7 @@ import re
 from django import forms
 from django.core.validators import validate_email
 from django.db.models import F
+from django.utils import timezone
 
 from .models import KitPadrao, PlanilhaEace, Ri, RiHistorico, RiItemIxc, RiItemRelatorioEace
 from .services import detectar_delimitador_planilha_eace
@@ -54,7 +55,7 @@ class RiItemIxcForm(forms.ModelForm):
         }
 
 
-def _catalogo_ixc(escola, kit):
+def _catalogo_ixc(escola, kit, exigir_valor_equipamento=False):
     """RN-011 (3ª correção, 2026-08-24): opções do Lado IXC vêm do
     catálogo `KitPadrao` importado da aba LPU do `CONSOLIDADO EACE.xlsx`
     (RN-010/FEAT-015). "KIT Instalado" (`kit=True`) mostra só as entradas
@@ -74,9 +75,25 @@ def _catalogo_ixc(escola, kit):
     crescente (KIT 1, 2, 4, 8...), não mais por `descricao` — ordem
     alfabética de texto colocava "16 Access Points" antes de "2 Access
     Points". Itens sem número extraído (avulsos: km, enlace, metro, par)
-    vão para o final, por `descricao` entre si."""
+    vão para o final, por `descricao` entre si.
+
+    RN-055 (2026-09-03): `exigir_valor_equipamento=True` tira da lista
+    "Produtos" (`kit=False`) quem não tem "Equipamentos (R$)" na LPU
+    (`valor_equipamento` nulo) — a coluna "Serviços (R$)" sozinha (ex.:
+    "Manutenção de Rede Interna", "Injetor PoE") nunca é faturada no Lado
+    IXC, que usa só `KitPadrao.valor_faturavel` (RN-013); sem o filtro, o
+    item continuava selecionável mas ia sempre para a planilha com
+    R$ 0,00, sem explicação nenhuma. Não se aplica a "KIT Instalado"
+    (`kit=True`): todo KIT real da LPU já tem valor de equipamento — sem
+    necessidade prática de filtrar, e a opção "Outro" (kit fora do
+    catálogo) precisa continuar funcionando independente de catálogo.
+    Só o Lado IXC pede esse filtro — Lado Relatório EACE (3º lado,
+    RN-018) usa `valor_total` (Equipamento + Serviço) e
+    continua sem filtro, `exigir_valor_equipamento` nasce `False`."""
     qs = KitPadrao.objects.all()
     qs = qs.filter(unidade__istartswith="escola") if kit else qs.exclude(unidade__istartswith="escola")
+    if exigir_valor_equipamento:
+        qs = qs.exclude(valor_equipamento__isnull=True)
     if escola and escola.lote is not None:
         qs = qs.filter(lote=escola.lote)
     return qs.order_by(F("numero_access_points").asc(nulls_last=True), "descricao")
@@ -185,7 +202,11 @@ class RiItemIxcProdutoForm(forms.Form):
     Quantidade digitada manualmente. Valor unitário (2026-08-24, ajuste do
     usuário): tirado do formulário — não é informação necessária agora; o
     item nasce com valor 0 e é corrigido depois editando o item
-    (RiItemIxcForm, RN-004), se um dia precisar."""
+    (RiItemIxcForm, RN-004), se um dia precisar.
+
+    RN-055 (2026-09-03): produto sem "Equipamentos (R$)" na LPU
+    (`KitPadrao.valor_equipamento` nulo) não entra nesta lista — ver
+    `_catalogo_ixc`."""
 
     produto = _CatalogoIxcChoiceField(
         queryset=KitPadrao.objects.none(),
@@ -201,7 +222,9 @@ class RiItemIxcProdutoForm(forms.Form):
 
     def __init__(self, *args, escola=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["produto"].queryset = _catalogo_ixc(escola, kit=False)
+        self.fields["produto"].queryset = _catalogo_ixc(
+            escola, kit=False, exigir_valor_equipamento=True
+        )
 
 
 # RN-011: "+" do Lado IXC — nasce sem nenhuma linha visível (extra=0); cada
@@ -242,15 +265,28 @@ class RiDataAtivacaoForm(forms.ModelForm):
     sendo o dono da comparação de divergência acima, sem alterar esse
     comportamento. Só pré-preenche quando o Lado IXC ainda não tem valor
     próprio salvo — uma vez editado/salvo pelo usuário, o valor do Lado IXC
-    passa a mandar (não é sobrescrito a cada renderização)."""
+    passa a mandar (não é sobrescrito a cada renderização).
+
+    RN-053 (2026-09-03): mesmo formulário ganha "Mês da Operação" — select
+    com os 12 meses, usado no texto fixo "OPERAÇÃO COMPRA E VENDA - <MÊS>/
+    <ANO>" (célula A20 de cada aba da planilha, RN-013). Nasce selecionado
+    no mês corrente (mesmo padrão de pré-preenchimento de Município/Estado
+    acima), mas continua editável — RI de operação retroativa ou futura
+    pode escolher outro mês. O ano dessa mesma célula NÃO vem deste campo:
+    é sempre o ano corrente no momento de gerar a planilha (ver
+    `gerar_planilha_faturamento`), nunca digitado."""
 
     class Meta:
         model = Ri
-        fields = ["data_ativacao", "municipio_ixc", "estado_ixc", "cnpj", "cnpj_ficticio"]
+        fields = [
+            "data_ativacao", "mes_operacao_ixc", "municipio_ixc", "estado_ixc",
+            "cnpj", "cnpj_ficticio",
+        ]
         widgets = {
             "data_ativacao": forms.DateInput(
                 attrs={"class": CAMPO_TEXTO, "type": "date"}, format="%Y-%m-%d"
             ),
+            "mes_operacao_ixc": forms.Select(attrs={"class": CAMPO_TEXTO}),
             "municipio_ixc": forms.TextInput(
                 attrs={"class": CAMPO_TEXTO, "placeholder": "Ex.: Fortaleza"}
             ),
@@ -290,6 +326,10 @@ class RiDataAtivacaoForm(forms.ModelForm):
                 self.initial["municipio_ixc"] = escola.municipio
             if not self.initial.get("estado_ixc"):
                 self.initial["estado_ixc"] = escola.estado
+            # RN-053: mesmo padrão de pré-preenchimento acima, mas o valor
+            # sugerido vem do relógio (mês corrente), não da Escola.
+            if not self.initial.get("mes_operacao_ixc"):
+                self.initial["mes_operacao_ixc"] = timezone.now().month
 
     def clean_cnpj(self):
         return (self.cleaned_data.get("cnpj") or "").strip()
