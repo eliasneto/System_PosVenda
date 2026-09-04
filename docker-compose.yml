@@ -107,6 +107,49 @@ services:
     depends_on:
       - db
 
+  rpa_eace_worker:
+    # FEAT-033 (Fase 3, RN-058/ADR-005): processo consumidor unico da fila
+    # do RPA EACE - `processar_fila_rpa_eace` so faz 1 passada por chamada
+    # (apps/ri/services.py), entao quem repete no tempo e este container
+    # (mesma imagem do "web", sem dependencia nova como Celery/Redis).
+    # RN-058 exige no maximo 1 execucao do RPA por vez em todo o sistema -
+    # nao suba uma 2a instancia deste servico nem use "docker compose up
+    # --scale rpa_eace_worker=2" (o codigo tem select_for_update como
+    # segunda trava, mas o design pressupoe 1 processo so).
+    build: .
+    restart: unless-stopped
+    environment:
+      - DEBUG=${DEBUG}
+      - SECRET_KEY=${SECRET_KEY}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+      - DB_ENGINE=mysql
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=3306
+      - EACE_URL=${EACE_URL}
+      - EACE_USUARIO=${EACE_USUARIO}
+      - EACE_SENHA=${EACE_SENHA}
+      # EACE_HEADLESS/EACE_TIMEOUT_MS/EACE_DELAY_MS ficam de fora de
+      # propósito - se não estiverem no .env, o compose passaria string
+      # vazia (nunca "variável ausente") e isso pisaria no default real
+      # de apps/integracoes/eace/config.py (ex.: EACE_HEADLESS viraria
+      # False, abrindo navegador visível, em vez de True). Só declarar
+      # aqui se o .env realmente definir um valor não vazio para os 3.
+    volumes:
+      # Mesmo bind mount do "web" - precisa enxergar os mesmos arquivos de
+      # Documento (media/) que o "web" grava.
+      - .:/app
+    command: >
+      sh -c "sleep 15 && while true; do
+               python manage.py processar_fila_rpa_eace || true;
+               sleep ${RPA_EACE_POLL_INTERVAL_SECONDS:-5};
+             done"
+    depends_on:
+      - db
+
 volumes:
   # Mesmo nome já usado pelo checkout anterior (sistema_posvenda_posvenda_db_data) -
   # sobe reaproveitando o dado que já existe, sem recriar do zero.

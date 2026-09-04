@@ -246,5 +246,8 @@ LOGGING = {
     },
     "loggers": {
         "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+        # FEAT-033 (ADR-004/RN-056): progresso do RPA EACE no terminal
+        # (login, navegacao, upload) - sem isso INFO nao aparece no console.
+        "apps.integracoes.eace": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }

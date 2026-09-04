@@ -1,5 +1,5 @@
 # Checklist — Gerenciador Pós-Venda (v1 · Faturamento EACE por INEP)
-_Última atualização: 2026-09-02_
+_Última atualização: 2026-09-03_
 
 > **Versão-alvo:** 1.0.0. **Nome exibido no menu do sistema:** "Gerenciador
 > Pós Venda" (sem hífen) — ver `architecture.md`, "Identidade do Sistema e
@@ -34,7 +34,9 @@ EACE) depende só de FEAT-003 e pode evoluir em paralelo; FEAT-024
 FEAT-016. FEAT-026 (dashboard financeiro) depende de FEAT-002/FEAT-006/
 FEAT-015/FEAT-022 e pode evoluir em paralelo às demais. FEAT-027
 (integração com Active Directory) depende só de FEAT-001 e pode evoluir em
-paralelo às demais.
+paralelo às demais. FEAT-033 (RPA de anexo no portal EACE) depende de
+FEAT-010/FEAT-009 e entrega em 2 fases (RN-056): Fase 1 (backend via
+terminal) primeiro, Fase 2 (log/tela) depois.
 
 ---
 
@@ -2265,6 +2267,43 @@ itens do Lado 3, mesmo com "Status escola" = "Conectada" na planilha.
   (RN-001), tendendo a reduzir bastante esses números; usuário avisado.
 - **Pendência:** decisão sobre a fonte desses dois cards fica para outro
   atendimento.
+**Correção (2026-09-04, RN-062):** usuário reportou que rodar uma
+planilha nova com menos equipamentos que a anterior não removia os itens
+que sumiram (planilha 1 com 3 equipamentos, planilha 2 com 2 — o 3º item
+antigo ficava para sempre, em vez de "a última planilha é sempre a que
+vale"). Fora de "Implantação EACE"/"Em Andamento", a Planilha EACE ativa
+passa a ser a fonte de verdade do Lado 3 daquele INEP:
+- Item já lançado é reconhecido pela Descrição (não mais Descrição +
+  Quantidade) — Quantidade/Valor diferente ATUALIZA o mesmo item, em vez
+  de criar um duplicado.
+- Item que a planilha ativa não traz mais é removido — só quando o
+  próprio Sincronizador lançou/confirmou esse item antes (novo campo
+  `RiItemRelatorioEace.origem_sincronizador`, migration `0032`); item
+  lançado manualmente nunca é apagado por uma sincronização (decisão do
+  usuário, 2026-09-04).
+- Toda criação/atualização/remoção causada por este modo entra na linha
+  do tempo do RI (RN-008) com o antes/depois, igual ao já feito para
+  criação; mensagem da tela ganha as contagens "atualizado(s)"/
+  "removido(s)". Vale para o Sincronizador individual e em lote
+  (FEAT-025), mesma função.
+- Em "Implantação EACE"/"Em Andamento" nada muda — Quantidade diferente
+  ainda cria outro item (comportamento de sempre, fora do escopo desta
+  correção, confirmado pelo usuário).
+- RN-015 (1 KIT por INEP) preservada: uma planilha com um KIT diferente
+  do já lançado continua caindo em "kit_ignorado", sem substituir o KIT
+  automaticamente; o KIT já lançado não é removido por isso.
+- 7 testes novos (atualiza em vez de duplicar, remove item ausente, nunca
+  remove item manual, item manual "confirmado" por uma planilha passa a
+  poder ser removido depois, comportamento antigo preservado em
+  Implantação/Andamento, KIT diferente não remove o já lançado, histórico
+  gravado pela tela); suíte completa do projeto (509 testes) sem
+  regressão. 1 teste de contagem de consultas ajustado (9, não mais 10 —
+  a checagem de RN-015 passou a reaproveitar a lista de itens já
+  carregada, 1 consulta a menos).
+- Migration `0032` aplicada no container real (dev).
+- **Nota para o Orquestrador:** RN nova (usada como "RN-062" nos
+  comentários do código) ainda não está formalizada em
+  `business_rules.md` — falta redigir a regra e vincular à FEAT-024.
 
 ---
 
@@ -2926,9 +2965,284 @@ INEPs continua funcionando do mesmo jeito de antes, em paralelo.
 
 ---
 
+### FEAT-032 — Cores dos selects "Status do RI"/"Responsável" na lista aberta
+**Descrição:** Os dois `<select>` do cabeçalho da tela de detalhe do RI
+("Status do RI", FEAT-031; "Responsável", FEAT-007) usam o mesmo padrão
+visual do projeto — card preto, texto amarelo — mas isso só valia para a
+caixa fechada. Ao abrir a lista, o navegador usava o fundo branco padrão
+do sistema operacional com o texto ainda amarelo (herdado), fora do
+padrão preto+amarelo do projeto.
+**Tipo:** frontend-layout
+**Status:** ✅ Concluída
+**Prioridade:** Baixa — ajuste puramente visual, sem impacto funcional.
+**Critérios de aceite:**
+- Lista aberta dos dois selects usa o mesmo par de cores da caixa fechada
+  (fundo preto, texto amarelo), em vez do fundo branco padrão do
+  navegador.
+- Nenhuma mudança de comportamento, dado ou opção disponível nos dois
+  campos.
+**Regras relacionadas:** nenhuma — ajuste exclusivamente visual, sem
+regra de negócio (CLAUDE.md, `.claude/agents/dev.md` §3).
+**Dependências:** nenhuma (telas já existentes da FEAT-007/FEAT-031).
+**Tipo de validação:** Validação visual do usuário — sem QA (ajuste
+`frontend-layout` sem RN vinculada).
+**Entrega do Dev (2026-09-03):**
+- Nova regra CSS (`.select-pv-dark option`, `apps/core/templates/core/
+  base.html`) aplicando o mesmo par de cores do select fechado às opções
+  da lista aberta; classe aplicada nos dois templates afetados
+  (`_status_pill_detail.html`, `_responsavel_form_detail.html`).
+- Validado no navegador real (Docker + Playwright): lista aberta dos dois
+  selects com screenshot, antes e depois.
+**Pendência atual:** nenhuma — validado pelo usuário em 2026-09-03.
+
+---
+
+### FEAT-033 — RPA de anexo automático de NF/XML no portal EACE (Hub de Integrações)
+**Descrição:** Automatiza o upload da NF (PDF) e do XML no portal EACE —
+metade "anexo de arquivos" do gap "Hub de Integrações v2"
+(`architecture.md`) — reaproveitando o núcleo do protótipo já existente
+`doc/auto_eace_nf_servidor` (Playwright), sem a camada de frontend do
+protótipo (`ADR-004`). Gatilho definido pelo usuário em 2026-09-03
+(RN-056): quando o financeiro responde com N PDF/N XML, o sistema cria um
+log por Nota Fiscal esperada, com 2 listas (XML/PDF) para o usuário
+escolher o par certo e um controle no próprio log para disparar a RPA —
+cada disparo processa 1 PDF + 1 XML. Antes de subir qualquer arquivo, o
+sistema extrai INEP/Produto/Valor de dentro do próprio PDF e confere
+contra o INEP do log e o valor exibido no portal (RN-057) — dados e
+resultado ficam gravados no log. Entrega em 3 fases, nessa ordem, a
+pedido do usuário: **Fase 1** núcleo da RPA funcional, validado via
+terminal, sem nenhuma tela; **Fase 2** log/seleção com tela (RN-056/
+RN-057); **Fase 3** fila de execução serializada com reprocessamento
+automático de erro não mapeado (RN-058/`ADR-005`) — várias pessoas podem
+disparar a RPA ao mesmo tempo, mas só 1 execução roda por vez.
+**Tipo:** fullstack (Fase 1 é só backend; Fase 2/3 acrescentam tela e
+processo em segundo plano — ver "Critérios de aceite")
+**Status:** 🔄 Em andamento (Fases 1-3 entregues e com o processo
+consumidor rodando de verdade em produção — DevOps —, mais 3 extensões
+pós-Fase 3: correção de bugs reais de tela, registro de cada execução na
+linha do tempo/auditoria — RN-059 — e imutabilidade pós-sucesso — RN-060
+—, e barra de progresso por etapa — RN-061; ver Entrega do Dev/DevOps)
+**Prioridade:** Alta — parte do gap "Hub de Integrações v2", prazo já
+registrado em `architecture.md` (04/09/2026).
+**Critérios de aceite:**
+
+_Fase 1 — backend funcional via terminal (sem tela):_
+- Núcleo do protótipo portado para `apps/integracoes/eace/`, sem a camada
+  de frontend (`web/`, dashboard FastAPI) nem a cópia duplicada
+  `ProjetoFinal/`. ✅
+- Executável via terminal (management command ou script), recebendo o
+  INEP/RI e o par PDF+XML a processar; sem model de log nem tela ainda. ✅
+- Extração de INEP/Produto/Valor do PDF e validação contra o INEP do log
+  e o valor do portal (RN-057), bloqueando o disparo/upload quando
+  divergir. ✅
+- OSP inexistente e linha já não mais "Pendente" (já enviada/aprovada/
+  etc.) bloqueiam o disparo com motivo próprio (RN-056). ✅
+- Login, navegação e extração de linha validados de ponta a ponta contra
+  o portal real, em background (Chromium headless). ✅
+- Credenciais do portal via `.env` (`EACE_URL`/`EACE_USUARIO`/
+  `EACE_SENHA`), nunca versionadas. ✅
+- **Falta:** o clique de upload em si (envio de fato de 1 PDF+XML) —
+  sem par de teste correto de um INEP genuinamente pendente (ver
+  Entrega do Dev/Pendência atual).
+
+_Fase 2 — log e seleção manual (RN-056/RN-057):_
+- Ao financeiro responder (RN-016), sistema conta os PDF/XML recebidos e
+  cria 1 log por Nota Fiscal esperada, cada um com a lista de XML e a
+  lista de PDF daquela resposta. ✅
+- Usuário escolhe, em cada log, 1 XML e 1 PDF; controle de disparo da RPA
+  só habilita depois dessa escolha. ✅
+- Disparo do log aciona o núcleo da Fase 1 para aquele par específico; ao
+  terminar, o log grava o resultado ("Sucesso" ou "Erro") e os dados
+  extraídos do PDF (RN-057), mesmo em erro. ✅
+- RI avança sozinho de "Resposta Financeiro" para "Aguardando validação
+  EACE" só quando **todos** os logs daquele RI estiverem "Sucesso"; 1 log
+  "Erro" mantém o RI no status atual até ser reprocessado com sucesso
+  (RN-056). ✅
+- Botão manual "anexo feito no EACE" (`FEAT-010`) continua disponível como
+  alternativa manual (ex.: destravar um RI cujo RPA não consiga concluir). ✅
+
+_Fase 3 — fila de execução serializada, com reprocessamento automático
+de erro não mapeado (RN-058, `ADR-005`):_
+- No máximo 1 execução do núcleo do RPA roda por vez em todo o sistema —
+  mesmo com várias pessoas disparando ao mesmo tempo, em RIs diferentes. ✅
+- Fila em ordem de chegada (FIFO); disparo (novo ou "Tentar novamente")
+  entra no final da fila. ✅
+- Erro **não mapeado** (falha técnica/de ambiente, ver RN-058) reprocessa
+  automaticamente 1 vez, voltando para o final da fila — só vira "Erro"
+  definitivo se a 2ª tentativa falhar de novo. ✅
+- Erro **mapeado** (regra de negócio — RN-056/RN-057) nunca reprocessa
+  sozinho: vira "Erro" definitivo já na 1ª tentativa. ✅
+- Tela mostra um estado "Na fila" enquanto o log aguarda a vez (1ª
+  tentativa ou reprocessamento), distinto de "Pendente" (sem arquivo
+  escolhido ainda) e de "Erro" (só depois de esgotar as tentativas), com
+  a posição do log na fila (1 = próximo a ser processado). ✅
+- Tela atualiza sozinha quando o processo consumidor termina, sem
+  precisar de F5 (lacuna deixada em aberto no `ADR-005` — Dev decidiu por
+  polling HTMX a cada 5s, opção mais simples, CLAUDE.md §9). ✅
+- Processo consumidor rodando de verdade em produção — serviço
+  `rpa_eace_worker` no `docker-compose.yml` (DevOps), mesmo padrão do
+  `email_scheduler`. ✅
+
+_Extensões pós-Fase 3 (2026-09-03/04):_
+- Opção de disparar a RPA só aparece na tela com o RI em "Resposta
+  Financeiro" (RN-056); logs continuam existindo depois que o RI avança
+  ou é destravado manualmente (FEAT-010). ✅
+- 3 bugs reais corrigidos (reportados pelo usuário testando ao vivo):
+  estado "Processando" não aparecia (pulava direto pra "Erro"); posição
+  na fila ausente; tela só atualizava com F5 (conflito real de
+  `hx-swap-oob` com o próprio polling HTMX). ✅
+- Cada tentativa de execução (inclusive reprocessamento) grava 1 entrada
+  na linha do tempo do RI e 1 registro em Auditoria — RN-059. ✅
+- Log com resultado "Sucesso" não aceita novo disparo nem troca de PDF/
+  XML, validado também no backend — RN-060. ✅
+- Barra de progresso por etapa (16 etapas fixas) enquanto "Processando",
+  atualizada em tempo real via o mesmo polling — RN-061. ✅
+**Regras relacionadas:** RN-056, RN-057, RN-058, RN-059 (nova), RN-060
+(nova), RN-061 (nova), RN-005, RN-016, RN-001, RN-006, RN-008.
+**Dependências:** FEAT-010 (fluxo manual hoje existente, `🔍 Aguardando
+QA`); FEAT-009 (identificação da resposta do financeiro, RN-016).
+**Tipo de validação:** QA (QA-033) — ainda não acionado; Fase 1/2/3 e as
+3 extensões pós-Fase 3 validam até aqui por execução real/mockada e
+testes automatizados.
+**Entrega do Dev (2026-09-03, Fase 1):**
+- Núcleo portado para `apps/integracoes/eace/` (config, login, navegação,
+  upload, extração de dados do PDF — RN-057); comando de terminal
+  `eace_anexar_nota_fiscal` (fica em `apps/ri/management/commands/`,
+  já que `apps.integracoes` ainda não é um app Django instalado).
+- Login, navegação (Medições → OSPs → pesquisar → expandir → Notas
+  Fiscais), extração de linha e as 5 validações de bloqueio (PDF sem
+  INEP/valor, INEP do PDF divergente, valor divergente, OSP inexistente,
+  linha já não pendente) confirmadas de ponta a ponta contra o portal
+  real (`https://eace.org.br`), com credenciais reais.
+- **2 bugs reais corrigidos durante a validação:** (1) o portal mostra
+  "Medições" com acento — o código (herdado do protótipo) procurava
+  "Medicoes" sem acento e nunca encontrava o botão; (2) "OSP não
+  encontrada" e outras falhas de navegação caíam no mesmo motivo
+  genérico — agora tem detecção própria ("0 pedido(s)" no portal).
+- **Testado e descartado por falta de sinal confiável:** distinguir
+  "credenciais inválidas" de outra falha no login — o portal não mostra
+  nenhuma mensagem de erro capturável quando a senha está errada;
+  motivo `login` continua genérico de propósito, para não gerar
+  diagnóstico incorreto.
+- 15 testes novos (PDF real gerado e lido de verdade, navegação inteira
+  mockada); suíte completa (466 testes) sem regressão.
+- **Pendência:** o clique de upload em si (envio de fato) não foi
+  testado — o único par PDF/XML disponível (INEP 35083938) já tinha
+  sido enviado antes (confirmado pelo usuário); usar esses arquivos num
+  INEP diferente enviaria Nota Fiscal errada a um cliente real, por isso
+  não foi feito. Falta um par PDF/XML correto de um INEP pendente para
+  fechar esse último passo.
+**Entrega do Dev (2026-09-03, Fase 2):**
+- Model `LogRpaEace` (migração `0028`) — 1 log por Nota Fiscal, FK
+  opcional para `Documento` (PDF/XML escolhidos), resultado (Pendente/
+  Sucesso/Erro), motivo do erro e os dados extraídos do PDF (RN-057).
+- Gatilho automático no fluxo de resposta do financeiro
+  (`apps/ri/services.py`) — resposta no padrão (RN-016) cria N logs, sem
+  documento pré-selecionado.
+- Tela nova em `ri_detail.html` ("Notas Fiscais para anexar no portal
+  EACE") — 2 `<select>` por log, botão "Disparar RPA"/"Tentar
+  novamente", resultado e dados extraídos exibidos por log; atualização
+  via HTMX (sem reload).
+- View dispara o núcleo da Fase 1 (agora com índice opcional — localiza
+  a linha sozinho por INEP+valor, já que o log não sabe a ordem visual
+  do portal) e avança o status do RI quando todos os logs do RI dão
+  "Sucesso" (RN-056).
+- 10 testes novos (criação de log no fluxo de e-mail + view de disparo,
+  com o núcleo do RPA mockado); suíte completa (476 testes) sem
+  regressão.
+- Validação visual executada de verdade (dados de teste temporários,
+  removidos depois) — claro e escuro, sem quebra.
+- **Pendência:** execução ainda é síncrona (a tela trava até o RPA
+  terminar) — é exatamente o que a Fase 3 resolve.
+**Entrega do Dev (2026-09-03, Fase 3):**
+- `LogRpaEace` ganha `tentativas` e `enfileirado_em` (migração `0029`) e
+  o estado `NA_FILA`; catálogo `MOTIVOS_REGRA_DE_NEGOCIO` em
+  `apps/integracoes/eace/rpa.py` (os 8 motivos que nunca reprocessam
+  sozinhos).
+- Processo consumidor (`apps/ri/services.py`,
+  `processar_proximo_da_fila_rpa_eace`) — pega o log "Na fila" mais
+  antigo com `select_for_update(skip_locked=True)` (garante 1 execução
+  por vez mesmo se 2 processos rodarem por engano), aplica a regra de
+  reprocessamento e avança o status do RI quando todos os logs derem
+  sucesso.
+- Comando de terminal `processar_fila_rpa_eace` (1 passada por chamada,
+  mesmo padrão do `sincronizar_email_financeiro`) — precisa de um
+  agendador externo repetindo (DevOps).
+- "Disparar RPA" deixou de executar na hora — só enfileira; "Tentar
+  novamente" reseta as tentativas (é um ciclo novo, não continuação do
+  anterior).
+- Tela: estado "Na fila" (sem formulário enquanto espera, mostra aviso
+  quando é reprocessamento) + polling HTMX a cada 5s, ligado só enquanto
+  existir log "Na fila".
+- 15 testes novos (fila vazia, sucesso, erro de regra de negócio
+  definitivo na 1ª tentativa, erro não mapeado reprocessa 1 vez e só
+  então vira definitivo, sucesso no reprocessamento, ordem FIFO, avanço
+  de status só com todos os logs OK, comando de terminal); suíte
+  completa (484 testes) sem regressão.
+- Validação visual executada de verdade (badge "Na fila", aviso de
+  reprocessamento, atributos `hx-get`/`hx-trigger` conferidos no HTML
+  real); dados de teste removidos depois.
+- **Pendência:** nenhum processo está chamando `processar_fila_rpa_eace`
+  de verdade ainda — precisa do serviço novo no `docker-compose.yml`
+  (DevOps).
+**Entrega do DevOps (2026-09-03):**
+- Serviço `rpa_eace_worker` no `docker-compose.yml`/`docker-compose.hml.
+  yml`, chamando `processar_fila_rpa_eace` em loop (mesmo padrão do
+  `email_scheduler`); build e execução real validados, processando 1 item
+  real da fila contra o portal em produção.
+- Documentação em `docs_gerenciador_pos_venda/devops/CONTAINERS.md` e
+  `DEPLOYMENT.md`.
+**Entrega do Dev (2026-09-03, correções de tela + trava de status):**
+- 3 bugs reais corrigidos, reportados pelo usuário testando ao vivo
+  (INEP 90000002, 2 Notas Fiscais na fila): estado "Processando" gravado
+  e comitado antes de chamar a RPA (não pulava mais direto pra "Erro");
+  posição do log na fila calculada e exibida; conflito real de
+  `hx-swap-oob` com o próprio polling HTMX corrigido (tela volta a
+  atualizar sozinha).
+- Opção "Disparar RPA" só aparece com o RI em "Resposta Financeiro"
+  (RN-056).
+- 5 testes novos; suíte completa (492 testes) sem regressão; validado ao
+  vivo (mudança de conteúdo sem reload, dentro da mesma sessão de
+  navegador).
+**Entrega do Dev (2026-09-03, RN-059/RN-060 — auditoria por tentativa e imutabilidade):**
+- Cada tentativa de execução do RPA (inclusive reprocessamento) grava 1
+  entrada na linha do tempo do RI e 1 registro em Auditoria (ação
+  "Execução RPA EACE", migração `0003`).
+- View de disparo recusa novo envio quando o log já é "Sucesso" (defesa
+  em profundidade — a tela já escondia o formulário nesse caso).
+- 3 testes novos; suíte completa (495 testes) sem regressão.
+**Entrega do Dev (2026-09-04, RN-061 — barra de progresso):**
+- Núcleo do RPA dividido em 16 etapas fixas (`ETAPAS_RPA_EACE`), cada
+  uma reportando percentual/etapa por callback; `fazer_login` relata 3
+  sub-etapas (usuário, senha, aguardar portal).
+- `LogRpaEace` ganha `etapa_atual`/`progresso_pct` (migração `0031`),
+  zerados a cada nova tentativa; tela mostra barra + "XX% — etapa"
+  enquanto "Processando".
+- 7 testes novos; suíte completa (502 testes) sem regressão; validado
+  renderizando o fragmento HTML de verdade (barra e texto corretos).
+**Pendência atual:** Fase 1 falta 1 upload real para fechar 100% (mesma
+pendência de antes). Regra de avanço automático (RN-056) registrada como
+interpretação do Orquestrador (todos os logs com sucesso) — confirmar
+com o usuário antes de fechar o QA. Feature segue `🔄 Em andamento`;
+QA-033 ainda não foi criado nem acionado.
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-04 | FEAT-033 recebe a extensão da barra de progresso por etapa (RN-061 nova) — 16 etapas fixas no núcleo do RPA, `LogRpaEace.etapa_atual`/`progresso_pct` (migração `0031`), zerados a cada nova tentativa; 7 testes novos, suíte completa (502 testes) sem regressão | Usuário pediu para acompanhar cada etapa da RPA como porcentagem numa barra de progresso, "até pra que o usuário possa ver se não está travado"; Orquestrador formaliza entrega já validada pelo Dev (renderização real do fragmento conferida) |
+| 2026-09-03 | FEAT-033 recebe 3 extensões pós-Fase 3: correção de 3 bugs reais de tela (estado "Processando" ausente, posição na fila ausente, conflito real de `hx-swap-oob` com o próprio polling), opção "Disparar RPA" restrita ao status "Resposta Financeiro", registro de cada execução na linha do tempo do RI e em Auditoria (RN-059 nova) e imutabilidade do log "Sucesso" (RN-060 nova, validada também no backend); RN-006/RN-008/RN-056/RN-058 ganham referência cruzada; processo consumidor da fila confirmado rodando de verdade em produção via serviço `rpa_eace_worker` (DevOps) | Usuário testou ao vivo (INEP 90000002) e reportou os 3 bugs; depois pediu registro permanente de cada execução (corrigindo a 1ª tentativa, que gravou só em Auditoria, para também usar a linha do tempo do RI) e bloqueio de edição pós-"Sucesso"; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev/DevOps em turnos anteriores desta mesma sessão |
+| 2026-09-03 | FEAT-033 (Fase 3) entregue pelo Dev — fila serializada (`select_for_update(skip_locked=True)`), reprocessamento automático de erro não mapeado, comando `processar_fila_rpa_eace`, estado "Na fila" na tela com polling HTMX a cada 5s; 484 testes sem regressão; falta só o serviço no `docker-compose.yml` rodando o comando (DevOps) | Usuário pediu a Fase 3 direto ao Dev; lacuna de UI deixada em aberto no `ADR-005` ("como a tela reflete sem reload") foi resolvida pelo Dev com polling HTMX — decisão técnica simples e reversível (CLAUDE.md §9), registrada aqui |
+| 2026-09-03 | RN-058 criada (fila de execução serializada do RPA EACE, reprocessamento automático de erro não mapeado, erro de regra de negócio nunca reprocessa sozinho); `ADR-005` criada (mecanismo de fila/processo consumidor); FEAT-033 recebe a Fase 3 e a Entrega do Dev da Fase 2 (log/tela) formalizada | Usuário pediu a fila depois de ver a Fase 2 (log/tela) já entregue — várias pessoas podem disparar a RPA ao mesmo tempo; definiu explicitamente que só erro **não mapeado** (técnico/ambiente) reprocessa 1 vez, erro de regra de negócio vira definitivo já na 1ª tentativa; implementação (Dev) e infraestrutura do processo consumidor (DevOps) ainda não foram feitas |
+| 2026-09-03 | RN-057 criada (validação dos dados da Nota Fiscal extraídos do PDF contra o portal EACE antes do anexo); RN-056 ampliada com os motivos "OSP não encontrada" e "Documento já enviado"; FEAT-033/ADR-004 atualizadas com o que o Dev entregou na Fase 1 (extração/validação do PDF, os 2 motivos novos, 466 testes) | Usuário pediu para implementar a extração de dados do PDF (prioridade sobre as demais pendências de motivo de erro) e resolver os motivos "OSP não encontrada"/"Documento já enviado"; "credenciais inválidas" ficou de fora — Dev confirmou contra o portal real que não há mensagem de erro capturável para diferenciar senha errada de outra falha no mesmo passo; Orquestrador só formaliza a documentação, código já entregue e testado pelo Dev |
+| 2026-09-03 | FEAT-033 (Fase 1) entregue pelo Dev, `🔄 Em andamento` — núcleo em `apps/integracoes/eace/`, comando `eace_anexar_nota_fiscal`; login/navegação/extração validados contra o portal real; bug real corrigido (busca por "Medicoes" sem acento nunca batia com "Medições" do portal); 448 testes sem regressão; falta só 1 upload real (sem PDF/XML correto disponível para um INEP pendente) | Usuário autorizou copiar as credenciais reais do protótipo (`doc/auto_eace_nf_servidor/.env`) para testar contra o portal ao vivo; usuário acompanhou a validação e confirmou que o par de teste disponível (INEP 35083938) já tinha sido enviado antes, explicando por que não aparecia como pendente |
+| 2026-09-03 | Regra de avanço automático de status da FEAT-033 definida: RI avança de "Resposta Financeiro" para "Aguardando validação EACE" só se o retorno da RPA for "Sucesso"; em "Erro" o status não muda; RN-056 (Exceções) e critérios de aceite (Fase 2) atualizados | Usuário respondeu diretamente à pendência deixada na definição do gatilho; Orquestrador assumiu, como interpretação (CLAUDE.md §9, opção mais simples), que "todos os logs" de um RI precisam estar "Sucesso" para o avanço (não só o último processado) e que o botão manual da FEAT-010 continua como alternativa — ambos sujeitos a confirmação do usuário |
+| 2026-09-03 | Gatilho da FEAT-033 definido pelo usuário (RN-056, nova): resposta do financeiro (RN-016) gera 1 log por Nota Fiscal esperada, com listas de XML/PDF para o usuário escolher o par e disparar a RPA; entrega dividida em Fase 1 (núcleo da RPA funcional via terminal, sem tela) e Fase 2 (log/tela), nessa ordem, a pedido do usuário; `ADR-004` e critérios de aceite da FEAT-033 atualizados | Usuário detalhou o fluxo (contagem de PDF/XML da resposta, 1 log por NF, seleção manual do par, disparo por log) e pediu explicitamente para validar o backend no terminal antes de construir a tela; resolve a pendência de gatilho aberta na criação da FEAT-033; ainda falta decidir se a conclusão dos logs avança o status do RI sozinha ou mantém o botão manual da FEAT-010 |
+| 2026-09-03 | Criada FEAT-033 (RPA de anexo automático de NF/XML no portal EACE, `backend-only`, `⬜ Pendente`), reaproveitando o protótipo `doc/auto_eace_nf_servidor` sem a camada de frontend; `architecture.md` detalha a decisão e `ADR-004` é criada | Usuário pediu, via Orquestrador, para trazer essa automação (já existente como protótipo solto) para dentro do módulo Integrações, descartando o frontend do protótipo e rodando só em background; confirmado que é a mesma RPA já prevista no gap "Hub de Integrações v2"; gatilho de disparo (automático, por botão ou por varredura periódica) ainda não definido pelo usuário — feature fica pendente dessa decisão antes de iniciar |
+| 2026-09-03 | Deploy manual em produção (`192.168.90.109`, stack `hml`) do commit `184424f` — RN-053/RN-054/RN-055 e FEAT-032, seguindo o passo a passo de `DEPLOYMENT.md` (backup do banco validado, `git reset --hard`, `up -d --build`, `restart nginx`, `migrate` só aplicou `ri.0027_ri_mes_operacao_ixc` — confirma volume certo do banco —, `collectstatic`, validado com login real e grid carregando) | Usuário pediu explicitamente para commitar, dar push e subir no servidor via pull, direto ao Dev; execução fora do papel padrão do Dev (deploy é escopo do DevOps), autorizada pela instrução explícita do usuário (CLAUDE.md §0); FEAT-017/FEAT-018 seguem `🔍 Aguardando QA` — o deploy foi à frente da revisão formal do QA, mesmo padrão de exceção já usado antes (ex.: FEAT-009, 2026-08-25) |
+| 2026-09-03 | Criada FEAT-032 (cores dos selects "Status do RI"/"Responsável" na lista aberta, `frontend-layout`, sem RN) e já `✅ Concluída` — validada pelo usuário | Usuário reportou que a lista aberta desses dois selects usava fundo branco padrão do navegador com texto amarelo, fora do padrão preto+amarelo do projeto; ajuste puramente visual, sem lógica nem dado alterado |
+| 2026-09-03 | `business_rules.md` recebe RN-053 (nova — Mês da Operação do Lado IXC, select que nasce no mês corrente; célula A20 da planilha de faturamento passa a ser gerada a cada envio/download, ano sempre o ano corrente), RN-054 (nova — aba criada automaticamente na planilha copia a grade oculta da aba-modelo, corrigindo inconsistência visual entre abas) e RN-055 (nova — produto sem valor de Equipamento cadastrado na LPU sai do select "Produtos" do Lado IXC, evitando lançamento que sempre gerava R$ 0,00 sem explicação); FEAT-017/FEAT-018 recebem nota de ampliação; suíte completa (442 testes) passando, validado no navegador real (Docker + Playwright) | Usuário pediu as três melhorias diretamente ao Dev, fora do fluxo Orquestrador→Dev; Orquestrador só formaliza a documentação já entregue — features seguem `🔍 Aguardando QA`, sem mudança de status |
 | 2026-09-02 | FEAT-009/FEAT-020 corrigidas pelo Dev — usuário reportou falso positivo real em produção (INEP 35271561): RI avançava para "Resposta Financeiro" sem o financeiro ter respondido, e a resposta real chegada depois podia ser descartada silenciosamente; RN-016 corrigida (só remetente do domínio do financeiro conta como resposta) e RN-005 corrigida (aceita N Notas Fiscais no mesmo e-mail, não só exatamente 1 PDF + 1 XML — usuário reportou 2ª ocorrência, INEP 35095874, com anexos reais não sendo salvos); FEAT-018 ampliada — RN-014 revisada, Município/Estado do Lado IXC nascem preenchidos com o cadastro da Escola (INEP), continuam editáveis; correção de dado aplicada em produção sob autorização explícita do usuário (9 RIs revertidos, 3 respostas reais recuperadas retroativamente, backup prévio); correções implantadas em produção no mesmo dia (commit `f1c834a`); suíte completa (316 testes) passando | Usuário identificou o problema testando a tela real; investigação em produção (leitura direta, sem alterar nada até confirmar a causa) achou o padrão: eco do próprio e-mail enviado voltando pra caixa monitorada; features seguem `🔍 Aguardando QA`, correção é do Dev antes de o QA revisar |
 | 2026-09-02 | RN-024 retirada (Sincronizador do Relatório EACE deixa de alterar o status do RI — só lança os itens do Lado 3) e RN-003 ajustada (divergência do Lado IXC × Lado Relatório EACE deixa de acusar falso positivo quando um dos dois lados está vazio), entregues pelo Dev nas FEAT-005/FEAT-024/FEAT-025 | Usuário pediu os dois ajustes explicitamente; correção pontual aplicada aos dados já gravados (das 473 divergências abertas, 471 eram falso positivo e foram resolvidas); impacto conhecido, não resolvido nesta mudança: os cards "Kits Instalados" e "Valor já Faturado" (RN-026) dependem do RI chegar a "Faturamento Concluído", que agora só acontece pelo ciclo manual completo — usuário avisado |
 | 2026-09-02 | RN-052 criada (status "Andamento" passa a se chamar "Em Andamento"; Lado IXC só aceita lançamento/edição/exclusão com o RI nesse status — qualquer outro status fica somente leitura), entregue pelo Dev na FEAT-004 | Usuário pediu os dois ajustes explicitamente; Lado Relatório EACE não foi afetado, continua só sob a RN-020 |

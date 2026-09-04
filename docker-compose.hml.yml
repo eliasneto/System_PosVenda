@@ -30,9 +30,17 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    # Sem "ports:" para o host - so os containers desta rede acessam o
-    # banco. Se precisar de acesso externo para diagnostico, publique uma
-    # porta diferente da usada no ambiente local (3315) via .env.hml.
+    # Porta diferente da usada no ambiente local (3315), publicada só no
+    # loopback do próprio servidor (127.0.0.1:3316) - nunca na interface
+    # externa, mesmo que o firewall do host esteja mal configurado (o
+    # default sempre ativo é proposital: só ouvir em loopback não amplia
+    # superfície de ataque, então não depende de configurar variável
+    # nenhuma para ficar seguro). Uso pretendido: acesso de diagnóstico/
+    # consulta (ex.: usuário de banco só leitura para terceiro) via túnel
+    # SSH - ver `docs/devops/DEPLOYMENT.md`, "Acesso de consulta para
+    # terceiro (só leitura)".
+    ports:
+      - "127.0.0.1:${HML_DB_DIAGNOSTICO_PORT:-3316}:3306"
 
   web:
     build: .
@@ -86,6 +94,32 @@ services:
       sh -c "sleep 15 && while true; do
                python manage.py sincronizar_email_financeiro || true;
                sleep ${GRAPH_FINANCEIRO_POLL_INTERVAL_SECONDS:-300};
+             done"
+
+  rpa_eace_worker:
+    # FEAT-033 (Fase 3, RN-058/ADR-005): mesmo papel do container local -
+    # processo consumidor unico da fila do RPA EACE. RN-058 exige no
+    # maximo 1 execucao por vez em todo o sistema - manter só 1 réplica
+    # deste serviço, aqui e no ambiente local.
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env.hml
+    environment:
+      - DB_ENGINE=mysql
+      - DB_HOST=db
+      - DB_PORT=3306
+    volumes:
+      # Mesmo volume nomeado do "web" - precisa enxergar os mesmos
+      # arquivos de Documento (PDF/XML) que o "web" grava em media_hml.
+      - media_hml:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "sleep 15 && while true; do
+               python manage.py processar_fila_rpa_eace || true;
+               sleep ${RPA_EACE_POLL_INTERVAL_SECONDS:-5};
              done"
 
 volumes:

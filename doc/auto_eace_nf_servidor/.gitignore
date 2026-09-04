@@ -1,0 +1,26 @@
+# Ambiente virtual
+.venv/
+venv/
+
+# Variáveis de ambiente / credenciais
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Logs e saídas
+logs/
+output/
+*.log
+
+# Artefatos do Playwright
+screenshots/
+traces/
+.auth/
+
+# IDE
+.vscode/
+.idea/

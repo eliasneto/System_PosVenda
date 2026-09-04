@@ -1,5 +1,5 @@
 # Regras de Negócio — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-09-03_ (RN-053 criada — Mês da Operação do Lado IXC na planilha, ano sempre corrente; RN-054 criada — linhas de grade ocultas em toda aba criada automaticamente; RN-055 criada — produto sem valor de Equipamento sai da lista do Lado IXC)
+_Última atualização: 2026-09-04_ (RN-053 criada — Mês da Operação do Lado IXC na planilha, ano sempre corrente; RN-054 criada — linhas de grade ocultas em toda aba criada automaticamente; RN-055 criada — produto sem valor de Equipamento sai da lista do Lado IXC; RN-056 criada — gatilho da RPA de anexo no portal EACE, log por Nota Fiscal com seleção manual de PDF/XML, ampliada com os motivos "OSP não encontrada"/"Documento já enviado"; RN-057 criada — validação dos dados da Nota Fiscal extraídos do PDF contra o portal EACE antes do anexo, ampliada em 2026-09-04 com Produto/Valor extraídos do PDF exibidos no select antes de escolher; RN-058 criada — fila de execução serializada do RPA EACE, com reprocessamento automático só de erro não mapeado, implementada e testada em 2026-09-03; RN-063 criada em 2026-09-04 — consulta somente-leitura das pendências do portal EACE antes de escolher a Nota Fiscal; RN-064 criada em 2026-09-04 — correção: OSP resolvida pelo item que bate com o Valor da NF, não mais "qualquer" OSP do RI, e consulta de pendências cobrindo todas as OSPs distintas do RI)
 
 ## Ciclo de Vida do RI
 
@@ -955,6 +955,440 @@ próprio filtro de KIT continuam sem alteração).
 
 **Status:** Ativa
 
+### RN-056 — Gatilho da RPA de anexo no portal EACE: log por Nota Fiscal com seleção manual de PDF/XML
+
+**Descrição:** Quando o financeiro responde (RN-016) trazendo N arquivos
+PDF e N arquivos XML, o sistema conta quantos arquivos de cada tipo
+vieram naquela resposta e cria um log de processamento da RPA para cada
+Nota Fiscal esperada (ex.: resposta com 4 XML gera 4 logs). Cada log tem
+2 campos de lista: um lista todos os XML da resposta, outro lista todos
+os PDF da resposta. O usuário escolhe, em cada log, qual XML e qual PDF
+formam aquela Nota Fiscal, e aciona no próprio log o disparo da RPA —
+cada execução da RPA processa exatamente 1 PDF + 1 XML (upload no portal
+EACE).
+
+**Contexto:** Definido pelo usuário em 2026-09-03, resolvendo a
+pendência de gatilho registrada em `ADR-004`. Substitui a hipótese de
+disparo totalmente automático ou de um único botão por RI (`FEAT-010`):
+a seleção manual do par PDF/XML por log é necessária porque a resposta do
+financeiro pode trazer N arquivos de cada tipo (RN-005) sem garantia de
+que já cheguem pareados ou na ordem certa.
+
+**Critérios:**
+- A criação dos logs é automática, disparada pela mesma resposta do
+  financeiro que já muda o RI para "Resposta Financeiro" (RN-016) —
+  quantidade de logs = quantidade de arquivos de cada tipo recebidos
+  (RN-005 já exige quantidade de PDF igual à de XML).
+- Cada log tem uma lista com os XML da resposta e outra com os PDF da
+  resposta — nenhum arquivo é pré-selecionado automaticamente.
+- A ação de disparo da RPA fica dentro do próprio log, só habilitada
+  depois de escolhido 1 XML e 1 PDF nesse log.
+- Cada execução da RPA processa 1 único par PDF+XML — nunca mais de um
+  por disparo; ao terminar, o log grava o resultado ("Sucesso" ou "Erro").
+- **Avanço automático de status (definido em 2026-09-03):** o RI só avança
+  sozinho de "Resposta Financeiro" para "Aguardando validação EACE"
+  (RN-001) quando o retorno da automação é "Sucesso"; em caso de "Erro", o
+  status do RI não muda — continua em "Resposta Financeiro" até o log ser
+  reprocessado com sucesso.
+- **Disparo bloqueado sem sequer tentar o upload (validado contra o
+  portal real em 2026-09-03)** quando: a OSP informada não existe no
+  portal (motivo "OSP não encontrada"); ou a linha correspondente no
+  portal já não está mais "Pendente" — já enviada, aprovada, reprovada
+  etc. (motivo "Documento já enviado"). Ver também RN-057 para os
+  motivos de bloqueio ligados aos dados do próprio PDF.
+- **Visibilidade na tela (pedido do usuário, 2026-09-03):** a seção com os
+  logs de Nota Fiscal só aparece na tela de detalhe do RI enquanto o
+  status for "Resposta Financeiro" (RN-016). Os logs continuam existindo
+  depois que o RI avança (item acima) ou é destravado manualmente
+  (FEAT-010) — só deixam de ser exibidos nessa tela.
+- **Imutabilidade após "Sucesso":** ver RN-060 — log com resultado
+  "Sucesso" não aceita novo disparo nem troca de PDF/XML.
+
+**Exceções:** Interpretação assumida pelo Orquestrador (opção mais
+simples e conservadora, CLAUDE.md §9, sujeita a confirmação do usuário):
+como um RI pode ter N logs (N Notas Fiscais, RN-005), o avanço automático
+de status só ocorre quando **todos** os logs daquele RI estiverem com
+resultado "Sucesso" — 1 log com "Erro" mantém o RI em "Resposta
+Financeiro", mesmo que os demais logs já tenham sido processados com
+sucesso. Também fica assumido, até o usuário dizer o contrário, que o
+botão manual "anexo feito no EACE" (`FEAT-010`) continua disponível como
+alternativa manual (ex.: para um Administrador destravar um RI cujo RPA
+não consiga concluir) — mesmo padrão de exceção manual já usado em
+RN-019.
+
+**Impacto técnico:** novo model de log de execução da RPA (nome a definir
+pelo Dev), vinculado ao RI/INEP e aos documentos (PDF/XML) da resposta do
+financeiro (RN-005/RN-016), com campo de resultado (Sucesso/Erro); núcleo
+da automação em `apps/integracoes/eace/` (`ADR-004`). Fase 1 da
+`FEAT-033` valida o núcleo da RPA via terminal (management command), sem
+o model de log nem a tela; Fase 2 implementa o log, a tela e o avanço
+automático de status descritos nesta regra.
+
+**Features relacionadas:** FEAT-033, FEAT-009, FEAT-010.
+
+**Status:** Ativa
+
+### RN-057 — Validação dos dados da Nota Fiscal (PDF) contra o portal EACE antes do anexo
+
+**Descrição:** Antes de subir o PDF+XML no portal EACE (RN-056), o
+sistema extrai do próprio PDF os dados da Nota Fiscal — INEP, Produto e
+Valor Total da Nota — e usa essa extração em duas conferências, cada uma
+capaz de bloquear o disparo daquele log: (1) o INEP extraído do PDF
+precisa ser igual ao INEP do log/RI, verificado antes de abrir o portal;
+(2) o Valor extraído do PDF precisa ser igual ao valor exibido na linha
+correspondente do portal EACE, verificado depois de localizar a linha, e
+antes do upload em si. Os dados extraídos (INEP/Produto/Valor) ficam
+gravados no próprio log da Nota Fiscal (RN-056) — visíveis ao usuário
+ali, em sucesso ou em erro.
+
+**Contexto:** Pedido do usuário em 2026-09-03, na sequência da definição
+do gatilho (RN-056). A extração de dados do PDF já existia como etapa
+isolada no protótipo `doc/auto_eace_nf_servidor` (validação de valor
+antes do upload em lote, via planilha de controle); o usuário pediu para
+trazer essa mesma conferência para dentro do fluxo por log, com os dados
+extraídos visíveis no próprio log — não só em log técnico da aplicação.
+
+**Critérios:**
+- Extração via leitura do texto do PDF (INEP, Produto, Valor Total da
+  Nota) acontece antes de abrir o navegador — falha rápido, sem gastar
+  tempo/rede, se o PDF não tiver os dados mínimos ou não bater com o
+  INEP esperado.
+- PDF sem INEP reconhecível, ou sem Valor Total da Nota reconhecível,
+  bloqueia o disparo daquele log ("Sem INEP no PDF"/"Sem valor no PDF").
+- INEP do PDF diferente do INEP do log/RI bloqueia o disparo, antes de
+  abrir o portal ("INEP do PDF não bate com o INEP do log").
+- Valor do PDF diferente do valor exibido na linha do portal (mesma Nota
+  Fiscal, já localizada) bloqueia o upload, mesmo com o portal já aberto
+  ("Valor divergente entre PDF e portal").
+- Os 3 dados extraídos (INEP, Produto, Valor) ficam sempre gravados no
+  log, mesmo quando o resultado é "Erro" — o usuário confere o que foi
+  lido do PDF sem precisar abrir o arquivo.
+
+**Exceções:** Nenhuma divergência usa tolerância além da já necessária
+para normalizar formatação (ex.: "22.644,43" e "22644.43" contam como o
+mesmo valor); não há arredondamento nem tolerância de centavos além
+dessa normalização de formato.
+
+**Impacto técnico:** `apps/integracoes/eace/extrair_dados_pdf.py`
+(extração via `pdfplumber`, nova dependência); `apps/integracoes/eace/
+rpa.py` — `anexar_nota_fiscal` retorna `ResultadoRpaEace` (`sucesso`,
+`motivo`, `dados_pdf`, `valor_portal`) em vez de booleano simples. Fase 1
+(`FEAT-033`) valida a extração e as duas conferências via terminal,
+inclusive contra o portal real; Fase 2 (entregue em 2026-09-03) grava
+`dados_pdf`/`motivo` no model `LogRpaEace` e exibe no próprio log.
+
+**Melhoria (2026-09-04):** usuário reportou não ter como saber, antes de
+escolher o PDF no select de "Disparar RPA", qual Nota Fiscal correspondia
+a qual produto/valor — só descobria depois de um "Erro (valor
+divergente)". O select do PDF (`_logs_rpa_eace_detail.html`) passou a
+mostrar Produto/Valor extraídos do próprio arquivo junto do nome
+(`apps/ri/views.py`, `_rotular_documentos_pdf`) — mesma extração desta
+RN-057, sem abrir portal nem gastar rede; falha de leitura (PDF
+ilegível, lib ausente) só omite o complemento, nunca quebra a tela.
+
+**Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
+### RN-058 — Fila de execução do RPA EACE, com reprocessamento automático de erro não mapeado
+
+**Descrição:** A execução do RPA de anexo no portal EACE (RN-056) é
+serializada por uma fila — no máximo 1 execução por vez em todo o
+sistema, mesmo com várias pessoas disparando "Disparar RPA" ao mesmo
+tempo, em RIs diferentes. Cada disparo (novo ou "Tentar novamente") entra
+no final da fila; um único processo consome a fila, um log de cada vez,
+na ordem de chegada (FIFO). Quando um log falha com um erro **não
+mapeado** (falha técnica/de ambiente — ver Critérios), ele não vira
+"Erro" definitivo de imediato: volta para o **final** da fila para 1
+reprocessamento automático. Só vira "Erro" definitivo se esse
+reprocessamento também falhar. Erros **mapeados** (regra de negócio —
+RN-056/RN-057) nunca entram nesse reprocessamento automático: viram
+"Erro" definitivo já na 1ª tentativa.
+
+**Contexto:** Pedido do usuário em 2026-09-03, logo após a entrega da
+Fase 2 (log por Nota Fiscal com disparo manual): com a tela já
+funcionando, várias pessoas podem clicar em "Disparar RPA" ao mesmo
+tempo para RIs diferentes — mas o núcleo da automação abre um navegador
+Chromium por execução e usa o mesmo login no mesmo portal externo;
+execuções simultâneas colocam em risco tanto o consumo de recursos do
+servidor quanto a consistência da navegação no portal (dois fluxos
+mexendo na mesma tela ao mesmo tempo). O usuário também pediu que falhas
+passageiras (ambiente, rede, timeout de UI) ganhem 1 nova chance
+automática, sem exigir clique manual de novo — mas só para esse tipo de
+falha, nunca para um erro que já é sabidamente uma questão de dado
+(regra de negócio), porque repetir a mesma tentativa sem o usuário
+corrigir nada (trocar o PDF/XML, aguardar o portal mudar) não muda o
+resultado.
+
+**Critérios:**
+- No máximo 1 execução do núcleo do RPA (`anexar_nota_fiscal`) roda por
+  vez, em todo o sistema — não por RI: o Chromium/portal é um recurso
+  compartilhado único.
+- Fila em ordem de chegada (FIFO); log reprocessado volta para o
+  **final** da fila, não fura a frente de quem ainda não tentou nenhuma
+  vez.
+- **Motivos NÃO mapeados** (falha de ambiente/técnica, sem relação com o
+  dado da Nota Fiscal ou regra de negócio) — reprocessam automaticamente
+  1 vez: `login`, `selecao_perfil`, `abrir_medicoes`, `abrir_osps`,
+  `expandir_resultado_osp`, `expandir_notas_fiscais`, `upload`,
+  `enviar_notas`, `credenciais_ausentes`, `erro_playwright`,
+  `ambiente_indisponivel` (Playwright/Chromium/pdfplumber ausente).
+- **Motivos mapeados** (regra de negócio — RN-056/RN-057) — nunca
+  reprocessam sozinhos, viram "Erro" definitivo na 1ª tentativa:
+  `pdf_sem_inep`, `pdf_sem_valor`, `inep_divergente_do_pdf`,
+  `valor_divergente`, `osp_nao_encontrada`, `inep_nao_encontrado`,
+  `documento_ja_enviado`, `indice_invalido`.
+- Um log só reprocessa automaticamente 1 vez. Se a 2ª tentativa falhar
+  de novo — com motivo mapeado ou não mapeado — o resultado fica "Erro"
+  definitivo; não há 3ª tentativa automática.
+- Enquanto aguarda a fila (antes da 1ª tentativa) ou aguarda o
+  reprocessamento (depois de um erro não mapeado), o log aparece como
+  "Na fila" — nem "Pendente" (sem arquivo escolhido ainda) nem "Erro"
+  (só depois de esgotar as tentativas); a tela mostra a posição do log
+  na fila (1 = próximo a ser processado), calculada entre **todos** os
+  logs "Na fila" do sistema, não só os do mesmo RI.
+- O botão "Tentar novamente" (Fase 2, para erro definitivo) continua
+  existindo e entra na fila do mesmo jeito que um disparo novo.
+- Enquanto a execução está de fato rodando, o log fica "Processando" —
+  estado gravado e comitado **antes** de chamar o núcleo do RPA, para
+  aparecer na tela mesmo que a execução em si demore dezenas de segundos
+  (ver também RN-061, barra de progresso por etapa).
+
+**Exceções:** Nenhuma — a serialização vale para todo log de toda a
+fila, sem prioridade por RI, usuário ou urgência.
+
+**Correção (2026-09-03):** usuário reportou, testando ao vivo (INEP
+90000002, 2 Notas Fiscais na fila), 3 problemas reais: (1) o status
+pulava direto de "Na fila" para "Erro", sem nunca mostrar "Processando"
+— corrigido gravando esse estado antes de chamar a RPA, não só depois;
+(2) a posição na fila não aparecia — critério acima, implementado; (3) a
+tela só atualizava com F5 — bug real de HTMX: o mesmo elemento era alvo
+do próprio polling (`hx-trigger`) e também vinha marcado `hx-swap-oob`
+na resposta desse polling, e as duas coisas competiam entre si; corrigido
+suprimindo o `hx-swap-oob` quando a resposta é a do próprio polling.
+
+**Impacto técnico:** implementado em 2026-09-03 —
+`LogRpaEace.tentativas`/`enfileirado_em` (migração `0029`);
+`MOTIVOS_REGRA_DE_NEGOCIO` em `apps/integracoes/eace/rpa.py`;
+`apps.ri.services.processar_proximo_da_fila_rpa_eace` (consumidor único,
+`select_for_update(skip_locked=True)` garante 1 execução por vez mesmo
+com 2 processos por engano); comando de terminal
+`processar_fila_rpa_eace` (1 passada por chamada). A tela atualiza
+sozinha enquanto um log está "Na fila"/"Processando" via polling HTMX a
+cada 5s (decisão do Dev, opção mais simples/reversível). Processo
+consumidor rodando de verdade via serviço `rpa_eace_worker` no
+`docker-compose.yml` (entregue pelo DevOps em 2026-09-03, mesmo padrão
+do `email_scheduler`) — validado processando 1 item real da fila contra
+o portal em produção.
+
+**Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
+### RN-059 — Registro de cada execução do RPA EACE no histórico do RI e na Auditoria
+
+**Descrição:** A cada tentativa de execução do núcleo do RPA (RN-058) —
+inclusive as que voltam para a fila para reprocessamento, não só as que
+terminam em "Sucesso" ou "Erro" definitivo — o sistema grava 1 entrada
+na linha do tempo do RI (RN-008) e 1 registro em Auditoria (RN-006), com
+o resultado daquela tentativa, o número da tentativa e os dados da Nota
+Fiscal (INEP/Produto/Valor extraídos do PDF e valor exibido no portal),
+incluindo o motivo do erro quando houver. Diferente do próprio
+`LogRpaEace` (RN-056), que só guarda o estado mais recente — uma nova
+tentativa sobrescreve os dados da anterior —, este registro é permanente:
+continua visível mesmo depois de reprocessamentos.
+
+**Contexto:** Pedido do usuário em 2026-09-03: "toda vez que rodar o
+processamento, as informações da NF e status tem que ficar salvo nos
+logs do sistema para saber que em algum momento foi rodado". Primeira
+implementação gravou só em Auditoria (sem tela própria); o usuário
+corrigiu que o lugar certo é a mesma linha do tempo onde já aparecem as
+trocas de status e outras descrições do RI (RN-008) — Auditoria continua
+recebendo o mesmo registro, como trilha técnica adicional, mesmo padrão
+de dupla gravação já usado por RN-008/RN-006.
+
+**Critérios:**
+- Toda chamada de `processar_proximo_da_fila_rpa_eace` (RN-058) que
+  processa 1 log gera exatamente 1 entrada na linha do tempo do RI (tipo
+  "Mudança de campo", autor "Sistema") e 1 registro em Auditoria (ação
+  "Execução RPA EACE") — inclusive no caminho de estado inconsistente
+  (log sem OSP/documento).
+- Reprocessamento soma uma nova entrada/registro a cada tentativa — nunca
+  substitui nem apaga o anterior.
+- Ambos trazem: resultado da tentativa, número da tentativa, INEP/
+  Produto/Valor extraídos do PDF, valor exibido no portal e o motivo do
+  erro, quando houver.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** `apps/auditoria/models.py` (ação
+`execucao_rpa_eace`, migração `0003`); `apps/ri/services.py`
+(`_registrar_execucao_rpa_eace`, chamada de dentro de
+`processar_proximo_da_fila_rpa_eace`).
+
+**Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
+### RN-060 — Log de Nota Fiscal "Sucesso" é imutável
+
+**Descrição:** Uma vez que um log de Nota Fiscal (RN-056) tem resultado
+"Sucesso", o par PDF/XML e o disparo daquele log não podem mais ser
+alterados nem reenviados — nem pela tela nem por uma requisição direta ao
+backend.
+
+**Contexto:** Pedido do usuário em 2026-09-03: "caso o processamento seja
+dado como sucesso, os inputs não podem mais ser editados" — depois de
+confirmado no portal, os dados não podem ser trocados por engano.
+
+**Critérios:**
+- Tela: com resultado "Sucesso", o log mostra só um resumo somente
+  leitura (INEP/Produto/Valor extraídos) — sem formulário de seleção de
+  PDF/XML nem botão de disparo.
+- Backend: a view de disparo recusa a requisição (mensagem de erro, sem
+  alterar o log) quando o resultado já é "Sucesso", mesmo que a tela
+  tenha sido contornada — defesa em profundidade, não depende só do que
+  a tela esconde.
+
+**Exceções:** nenhuma — não existe hoje um fluxo para "desfazer" um log
+com "Sucesso".
+
+**Impacto técnico:** `apps/ri/views.py`
+(`ri_log_rpa_eace_disparar_view`); `apps/ri/templates/ri/
+_logs_rpa_eace_detail.html`.
+
+**Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
+### RN-061 — Barra de progresso por etapa da execução do RPA EACE
+
+**Descrição:** Enquanto o núcleo do RPA está em execução ("Processando",
+RN-058), a tela mostra uma barra de progresso percentual e o nome da
+etapa em andamento (ex.: "62% — Anexando o PDF e o XML"), atualizada em
+tempo real (mesmo polling HTMX de 5s da RN-058) a cada etapa concluída —
+login, preenchimento de usuário/senha, navegação, upload etc.
+
+**Contexto:** Pedido do usuário em 2026-09-04: acompanhar cada etapa da
+RPA como uma porcentagem numa barra de progresso, "até pra que o usuário
+possa ver se não está travado" — uma execução pode levar dezenas de
+segundos.
+
+**Critérios:**
+- O núcleo do RPA (`anexar_nota_fiscal`) é dividido em 16 etapas fixas,
+  na ordem em que acontecem de verdade (ex.: "Preenchendo usuário",
+  "Preenchendo senha", "Selecionando o perfil Fornecedor"...); a cada
+  etapa concluída, percentual = posição da etapa / total de etapas.
+- O progresso é zerado no início de cada nova tentativa, inclusive
+  reprocessamento (RN-058) — não herda o valor da tentativa anterior.
+- Falha no meio do caminho deixa a barra parada na última etapa
+  concluída — não retrocede nem avança sozinha.
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** `apps/integracoes/eace/rpa.py` (`ETAPAS_RPA_EACE`,
+`ProgressoRpaEace`); `apps/integracoes/eace/login.py` (`fazer_login`
+reporta 3 sub-etapas: usuário, senha, aguardar resposta do portal);
+`LogRpaEace.etapa_atual`/`progresso_pct` (migração `0031`).
+
+**Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
+### RN-063 — Consulta somente-leitura das pendências do portal EACE antes de escolher a Nota Fiscal
+
+**Descrição:** Na tela de "Disparar RPA" (RN-056), um botão "Consultar
+pendências" dispara 1 leitura somente-consulta do grid do portal EACE
+para a OSP do RI — mesma navegação até "Lendo as linhas do grid" de
+`anexar_nota_fiscal` (RN-057), sem nunca subir arquivo. O resultado
+(Status/Descrição/Valor de cada linha) fica gravado no próprio RI e
+exibido ao lado do Produto/Valor de cada NF (RN-062, melhoria da
+RN-057), para o usuário casar a NF certa com a linha certa ANTES de
+escolher, em vez de descobrir só depois de um "Erro (valor divergente)".
+
+**Contexto:** Usuário testou ao vivo o RPA EACE (INEP 53005090, RI 202,
+3 Notas Fiscais) e reportou: só descobriu qual NF (Kit Wi-Fi, Nobreak
+etc.) batia com qual linha do portal depois de tentar uma errada e
+receber "Erro (valor divergente)". Pediu para o sistema informar isso
+antes, ou casar sozinho — ver a alternativa mais completa (casamento
+automático, sem select manual) registrada como melhoria futura, não
+implementada agora por mexer na arquitetura da fila (RN-058).
+
+**Critérios:**
+- Consulta sob demanda (botão), nunca automática — pode levar dezenas de
+  segundos (mesma ordem de grandeza de "Disparar RPA"), roda dentro da
+  própria requisição, sem passar pela fila do RPA (RN-058): não sobe
+  nada, então não precisa da mesma exclusividade dos uploads reais.
+- Recusa rodar (mensagem de erro, sem tentar) se já existir um log
+  "Processando" no sistema — evita 2 navegadores abertos ao mesmo tempo
+  contra o mesmo login do portal.
+- Resultado (linhas do grid, motivo de erro, data/hora) fica gravado no
+  RI (`Ri.pendencias_portal_eace`/`_consultado_em`/`_motivo_erro`) — não
+  é recalculado a cada carregamento de tela, só quando o usuário pede.
+- Falha (OSP não encontrada, ambiente sem Playwright, credenciais
+  ausentes etc.) só mostra mensagem — nunca quebra a tela nem impede o
+  fluxo manual de "Disparar RPA" continuar funcionando do jeito de
+  sempre.
+
+**Exceções:** Nenhuma — mesmas condições de erro de `anexar_nota_fiscal`
+(RN-057), só que sem chegar a subir nada.
+
+**Impacto técnico:** `apps/integracoes/eace/rpa.py`
+(`consultar_pendencias_eace`, `ResultadoConsultaPendencias` — reaproveita
+`.dashboard`/`.login` de `anexar_nota_fiscal`); `apps/ri/services.py`
+(`consultar_pendencias_portal_eace`); `apps/ri/views.py`
+(`ri_consultar_pendencias_eace_view`); `Ri.pendencias_portal_eace`/
+`_consultado_em`/`_motivo_erro` (migração `0033`);
+`_logs_rpa_eace_detail.html`.
+
+**Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
+### RN-064 — Resolução da OSP pelo item da Nota Fiscal, não "qualquer" OSP do RI
+
+**Descrição:** Ao disparar a RPA (RN-056) ou consultar pendências
+(RN-063), a OSP usada é a do **item do Relatório EACE que bate com o
+Valor extraído do PDF** desta Nota Fiscal específica — não mais "a 1ª
+OSP não vazia" encontrada entre todos os itens do RI. Quando o RI tem
+itens em OSPs diferentes, a consulta de pendências (RN-063) cobre TODAS
+as OSPs distintas do RI, não só uma.
+
+**Contexto:** Usuário testou ao vivo (INEP 53005090, RI 202, 3 Notas
+Fiscais) e reportou: corrigiu o "Num OSP" do item errado, mas a RPA
+continuava usando a OSP antiga. Causa: o RI tinha itens em 2 OSPs
+diferentes (Nobreak numa, Kit Wi-Fi/Access Point Adicional em outra) — o
+código sempre pegava a 1ª OSP não vazia do RI inteiro, ignorando qual
+Nota Fiscal estava sendo processada; o item mais antigo (de outra OSP)
+sempre "ganhava", mesmo com a OSP certa já cadastrada no item certo.
+
+**Critérios:**
+- RI com só 1 OSP entre os itens: comportamento igual a antes (usa essa
+  OSP, sem custo extra de comparação).
+- RI com mais de 1 OSP: casa o Valor extraído do PDF (RN-057) contra
+  `valor_unitario × quantidade` de cada item — usa a OSP do item cujo
+  valor TOTAL bate (a NF traz o valor total do item, não o unitário;
+  usuário reportou um item de 3 Access Points com Valor Unitário R$
+  699,09 — comparar só o unitário nunca bate, o valor certo pra casar é
+  R$ 2.097,27 = 699,09 × 3).
+- PDF ilegível ou valor que não bate com nenhum item: cai no
+  comportamento antigo (1ª OSP não vazia) como último recurso — nunca
+  bloqueia o disparo por causa de um valor que não foi possível ler.
+- Consulta de pendências (RN-063): 1 leitura por OSP distinta do RI,
+  cada linha devolvida marcada com a OSP de origem; só registra erro se
+  TODAS as OSPs falharem — falha parcial mostra o que deu certo.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps/ri/services.py`
+(`_resolver_osp_da_nota_fiscal`, usada por
+`processar_proximo_da_fila_rpa_eace`; `consultar_pendencias_portal_eace`
+ampliada pra iterar todas as OSPs distintas do RI).
+
+**Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
 ### RN-050 — Assunto do e-mail ao financeiro inclui o nome da escola
 
 **Descrição:** O assunto sugerido do e-mail de faturamento ao financeiro
@@ -1042,9 +1476,12 @@ por acesso direto ao banco nesta versão, sem tela própria.
 status, alteração de campo/item, envio/recebimento de e-mail e erro não
 tratado), em vez de criar um log específico à parte.
 
-**Impacto técnico:** tabela `auditoria` (`modelo-dados.md`).
+**Impacto técnico:** tabela `auditoria` (`modelo-dados.md`); ação
+`execucao_rpa_eace` (migração `0003`, 2026-09-03) — o RPA de anexo no
+portal EACE (`FEAT-033`) é o "RPA futuro" antecipado na Descrição acima;
+cada execução gera 1 registro aqui (RN-059).
 
-**Features relacionadas:** FEAT-011.
+**Features relacionadas:** FEAT-011, FEAT-033.
 
 **Status:** Ativa
 
@@ -1080,15 +1517,16 @@ fora: não é cadastrado nesta tela, vem pronto da EACE (RN-010).
 **Exceções:** distinto do Auditoria/RN-006 — aquele continua sem tela
 própria, só trilha técnica; este histórico é a tela do usuário. Pode haver
 sobreposição de dado entre os dois (ex.: uma mudança de status gera entrada
-em ambos) — aceitável, propósitos diferentes. RE não entra aqui: quando a
-v3 for planejada, RE ganha sua própria linha do tempo (mesmo critério já
-registrado em `architecture.md` para não misturar RE dentro da estrutura
-da RI).
+em ambos) — aceitável, propósitos diferentes. Mesma sobreposição vale para
+cada execução do RPA EACE (RN-059): 1 entrada aqui, 1 registro em
+Auditoria. RE não entra aqui: quando a v3 for planejada, RE ganha sua
+própria linha do tempo (mesmo critério já registrado em `architecture.md`
+para não misturar RE dentro da estrutura da RI).
 
 **Impacto técnico:** nova tabela `ri_historico` (`modelo-dados.md`), FK
 direta a `ri` (sem `GenericForeignKey` — só RI existe hoje).
 
-**Features relacionadas:** FEAT-014.
+**Features relacionadas:** FEAT-014, FEAT-033.
 
 **Status:** Ativa
 
@@ -1940,6 +2378,9 @@ view/seção do dashboard da RN-025 (`apps/core`, `home.html`).
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-04 | RN-061 criada (barra de progresso por etapa da execução do RPA EACE, 16 etapas fixas, percentual = posição/total, zerada a cada nova tentativa); RN-058 ganha referência cruzada | Usuário pediu para acompanhar cada etapa da RPA (login, usuário, senha, navegação, upload...) como uma porcentagem numa barra de progresso, "até pra que o usuário possa ver se não está travado" |
+| 2026-09-03 | RN-059 criada (cada tentativa de execução do RPA EACE gera 1 entrada na linha do tempo do RI — RN-008 — e 1 registro em Auditoria — RN-006 —, mesmo em reprocessamento); RN-060 criada (log "Sucesso" não aceita novo disparo nem troca de PDF/XML, validado também no backend); RN-006/RN-008 ganham referência cruzada e FEAT-033 | Usuário pediu que toda rodada de processamento fique registrada "nos logs do sistema" e que, após "Sucesso", os inputs não possam mais ser editados; 1ª implementação gravou só em Auditoria (sem tela própria) — usuário corrigiu que o lugar certo é a mesma linha do tempo onde já aparecem as trocas de status e descrições do RI (RN-008), mantendo Auditoria como trilha técnica adicional |
+| 2026-09-03 | RN-056 ganha critério de visibilidade (seção de logs só aparece com o RI em "Resposta Financeiro") e referência cruzada a RN-060; RN-058 ganha critério de posição na fila, nota de correção de 3 bugs reais (estado "Processando" não aparecia, posição na fila ausente, tela não atualizava sozinha — conflito real de `hx-swap-oob` com o próprio polling HTMX) e registra a entrega do DevOps (serviço `rpa_eace_worker` no `docker-compose.yml`, processo consumidor rodando de verdade) | Usuário pediu, testando ao vivo (INEP 90000002, 2 Notas Fiscais na fila), que a opção de disparar a RPA só apareça com o RI em "Resposta Financeiro", e reportou os 3 bugs; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev/DevOps em turnos anteriores desta mesma sessão |
 | 2026-09-02 | Correção pontual de dados em produção (sem RN nova), 2ª rodada: usuário reportou que o financeiro respondeu o INEP 52032043 e a resposta não apareceu no sistema nem deu baixa no status — investigação revelou uma consequência mais grave do mesmo bug: quando o eco falso avança o status antes da resposta real chegar, a resposta real é descartada silenciosamente (`Ri` deixa de estar "Aguardando financeiro", único status aceito pra receber resposta), sem gravar nada, só aviso no log do servidor; varredura completa em produção encontrou mais 6 RIs com o mesmo eco ainda pendente (INEPs 52008649, 53005384, 17002109, 52049574, 17004810, 35278312, revertidos para "Aguardando financeiro") e, ao buscar direto na caixa de e-mail (Graph, fora da delta query já consumida) por resposta real perdida em cada um, recuperou 2 respostas genuínas do financeiro que tinham sido descartadas (INEP 52032043, RI 546; INEP 17002109, RI 1396) — reprocessadas com a mesma função de produção (`_processar_mensagem`), avançando o status corretamente para "Resposta Financeiro"; os outros 4 INEPs revertidos não tinham nenhuma resposta real na caixa ainda, então ficam corretamente em "Aguardando financeiro" | Usuário autorizou expressamente a varredura completa após reportar o caso do INEP 52032043; critério confirmado: reverter só quando for de fato eco (sem resposta legítima registrada), recuperar quando houver resposta real perdida; correção de código (domínio do remetente, RN-016) implantada em produção no mesmo dia (commit `f1c834a`) — ver linha da RN-016 corrigida, abaixo |
 | 2026-09-02 | Correção pontual de dados em produção (sem RN nova): 9 RIs revertidos de "Resposta Financeiro" para "Aguardando financeiro" (INEPs 35009730, 35417051, 52032043, 52108880, 35050611, 35010337, 35399474, 35095874, 35234643) | Mesma causa da correção da RN-016 (linha abaixo): a cópia do e-mail enviado (remetente `posvendas@megainfraestrutura.com.br`) estava voltando para a própria caixa monitorada e sendo lida como resposta do financeiro; confirmado por leitura direta (só leitura) que nenhum dos 9 tinha resposta real do domínio `speedcsc.com.br` antes de reverter; usuário autorizou explicitamente a correção em produção, com o critério "se for falso positivo corrige, se realmente veio do financeiro deixa"; RiHistorico de cada RI ganhou entrada explicando o motivo; correção de código (fix do domínio) ainda não implantada em produção nesta data — pendência de deploy formal (DEPLOYMENT.md) para não repetir |
 | 2026-09-02 | RN-016 corrigida (resposta do financeiro só conta se o remetente for do domínio `speedcsc.com.br`) | Usuário reportou falso positivo real (INEP 35271561): RI avançava para "Resposta Financeiro" sem o financeiro ter respondido — o código de rastreio (RN-009) identificava o RI pelo assunto, mas não validava o remetente; qualquer e-mail com o código (mesmo de fora do financeiro) avançava o status; confirmado com o usuário (CLAUDE.md §9): validar por domínio, não por lista fixa de endereços nem pelos destinatários específicos daquele envio |

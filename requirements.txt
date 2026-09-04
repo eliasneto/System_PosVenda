@@ -11,3 +11,14 @@ requests==2.32.3
 # libsasl2-dev no Dockerfile pra compilar o python-ldap.
 python-ldap==3.4.3
 django-auth-ldap==4.8.0
+
+# FEAT-033 (Fase 1, ADR-004/RN-056): RPA de anexo de Nota Fiscal no portal
+# EACE (nucleo em apps/integracoes/eace/, reaproveitado do prototipo
+# doc/auto_eace_nf_servidor). Depois de instalar, rodar tambem
+# 'python -m playwright install chromium' (baixa o navegador - nao vem
+# pelo pip); no Dockerfile de producao isso ainda precisa ser feito pelo
+# DevOps (ADR-004, Pendencias).
+playwright==1.60.0
+# FEAT-033/RN-057: extrai INEP/Produto/Valor de dentro do PDF da Nota
+# Fiscal, para conferir contra o valor exibido no portal antes do upload.
+pdfplumber==0.11.6

@@ -120,6 +120,21 @@ class Ri(models.Model):
     dados_financeiro_confirmados_em = models.DateTimeField(
         "Dados para o financeiro confirmados em", null=True, blank=True
     )
+    # RN-063 (melhoria 2026-09-04): última leitura somente-consulta do
+    # grid do portal EACE para a OSP deste RI (`consultar_pendencias_
+    # eace`) - mostrada ao lado do Produto/Valor de cada NF no select de
+    # "Disparar RPA", pra não precisar mais escolher às cegas e só
+    # descobrir a NF errada depois de um "Erro (valor divergente)",
+    # RN-057. Lista de dicts (`{"status", "descricao", "valor"}`); vazio
+    # até a 1ª consulta ou quando ela falha (motivo fica registrado à
+    # parte, não aqui).
+    pendencias_portal_eace = models.JSONField("Pendências no portal EACE", default=list, blank=True)
+    pendencias_portal_eace_consultado_em = models.DateTimeField(
+        "Pendências no portal EACE consultadas em", null=True, blank=True
+    )
+    pendencias_portal_eace_motivo_erro = models.CharField(
+        "Motivo do erro na última consulta de pendências", max_length=50, blank=True
+    )
     concluido_em = models.DateTimeField("Concluído em", null=True, blank=True)
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
     atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
@@ -482,6 +497,17 @@ class RiItemRelatorioEace(models.Model):
     # exibido como "Status Equip" (ajuste de texto, 2026-08-28) — o nome
     # do campo continua ligado à coluna de origem da planilha.
     status_escola = models.CharField("Status Equip", max_length=50, blank=True)
+    # RN-062 (2026-09-04): marca que este item veio do Sincronizador (nesta
+    # sincronização ou numa anterior) — usado para decidir, numa próxima
+    # sincronização, quais itens podem ser removidos/substituídos quando a
+    # Planilha EACE ativa não trouxer mais aquela Descrição para o INEP
+    # ("a última planilha é sempre a que vale", fora de "Implantação EACE"/
+    # "Em Andamento" — ver `sincronizar_relatorio_eace_da_planilha`). Item
+    # lançado manualmente nasce com este campo `False` e nunca é removido
+    # por uma sincronização; passa a `True` se uma planilha real confirmar
+    # a mesma Descrição depois (a partir daí, uma planilha seguinte sem
+    # essa Descrição pode removê-lo).
+    origem_sincronizador = models.BooleanField("Lançado/confirmado pelo Sincronizador", default=False)
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:
@@ -549,6 +575,69 @@ class Documento(models.Model):
 
     def __str__(self):
         return f"{self.get_tipo_display()} v{self.versao} - RI {self.ri_id}"
+
+
+class LogRpaEace(models.Model):
+    """RN-056/RN-057/RN-058 (FEAT-033): 1 log por Nota Fiscal esperada,
+    criado quando o financeiro responde (RN-016). Usuário escolhe
+    manualmente o par PDF+XML entre os `Documento` daquela resposta;
+    "Disparar RPA" só enfileira (RN-058, Fase 3) - quem executa de fato é
+    o processo consumidor único (`apps/ri/services.py`,
+    `processar_proximo_da_fila_rpa_eace`)."""
+
+    PENDENTE = "pendente"
+    NA_FILA = "na_fila"
+    PROCESSANDO = "processando"
+    SUCESSO = "sucesso"
+    ERRO = "erro"
+    RESULTADO_CHOICES = [
+        (PENDENTE, "Pendente"),
+        (NA_FILA, "Na fila"),
+        (PROCESSANDO, "Processando"),
+        (SUCESSO, "Sucesso"),
+        (ERRO, "Erro"),
+    ]
+
+    ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="logs_rpa_eace")
+    documento_pdf = models.ForeignKey(
+        Documento, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="logs_rpa_eace_pdf", verbose_name="Nota fiscal (PDF)",
+    )
+    documento_xml = models.ForeignKey(
+        Documento, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="logs_rpa_eace_xml", verbose_name="XML",
+    )
+    resultado = models.CharField("Resultado", max_length=11, choices=RESULTADO_CHOICES, default=PENDENTE)
+    motivo_erro = models.CharField("Motivo do erro", max_length=50, blank=True)
+    # RN-057: dados extraidos do PDF, gravados mesmo quando o resultado e
+    # "Erro" - o usuario confere o que foi lido do PDF sem abrir o arquivo.
+    inep_pdf = models.CharField("INEP extraído do PDF", max_length=20, blank=True)
+    produto_pdf = models.CharField("Produto extraído do PDF", max_length=255, blank=True)
+    valor_pdf = models.CharField("Valor extraído do PDF", max_length=20, blank=True)
+    valor_portal = models.CharField("Valor exibido no portal EACE", max_length=20, blank=True)
+    # RN-058 (Fase 3): fila FIFO - `enfileirado_em` reordena para o final a
+    # cada disparo/reprocessamento; `tentativas` conta quantas execucoes
+    # reais ja aconteceram desde o ultimo enfileiramento manual (reseta a
+    # cada "Disparar RPA"/"Tentar novamente") - erro nao mapeado com
+    # tentativas < 2 volta pra fila em vez de virar erro definitivo.
+    enfileirado_em = models.DateTimeField("Enfileirado em", null=True, blank=True)
+    tentativas = models.PositiveIntegerField("Tentativas", default=0)
+    executado_em = models.DateTimeField("Executado em", null=True, blank=True)
+    # Pedido do usuário (2026-09-03): barra de progresso enquanto roda -
+    # `apps/integracoes/eace/rpa.py` (ETAPAS_RPA_EACE) reporta cada etapa
+    # concluída (login, navegação, upload, etc.) por callback, gravada
+    # aqui a cada avanço para o polling da tela mostrar que não travou.
+    etapa_atual = models.CharField("Etapa atual da RPA", max_length=100, blank=True)
+    progresso_pct = models.PositiveSmallIntegerField("Progresso da RPA (%)", default=0)
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Log da RPA EACE"
+        verbose_name_plural = "Logs da RPA EACE"
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"Log RPA EACE #{self.pk} - RI {self.ri_id} ({self.get_resultado_display()})"
 
 
 class RiHistorico(models.Model):

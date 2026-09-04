@@ -1,5 +1,5 @@
 # Deploy — Gerenciador Pós-Venda
-_Última atualização: 2026-08-31_
+_Última atualização: 2026-09-03_
 
 > Este documento só prepara/registra os comandos. Executar em produção
 > exige autorização explícita do Orquestrador antes de cada rodada
@@ -170,10 +170,16 @@ curl -I http://192.168.90.109:8000/login/
 curl -I http://192.168.90.109:8000/static/img/logo1.png
 ```
 
-Confirmar: os 4 serviços (`db`, `web`, `nginx`, `email_scheduler`) como
-`Up`; `/login/` e a logo devolvendo `200`. Login real na aplicação
-(credencial em `ServidorEACE`) para conferir uma tela com dado (ex.:
-grid de INEPs) antes de considerar concluído.
+Confirmar: os 5 serviços (`db`, `web`, `nginx`, `email_scheduler`,
+`rpa_eace_worker` — este último a partir da FEAT-033/`ADR-005`, ver
+`CONTAINERS.md`) como `Up`; `/login/` e a logo devolvendo `200`. Login
+real na aplicação (credencial em `ServidorEACE`) para conferir uma tela
+com dado (ex.: grid de INEPs) antes de considerar concluído.
+
+**Antes do primeiro deploy com o `rpa_eace_worker`:** preencher
+`EACE_URL`/`EACE_USUARIO`/`EACE_SENHA` reais no `.env.hml` do servidor —
+sem isso o container sobe, mas a fila nunca processa nada (log mostra erro
+de credencial ausente a cada passada). Ver `.env.hml.example`.
 
 ### Rollback
 
@@ -193,6 +199,66 @@ gunzip < backups/backup_pre_deploy_TIMESTAMP.sql.gz | \
 
 Restaurar o banco é destrutivo (sobrescreve o estado atual) — só depois
 de confirmar com quem autorizou o deploy.
+
+## Acesso de consulta para terceiro (só leitura)
+
+Pedido do usuário (2026-09-04): consultor externo precisa consultar dados
+do banco de produção. Nunca compartilhar a credencial da própria
+aplicação (`DB_USER`/`DB_PASSWORD` do `.env.hml`) para isso — usuário
+próprio, só `SELECT`, fácil de revogar depois sem afetar o sistema. A
+porta do MySQL nunca é exposta na interface externa do servidor — só no
+loopback (`127.0.0.1:${HML_DB_DIAGNOSTICO_PORT:-3316}`, ver
+`docker-compose.hml.yml`), alcançável de fora só via túnel SSH.
+
+**1. Usuário do banco (rodar dentro do MySQL do servidor):**
+```sql
+CREATE USER '<usuario_consulta>'@'%' IDENTIFIED BY '<senha_forte_gerada>';
+GRANT SELECT ON <NOME_DO_BANCO_REAL>.* TO '<usuario_consulta>'@'%';
+FLUSH PRIVILEGES;
+```
+Conectar com (senha root em `.env.hml`, no servidor):
+```bash
+docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml exec db mysql -u root -p
+```
+
+**2. Publicar a porta de diagnóstico** (se ainda não estiver publicada —
+depende do `up -d` mais recente já ter aplicado a mudança do
+`docker-compose.hml.yml` que adicionou este `ports:` ao serviço `db`):
+```bash
+docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml up -d db
+```
+
+**3. Login SSH restrito, só para túnel (sem shell)** — no servidor, com a
+chave pública do consultor:
+```bash
+sudo useradd -m -s /usr/sbin/nologin <usuario_consulta>
+sudo mkdir -p /home/<usuario_consulta>/.ssh
+sudo tee /home/<usuario_consulta>/.ssh/authorized_keys > /dev/null <<'EOF'
+command="/bin/false",no-agent-forwarding,no-X11-forwarding,no-pty,permitopen="127.0.0.1:3316" <chave_publica_do_consultor>
+EOF
+sudo chown -R <usuario_consulta>:<usuario_consulta> /home/<usuario_consulta>/.ssh
+sudo chmod 700 /home/<usuario_consulta>/.ssh
+sudo chmod 600 /home/<usuario_consulta>/.ssh/authorized_keys
+```
+A restrição `command="/bin/false",...,permitopen="127.0.0.1:3316"` no
+`authorized_keys` (não o shell `nologin` sozinho) é o que garante: essa
+chave só abre túnel para a porta do banco, nunca um shell interativo nem
+outro destino.
+
+**4. O consultor conecta assim** (do lado dele):
+```bash
+ssh -N -L 3306:127.0.0.1:3316 <usuario_consulta>@192.168.90.109
+```
+e aponta o cliente MySQL dele para `127.0.0.1:3306` (local, do lado dele)
+com o usuário/senha do passo 1, enquanto o túnel estiver aberto.
+
+**Revogar depois:**
+```sql
+DROP USER '<usuario_consulta>'@'%';
+```
+```bash
+sudo userdel -r <usuario_consulta>
+```
 
 ## Ver também
 

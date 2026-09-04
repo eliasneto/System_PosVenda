@@ -1,0 +1,14 @@
+services:
+  eace-rpa:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Arquivos de entrada/saída ficam na máquina host (persistem entre reinicializações)
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./config/logs:/app/config/logs
+      - ./config/screenshots:/app/config/screenshots
+      # Banco SQLite com as credenciais salvas
+      - ./data:/app/data
+    restart: unless-stopped

@@ -7,6 +7,7 @@ import copy
 import csv
 import io
 import logging
+import os
 import re
 from collections import OrderedDict
 from datetime import timedelta
@@ -35,6 +36,7 @@ from .models import (
     EmailFinanceiroLog,
     EmailFinanceiroSync,
     KitPadrao,
+    LogRpaEace,
     PlanilhaEace,
     Ri,
     RiDivergencia,
@@ -744,6 +746,13 @@ def _valores_fechados_da_linha(linha):
     }
 
 
+def _resumo_item_relatorio_eace(item):
+    """RN-062: texto gravado no histórico do RI (RN-008) para o "antes"/
+    "depois" de um item do Lado Relatório EACE — mesmo formato já usado em
+    `corrigir_valor_itens_relatorio_eace`."""
+    return f"{item.descricao_item} — {item.quantidade} un. — R$ {item.valor_unitario:.2f}"
+
+
 def _atualizar_campos_fechados_item_existente(item_existente, linha):
     """RN-022 (ampliada)/RN-046 (correção, 2026-08-28): item já lançado
     (KIT ou Produto) nunca ganha outro registro ao sincronizar de novo
@@ -817,6 +826,27 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
     RIs do lote. Chamada normal (botão individual do RI) não informa
     nenhum dos dois — comportamento idêntico ao de antes.
 
+    RN-062 (2026-09-04): fora de "Implantação EACE"/"Em Andamento", a
+    Planilha EACE ativa passa a ser a fonte de verdade do Lado 3 para
+    aquele INEP — usuário reportou que rodar uma planilha nova com menos
+    equipamentos que a anterior não removia os itens que sumiram (ex.:
+    planilha 1 com 3 equipamentos, planilha 2 com 2 — o 3º item antigo
+    ficava para sempre). A partir desses status, cada sincronização:
+    - Reconhece o mesmo item quando só a Quantidade/Valor mudou (casa por
+      Descrição, não mais por Descrição+Quantidade) e ATUALIZA em vez de
+      criar um item duplicado.
+    - Remove o item que a planilha ativa não traz mais para aquele INEP —
+      mas só quando `origem_sincronizador=True` (o próprio Sincronizador
+      lançou/confirmou esse item antes); item lançado manualmente nunca é
+      removido por uma sincronização (decisão do usuário, 2026-09-04).
+    - Grava, na linha do tempo do RI (RN-008), o antes/depois de toda
+      criação/atualização/remoção causada por este modo (`resultado
+      ["atualizados"]`/`resultado["removidos"]`, abaixo) — view que chama
+      esta função é quem grava (mesmo padrão já usado para `criados`).
+    Em "Implantação EACE"/"Em Andamento" o comportamento é o de sempre
+    (casamento por Descrição+Quantidade, nunca remove) — usuário confirmou
+    que o histórico só importa a partir dali.
+
     Levanta `PlanilhaEaceSincronizacaoError` só quando não há nada para
     processar (sem Planilha EACE ativa, ou sem nenhuma linha para o
     INEP) — a view converte em mensagem de erro."""
@@ -838,6 +868,12 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
             f"Nenhum item encontrado na Planilha EACE para o INEP {escola.inep}."
         )
 
+    # RN-062: fora de "Implantação EACE"/"Em Andamento" a planilha ativa
+    # vira a fonte de verdade do Lado 3 (ver docstring) — nesses 2 status
+    # iniciais, mantém o comportamento de sempre (só soma, nunca remove).
+    substituir_pela_ultima_planilha = ri.status not in (Ri.IMPLANTACAO_EACE, Ri.ANDAMENTO)
+
+    itens_existentes_lista = list(ri.itens_relatorio_eace.all())
     # RN-046 (correção, 2026-08-28): dicionário (não mais um set) para
     # conseguir, no item já lançado (`duplicados` abaixo), reaproveitar o
     # objeto e atualizar o "Status escola" — item lançado antes desta
@@ -845,10 +881,14 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
     # não criava outro item (mesma Descrição + Quantidade), então nunca
     # preenchia o valor. Num OSP/Validação OSP/Nota Fiscal (RN-022
     # ampliada) continuam só na criação — não fazem parte deste ajuste.
-    itens_existentes = {
-        (item.descricao_item, item.quantidade): item for item in ri.itens_relatorio_eace.all()
-    }
-    kit_ja_lancado = ri.itens_relatorio_eace.filter(eh_kit=True).exists()
+    itens_existentes = {(item.descricao_item, item.quantidade): item for item in itens_existentes_lista}
+    # RN-062: índice só por Descrição, usado exclusivamente no modo
+    # "substituir pela última planilha" — casa o mesmo item mesmo quando a
+    # Quantidade/Valor mudou de uma planilha para outra.
+    itens_existentes_por_descricao = {item.descricao_item: item for item in itens_existentes_lista}
+    descricoes_confirmadas = set()
+    kit_existente_no_ri = next((item for item in itens_existentes_lista if item.eh_kit), None)
+    kit_ja_lancado = kit_existente_no_ri is not None
 
     resultado = {
         "criados": [],
@@ -856,6 +896,9 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
         "sem_correspondencia": [],
         "kit_ignorado": [],
         "quantidade_invalida": [],
+        # RN-062: só preenchidos no modo "substituir pela última planilha".
+        "atualizados": [],  # [(item, resumo_anterior)]
+        "removidos": [],  # [(descricao_item, quantidade, valor_unitario, eh_kit)]
     }
 
     for linha in linhas:
@@ -877,16 +920,58 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
                 continue
 
         descricao_item = catalogo.descricao_curta or catalogo.descricao
-        if eh_kit and kit_ja_lancado:
+        item_mesma_descricao = itens_existentes_por_descricao.get(descricao_item)
+
+        # RN-015 (estendida pela RN-018): comportamento de sempre (RN-046)
+        # preservado fora do modo RN-062 — KIT já lançado sempre cai em
+        # "kit_ignorado", mesmo com a mesma Descrição (só os campos
+        # fechados são atualizados nele, logo abaixo). Dentro do modo
+        # RN-062, quando o KIT já lançado é a MESMA Descrição desta linha,
+        # cai no bloco de atualização abaixo em vez de "kit_ignorado" —
+        # só permite ignorar/bloquear quando a planilha traz um KIT
+        # diferente do já lançado (RN-015 continua valendo: nunca 2 KIT).
+        if eh_kit and kit_ja_lancado and not (
+            substituir_pela_ultima_planilha and item_mesma_descricao is not None
+        ):
             resultado["kit_ignorado"].append(descricao_item)
-            # RN-046 (correção): o KIT já lançado é o mesmo caso de
-            # "duplicados" abaixo (mesma Descrição + Quantidade), mas cai
-            # neste ramo primeiro (RN-015) — sem isto, o KIT nunca recebia
-            # a atualização dos campos fechados.
             _atualizar_campos_fechados_item_existente(
                 itens_existentes.get((descricao_item, quantidade)), linha
             )
+            # RN-062: o KIT já lançado (RN-015, sempre 1 por INEP) fica
+            # protegido de remoção mesmo sem ser confirmado por esta linha
+            # — é justamente o caso de a planilha trazer um KIT diferente
+            # do já lançado, que esta regra ignora de propósito; sem isto,
+            # o KIT que deveria ficar intacto seria removido no final por
+            # "não veio na planilha".
+            if kit_existente_no_ri is not None:
+                descricoes_confirmadas.add(kit_existente_no_ri.descricao_item)
             continue
+
+        if substituir_pela_ultima_planilha and item_mesma_descricao is not None:
+            # RN-062: mesmo item de antes (mesma Descrição) — atualiza em
+            # vez de duplicar, mesmo que a Quantidade/Valor tenha mudado.
+            descricoes_confirmadas.add(descricao_item)
+            valor_unitario_novo = catalogo.valor_faturavel
+            if (
+                item_mesma_descricao.quantidade != quantidade
+                or item_mesma_descricao.valor_unitario != valor_unitario_novo
+            ):
+                resumo_anterior = _resumo_item_relatorio_eace(item_mesma_descricao)
+                item_mesma_descricao.quantidade = quantidade
+                item_mesma_descricao.valor_unitario = valor_unitario_novo
+                item_mesma_descricao.origem_sincronizador = True
+                item_mesma_descricao.save(
+                    update_fields=["quantidade", "valor_unitario", "origem_sincronizador"]
+                )
+                resultado["atualizados"].append((item_mesma_descricao, resumo_anterior))
+            else:
+                resultado["duplicados"].append(descricao_item)
+                if not item_mesma_descricao.origem_sincronizador:
+                    item_mesma_descricao.origem_sincronizador = True
+                    item_mesma_descricao.save(update_fields=["origem_sincronizador"])
+            _atualizar_campos_fechados_item_existente(item_mesma_descricao, linha)
+            continue
+
         if (descricao_item, quantidade) in itens_existentes:
             resultado["duplicados"].append(descricao_item)
             _atualizar_campos_fechados_item_existente(
@@ -900,16 +985,37 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
             quantidade=quantidade,
             valor_unitario=catalogo.valor_faturavel,
             eh_kit=eh_kit,
+            # RN-062: item nasce já marcado como vindo do Sincronizador só
+            # quando esta sincronização opera no modo "substituir pela
+            # última planilha" — fora dele, mantém `False` (irrelevante,
+            # nenhuma remoção acontece fora desse modo).
+            origem_sincronizador=substituir_pela_ultima_planilha,
             # RN-022 (ampliada)/RN-046: campos fechados, só de exibição —
             # lidos direto da mesma linha da planilha que originou o item.
             **_valores_fechados_da_linha(linha),
         )
         itens_existentes[(descricao_item, quantidade)] = item
+        itens_existentes_por_descricao[descricao_item] = item
+        descricoes_confirmadas.add(descricao_item)
         resultado["criados"].append(item)
         if eh_kit:
             kit_ja_lancado = True
 
-    if resultado["criados"]:
+    if substituir_pela_ultima_planilha:
+        # RN-062: item que o Sincronizador tinha lançado/confirmado antes,
+        # mas que a planilha ativa não traz mais para este INEP — remove e
+        # registra o "antes" no histórico (a view grava o "depois").  Item
+        # lançado manualmente (`origem_sincronizador=False`) nunca entra
+        # aqui, mesmo ausente da planilha.
+        for descricao_item, item in itens_existentes_por_descricao.items():
+            if descricao_item in descricoes_confirmadas or not item.origem_sincronizador:
+                continue
+            resultado["removidos"].append(
+                (item.descricao_item, item.quantidade, item.valor_unitario, item.eh_kit)
+            )
+            item.delete()
+
+    if resultado["criados"] or resultado["atualizados"] or resultado["removidos"]:
         sincronizar_divergencia_kit_relatorio(ri)
 
     return resultado
@@ -1446,6 +1552,11 @@ def _processar_mensagem(bruto, mensagem_id_externo):
             documentos_recebidos.append(_salvar_documento(ri, Documento.NOTA_FISCAL_PDF, nome, payload))
         for nome, payload in xmls:
             documentos_recebidos.append(_salvar_documento(ri, Documento.XML, nome, payload))
+        # RN-056 (FEAT-033, Fase 2): 1 log de RPA por Nota Fiscal esperada -
+        # nenhum PDF/XML e pre-selecionado, o usuario escolhe manualmente
+        # o par em cada log (padrao_ok ja garante len(pdfs) == len(xmls)).
+        for _ in range(len(pdfs)):
+            LogRpaEace.objects.create(ri=ri)
 
     EmailFinanceiroLog.objects.create(
         ri=ri,
@@ -1587,6 +1698,302 @@ def sincronizar_respostas_financeiro():
         raise
 
     return resultado
+
+
+def _registrar_execucao_rpa_eace(log):
+    """FEAT-033 (RN-058): pedido do usuário (2026-09-03) - cada tentativa
+    de execução do RPA de anexo no portal EACE fica registrada na mesma
+    linha do tempo do RI onde já aparecem as trocas de status e outras
+    alterações de campo (`RiHistorico`, RN-008/FEAT-014), e não só no
+    estado atual do `LogRpaEace` (que um reprocessamento sobrescreve por
+    cima). Segue o mesmo padrão de `trocar_status_com_log`: grava tanto
+    na linha do tempo (visível pro usuário) quanto em `Auditoria` (log
+    técnico, sem tela dedicada)."""
+    resumo = (
+        f"{log.get_resultado_display()} (tentativa {log.tentativas}) - "
+        f"NF: INEP {log.inep_pdf or '?'}, {log.produto_pdf or '?'}, "
+        f"R$ {log.valor_pdf or '?'} | Portal: R$ {log.valor_portal or '?'}"
+    )
+    if log.motivo_erro:
+        resumo += f" | Motivo: {log.motivo_erro}"
+    RiHistorico.objects.create(
+        ri=log.ri,
+        tipo=RiHistorico.LOG_CAMPO,
+        autor=None,
+        campo=f"RPA EACE (Nota Fiscal #{log.pk})",
+        valor_novo=resumo[:255],
+    )
+    auditar(
+        None,
+        Auditoria.EXECUCAO_RPA_EACE,
+        entidade="LogRpaEace",
+        entidade_id=log.pk,
+        campo="resultado",
+        valor_novo=resumo,
+    )
+
+
+def _resolver_osp_da_nota_fiscal(ri, documento_pdf):
+    """RN-064 (correção 2026-09-04): resolve a OSP do item que esta Nota
+    Fiscal representa - não "qualquer" OSP do RI. Usuário reportou (INEP
+    53005090, RI 202): o RI tem itens em OSPs DIFERENTES (Nobreak numa
+    OSP, Kit Wi-Fi/Access Point Adicional em outra) - pegar a 1ª OSP não
+    vazia do RI inteiro, sem olhar pra qual NF está sendo processada,
+    mandava a NF certa pra OSP errada. Corrigir a OSP do item não
+    resolvia nada, porque o código nunca chegava a usar esse valor: o
+    item mais antigo (de outra OSP) sempre "ganhava" primeiro.
+
+    Casa pelo Valor extraído do PDF (RN-057) contra `valor_unitario *
+    quantidade` de cada `RiItemRelatorioEace` - a Nota Fiscal traz o
+    valor TOTAL do item (usuário reportou: item de 3 Access Points teve
+    valor unitário R$ 699,09 corrigido "pra" R$ 2.097,27 achando que
+    estava errado - na verdade R$ 699,09 × 3 já é R$ 2.097,27; a correção
+    "quebrou" o dado, e o Sincronizador reverteu certo na sincronização
+    seguinte). Comparar só o unitário (sem multiplicar) só bate por
+    coincidência quando quantidade É 1 - por isso o Nobreak/Kit Wi-Fi
+    (quantidade 1) pareciam funcionar e só o item de 3 unidades falhava.
+    Sem match (PDF ilegível, valor não bate com nenhum item) cai no
+    comportamento antigo (1ª OSP não vazia) como último recurso - nunca
+    bloqueia o disparo por causa de um valor que não foi possível ler."""
+    itens = list(ri.itens_relatorio_eace.exclude(num_osp=""))
+    if not itens:
+        return None
+    if len(itens) == 1 or not documento_pdf:
+        return itens[0].num_osp
+
+    from apps.integracoes.eace.extrair_dados_pdf import extrair_dados_nota_fiscal
+
+    try:
+        valor_pdf = extrair_dados_nota_fiscal(documento_pdf.arquivo.path).get("valor") or ""
+        valor_pdf_num = float(valor_pdf.replace(".", "").replace(",", ".")) if valor_pdf else None
+    except Exception:
+        valor_pdf_num = None
+
+    if valor_pdf_num is not None:
+        for item in itens:
+            valor_total_item = float(item.valor_unitario) * item.quantidade
+            if abs(valor_pdf_num - valor_total_item) < 0.01:
+                return item.num_osp
+
+    return itens[0].num_osp
+
+
+def processar_proximo_da_fila_rpa_eace():
+    """RN-058 (FEAT-033, Fase 3): 1 passada do processo consumidor da fila
+    do RPA EACE - pega o log "Na fila" mais antigo (FIFO), marca
+    "Processando" (visível na tela enquanto a RPA roda de verdade, pode
+    levar dezenas de segundos) e executa o núcleo do RPA
+    (`apps/integracoes/eace/rpa.py`), decidindo o próximo estado:
+
+    - sucesso -> "Sucesso", grava os dados do PDF; se todos os logs do RI
+      estiverem "Sucesso", avança o status (RN-056).
+    - erro de regra de negócio (RN-057, `MOTIVOS_REGRA_DE_NEGOCIO`) ->
+      "Erro" definitivo já na 1ª tentativa - repetir não muda o dado.
+    - erro não mapeado (falha técnica/de ambiente) com menos de 2
+      tentativas -> volta pro final da fila (novo `enfileirado_em`) para
+      1 reprocessamento automático.
+    - erro não mapeado na 2ª tentativa -> "Erro" definitivo.
+
+    Cada tentativa (inclusive as que voltam pra fila) gera 1 registro na
+    linha do tempo do RI e em `Auditoria` (`_registrar_execucao_rpa_eace`)
+    - histórico permanente, já que `LogRpaEace` sobrescreve os dados da
+    tentativa anterior.
+
+    A troca para "Processando" é gravada e **comitada** antes de chamar a
+    RPA (não fica dentro da mesma transação até o fim) - é ela mesma,
+    junto com `select_for_update(skip_locked=True)`, quem garante no
+    máximo 1 execução por vez (RN-058): assim que sai de "Na fila", outro
+    processo consumidor (rodando por engano ao mesmo tempo) não acha mais
+    esse log na fila. Segurar a transação aberta pelos minutos que a RPA
+    pode levar seguraria também o lock/conexão com o banco à toa.
+
+    Retorna um dict descrevendo o que aconteceu, ou `None` se a fila
+    estava vazia (nada a fazer nesta passada)."""
+    from apps.integracoes.eace.rpa import (
+        MOTIVOS_REGRA_DE_NEGOCIO,
+        RpaEaceIndisponivel,
+        anexar_nota_fiscal,
+    )
+
+    with transaction.atomic():
+        log = (
+            LogRpaEace.objects.select_for_update(skip_locked=True)
+            .select_related("ri", "ri__escola", "documento_pdf", "documento_xml")
+            .filter(resultado=LogRpaEace.NA_FILA)
+            .order_by("enfileirado_em")
+            .first()
+        )
+        if not log:
+            return None
+        log.resultado = LogRpaEace.PROCESSANDO
+        # Zera a barra de progresso de uma tentativa anterior (RN-058:
+        # reprocessamento reusa o mesmo log) - pedido do usuário
+        # (2026-09-03) pra acompanhar em tempo real cada etapa da RPA.
+        log.etapa_atual = ""
+        log.progresso_pct = 0
+        log.save(update_fields=["resultado", "etapa_atual", "progresso_pct"])
+    # Transação acima já comitada - "Processando" visível pra quem
+    # consultar (tela via polling) mesmo antes da RPA terminar.
+
+    def _reportar_progresso(etapa, percentual):
+        # Update direto (sem carregar/salvar o objeto `log` inteiro) -
+        # roda dezenas de vezes durante a execução, precisa ser rápido e
+        # não pode arriscar sobrescrever outro campo do `log` em memória.
+        #
+        # RN-058 (correção 2026-09-04): `sync_playwright()` implementa a API
+        # síncrona por cima de greenlet + um event loop asyncio rodando na
+        # mesma thread - o Django enxerga esse loop (`asyncio.get_running_
+        # loop()`) e bloqueia qualquer ORM chamado daqui com
+        # `SynchronousOnlyOperation`, mesmo o código sendo síncrono de
+        # verdade (mesmo falso positivo documentado do Django em notebooks
+        # Jupyter). `DJANGO_ALLOW_ASYNC_UNSAFE` é o escape-hatch oficial do
+        # próprio Django pra esse caso - liga só ao redor desta chamada e
+        # desliga em seguida (não abre thread/conexão nova: evitou lock
+        # wait timeout no MySQL quando testado com `TestCase`, que roda o
+        # teste inteiro numa transação aberta na mesma conexão).
+        anterior = os.environ.get("DJANGO_ALLOW_ASYNC_UNSAFE")
+        os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
+        try:
+            LogRpaEace.objects.filter(pk=log.pk).update(etapa_atual=etapa, progresso_pct=percentual)
+        finally:
+            if anterior is None:
+                os.environ.pop("DJANGO_ALLOW_ASYNC_UNSAFE", None)
+            else:
+                os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = anterior
+
+    ri = log.ri
+    osp = _resolver_osp_da_nota_fiscal(ri, log.documento_pdf)
+
+    if not osp or not log.documento_pdf or not log.documento_xml:
+        # Estado inconsistente (a view só enfileira com os 2 documentos e
+        # a OSP já confirmados) - erro definitivo, sem reprocessar (não é
+        # uma falha técnica passageira).
+        log.resultado = LogRpaEace.ERRO
+        log.motivo_erro = "fila_sem_osp_ou_documento"
+        log.tentativas += 1
+        log.executado_em = timezone.now()
+        log.save()
+        _registrar_execucao_rpa_eace(log)
+        return {"log_id": log.pk, "resultado": log.resultado, "motivo": log.motivo_erro}
+
+    try:
+        resultado_rpa = anexar_nota_fiscal(
+            osp=osp,
+            inep=ri.escola.inep,
+            caminho_pdf=log.documento_pdf.arquivo.path,
+            caminho_xml=log.documento_xml.arquivo.path,
+            progresso_callback=_reportar_progresso,
+        )
+    except RpaEaceIndisponivel:
+        resultado_rpa = None
+        motivo = "ambiente_indisponivel"
+    except Exception:
+        logger.exception("Erro inesperado ao executar o RPA EACE (log %s).", log.pk)
+        resultado_rpa = None
+        motivo = "erro_inesperado"
+    else:
+        motivo = resultado_rpa.motivo
+
+    log.tentativas += 1
+    log.executado_em = timezone.now()
+
+    if resultado_rpa is not None and resultado_rpa.dados_pdf:
+        dados_pdf = resultado_rpa.dados_pdf
+        log.inep_pdf = dados_pdf.get("inep") or ""
+        log.produto_pdf = dados_pdf.get("produto") or ""
+        log.valor_pdf = dados_pdf.get("valor") or ""
+    if resultado_rpa is not None:
+        log.valor_portal = resultado_rpa.valor_portal or ""
+
+    if resultado_rpa is not None and resultado_rpa.sucesso:
+        log.resultado = LogRpaEace.SUCESSO
+        log.motivo_erro = ""
+    else:
+        erro_de_regra_de_negocio = motivo in MOTIVOS_REGRA_DE_NEGOCIO
+        if not erro_de_regra_de_negocio and log.tentativas < 2:
+            # RN-058: erro não mapeado, ainda cabe reprocessamento - volta
+            # pro final da fila em vez de virar erro definitivo.
+            log.resultado = LogRpaEace.NA_FILA
+            log.motivo_erro = motivo or ""
+            log.enfileirado_em = timezone.now()
+        else:
+            log.resultado = LogRpaEace.ERRO
+            log.motivo_erro = motivo or ""
+
+    log.save()
+    _registrar_execucao_rpa_eace(log)
+
+    # RN-056: avança o status do RI quando TODOS os logs derem "Sucesso".
+    if (
+        log.resultado == LogRpaEace.SUCESSO
+        and ri.status == Ri.AGUARDANDO_ANEXO_PORTAL_EACE
+        and not ri.logs_rpa_eace.exclude(resultado=LogRpaEace.SUCESSO).exists()
+    ):
+        trocar_status_com_log(ri, Ri.AGUARDANDO_VALIDACAO_EACE, usuario=None)
+
+    return {"log_id": log.pk, "resultado": log.resultado, "motivo": log.motivo_erro}
+
+
+def consultar_pendencias_portal_eace(ri):
+    """RN-063 (melhoria 2026-09-04): consulta somente-leitura do grid do
+    portal EACE para CADA OSP distinta deste RI - mostra Produto/Valor de
+    cada linha "Pendente" ao lado do Produto/Valor de cada NF no select
+    de "Disparar RPA" (RN-057 já lê essa mesma informação, só que hoje
+    escondida dentro da tentativa de upload de verdade). Gravado direto
+    no `Ri` (`pendencias_portal_eace`/`_consultado_em`/`_motivo_erro`) -
+    não passa pela fila do RPA (RN-058): é 1 consulta pontual, disparada
+    e concluída na mesma requisição (não sobe arquivo nem precisa de
+    exclusividade contra os uploads reais, mas evita rodar junto de um
+    log "Processando" para não abrir 2 navegadores ao mesmo tempo contra
+    o mesmo login do portal).
+
+    RN-064 (correção 2026-09-04): um RI pode ter itens em OSPs
+    DIFERENTES (usuário reportou, INEP 53005090: Nobreak numa OSP, Kit
+    Wi-Fi/Access Point Adicional em outra) - consultar só a 1ª OSP não
+    vazia escondia as pendências das outras. Cada linha devolvida marca
+    de qual OSP veio (`linha["osp"]`); só levanta erro (`_motivo_erro`)
+    se TODAS as OSPs falharem - falha parcial mostra o que deu certo e
+    loga a OSP que falhou (visível em `docker compose logs web`).
+
+    Levanta `RpaEaceIndisponivel` (Playwright/Chromium ausentes) e
+    `ValueError` (sem "Num OSP") pro chamador decidir a mensagem - mesmo
+    padrão de erro de `ri_log_rpa_eace_disparar_view`."""
+    from apps.integracoes.eace.rpa import ResultadoConsultaPendencias, consultar_pendencias_eace
+
+    osps = list(
+        ri.itens_relatorio_eace.exclude(num_osp="").values_list("num_osp", flat=True).distinct()
+    )
+    if not osps:
+        raise ValueError("sem_osp")
+
+    linhas = []
+    motivos_erro = []
+    ultimo_resultado = None
+    for osp in osps:
+        resultado = consultar_pendencias_eace(osp=osp, inep=ri.escola.inep)
+        ultimo_resultado = resultado
+        if resultado.sucesso:
+            for linha in resultado.linhas or []:
+                linhas.append({**linha, "osp": osp})
+        else:
+            logger.warning("Consulta de pendências falhou para a OSP %s: %s", osp, resultado.motivo)
+            motivos_erro.append(f"{osp}:{resultado.motivo}")
+
+    sucesso_geral = len(motivos_erro) < len(osps)
+    ri.pendencias_portal_eace = linhas
+    ri.pendencias_portal_eace_consultado_em = timezone.now()
+    ri.pendencias_portal_eace_motivo_erro = "" if sucesso_geral else "; ".join(motivos_erro)
+    ri.save(update_fields=[
+        "pendencias_portal_eace", "pendencias_portal_eace_consultado_em", "pendencias_portal_eace_motivo_erro",
+    ])
+    # Devolve o resultado agregado pro chamador (mensagem de tela) - só a
+    # última tentativa em `dataclass` puro não bastaria com múltiplas
+    # OSPs, então monta 1 na hora com o resumo do conjunto.
+    return ResultadoConsultaPendencias(
+        sucesso=sucesso_geral,
+        motivo=None if sucesso_geral else "; ".join(motivos_erro),
+        linhas=linhas,
+    )
 
 
 def montar_dashboard_financeiro(estado=None, municipio=None, kit=None, produto=None):

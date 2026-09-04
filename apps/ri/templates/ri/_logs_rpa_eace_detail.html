@@ -1,0 +1,191 @@
+{% comment %}
+FEAT-033 (Fase 2/3, RN-056/RN-057/RN-058): 1 log por Nota Fiscal
+esperada, criado quando o financeiro responde (RN-016) com N PDF/N XML.
+Usuário escolhe manualmente o par PDF+XML (nenhum vem pré-selecionado,
+RN-056) e aciona a RPA — "Disparar RPA" só enfileira (RN-058); quem
+executa de fato é o processo consumidor único da fila, um log de cada
+vez. Os dados extraídos do PDF (INEP/Produto/Valor, RN-057) e o
+resultado (Na fila/Processando/Sucesso/Erro) ficam gravados no próprio
+log. Sempre presente (mesmo sem log nenhum) para a resposta HTMX de
+`ri_log_rpa_eace_disparar_view` encontrar o id via out-of-band swap.
+
+`existe_log_ativo` liga o polling (`hx-trigger="every 5s"`) - só faz
+sentido consultar de novo enquanto algum log estiver "Na fila" ou
+"Processando"; sem isso, a tela só atualiza no próximo disparo manual ou
+F5. `oob`: ver `_contexto_logs_rpa_eace` (views.py) - `False` quando esta
+seção é a própria resposta de uma consulta de polling (o alvo da troca já
+é definido pelo `hx-get`/`hx-trigger` dela mesma; marcar `hx-swap-oob`
+nesse caso trava a atualização automática, bug real reportado pelo
+usuário em 2026-09-03).
+
+`log.progresso_pct`/`log.etapa_atual` (pedido do usuário, 2026-09-03):
+barra de progresso enquanto "Processando" - `apps/integracoes/eace/rpa.py`
+(`ETAPAS_RPA_EACE`) reporta cada etapa concluída da RPA (login,
+navegação, upload...) por callback, gravada em tempo real pra esse
+polling mostrar que o processo está andando, não travado.
+{% endcomment %}
+<div id="logs-rpa-eace-{{ ri.pk }}" {% if oob %}hx-swap-oob="true"{% endif %}
+     {% if existe_log_ativo %}
+     hx-get="{% url 'ri_logs_rpa_eace_status' inep=ri.escola.inep %}" hx-trigger="every 5s" hx-swap="outerHTML"
+     {% endif %}>
+{% if logs_rpa_eace %}
+<div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6 mt-6">
+    <h2 class="text-sm font-black uppercase italic text-gray-400 dark:text-gray-500 mb-4">
+        Notas Fiscais para anexar no portal EACE
+    </h2>
+
+    {% comment %}
+    RN-063 (melhoria 2026-09-04): mostra o que o portal já tem cadastrado
+    (Produto/Valor por linha) ANTES do usuário escolher o PDF - usuário
+    reportou não ter como saber, escolhendo às cegas, qual NF batia com
+    qual linha, só descobria depois de um "Erro (valor divergente)".
+    Consulta somente-leitura, sob demanda (não roda sozinha) - pode levar
+    dezenas de segundos, por isso o botão avisa antes de clicar.
+    {% endcomment %}
+    <div class="border border-dashed border-gray-200 dark:border-gray-700 rounded-2xl p-4 mb-4">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+            <span class="text-xs font-black uppercase italic text-gray-500 dark:text-gray-400">
+                Pendências no portal EACE
+            </span>
+            <form method="POST" action="{% url 'ri_consultar_pendencias_eace' pk=ri.pk %}"
+                  hx-post="{% url 'ri_consultar_pendencias_eace' pk=ri.pk %}" hx-swap="none">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ next_url }}">
+                <button type="submit" class="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-black uppercase text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                    {% if ri.pendencias_portal_eace_consultado_em %}Atualizar{% else %}Consultar{% endif %} pendências
+                    <span class="font-normal normal-case">(pode levar até 1 minuto)</span>
+                </button>
+            </form>
+        </div>
+        {% if ri.pendencias_portal_eace_consultado_em %}
+        <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-2">
+            Consultado em {{ ri.pendencias_portal_eace_consultado_em|date:"d/m/Y H:i" }}
+        </p>
+        {% if ri.pendencias_portal_eace_motivo_erro %}
+        <p class="text-[11px] font-bold text-red-500 dark:text-red-400 mt-1">
+            Não foi possível consultar o portal (motivo: {{ ri.pendencias_portal_eace_motivo_erro }})
+        </p>
+        {% elif ri.pendencias_portal_eace %}
+        <ul class="mt-2 flex flex-col gap-1">
+            {% for linha in ri.pendencias_portal_eace %}
+            <li class="text-xs text-gray-600 dark:text-gray-400">
+                <span class="font-bold">{{ linha.status }}</span> — {{ linha.descricao }} — R$ {{ linha.valor }}
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-1">Nenhuma linha encontrada para este INEP.</p>
+        {% endif %}
+        {% else %}
+        <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-2">
+            Ainda não consultado - clique para ver o que o portal espera antes de escolher a NF de cada linha abaixo.
+        </p>
+        {% endif %}
+    </div>
+
+    <div class="flex flex-col gap-4">
+        {% for log in logs_rpa_eace %}
+        <div class="border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-black uppercase italic">Nota Fiscal #{{ forloop.counter }}</span>
+                {% if log.resultado == 'sucesso' %}
+                <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-green-600 text-green-700 dark:text-green-400 dark:border-green-500">
+                    ✓ Sucesso
+                </span>
+                {% elif log.resultado == 'erro' %}
+                <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-red-600 text-red-700 dark:text-red-400 dark:border-red-500">
+                    ✗ Erro
+                </span>
+                {% elif log.resultado == 'processando' %}
+                <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-purple-600 text-purple-700 dark:text-purple-400 dark:border-purple-500 animate-pulse">
+                    ⚙ Processando
+                </span>
+                {% elif log.resultado == 'na_fila' %}
+                <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-blue-600 text-blue-700 dark:text-blue-400 dark:border-blue-500">
+                    ⏳ Na fila{% if log.posicao_na_fila %} — posição {{ log.posicao_na_fila }}{% endif %}
+                </span>
+                {% else %}
+                <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-gray-400 text-gray-500 dark:text-gray-400">
+                    Pendente
+                </span>
+                {% endif %}
+            </div>
+
+            {% if log.resultado == 'sucesso' %}
+            <div class="text-xs text-gray-600 dark:text-gray-400">
+                <p><span class="font-bold">INEP na NF:</span> {{ log.inep_pdf }} · <span class="font-bold">Produto:</span> {{ log.produto_pdf }} · <span class="font-bold">Valor:</span> R$ {{ log.valor_pdf }}</p>
+            </div>
+            {% elif log.resultado == 'processando' %}
+            <div class="text-xs text-gray-600 dark:text-gray-400 flex flex-col gap-2">
+                <p>Rodando agora no portal EACE — pode levar até 1 minuto. Atualiza sozinho aqui quando terminar.</p>
+                <div class="w-full h-2 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                    <div class="h-full bg-purple-600 dark:bg-purple-500 transition-all duration-500"
+                         style="width: {{ log.progresso_pct }}%"></div>
+                </div>
+                <p class="text-[11px] font-bold text-purple-700 dark:text-purple-400">
+                    {{ log.progresso_pct }}%{% if log.etapa_atual %} — {{ log.etapa_atual }}{% endif %}
+                </p>
+            </div>
+            {% elif log.resultado == 'na_fila' %}
+            <div class="text-xs text-gray-600 dark:text-gray-400">
+                <p>
+                    {% if log.posicao_na_fila == 1 %}
+                    É a próxima a ser processada.
+                    {% elif log.posicao_na_fila %}
+                    Aguardando {{ log.posicao_na_fila|add:"-1" }} na frente — atualiza sozinho aqui quando chegar a vez.
+                    {% else %}
+                    Aguardando a vez no processamento — atualiza sozinho aqui quando terminar.
+                    {% endif %}
+                </p>
+                {% if log.tentativas %}
+                <p class="mt-1 text-amber-600 dark:text-amber-400">
+                    Tentativa anterior falhou por um motivo técnico ({{ log.motivo_erro }}) — reprocessando automaticamente.
+                </p>
+                {% endif %}
+            </div>
+            {% else %}
+            <form method="POST" action="{% url 'ri_log_rpa_eace_disparar' pk=log.pk %}"
+                  hx-post="{% url 'ri_log_rpa_eace_disparar' pk=log.pk %}" hx-swap="none">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ next_url }}">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">Nota fiscal (PDF)</label>
+                        <select name="documento_pdf" required class="select-pv-dark w-full mt-1 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent px-2 py-2">
+                            <option value="" {% if not log.documento_pdf_id %}selected{% endif %} disabled>Escolha o PDF...</option>
+                            {% for doc in documentos_pdf %}
+                            <option value="{{ doc.pk }}" {% if log.documento_pdf_id == doc.pk %}selected{% endif %}>{{ doc.arquivo.name|slice:"-40:" }}{% if doc.rotulo_nf %} — {{ doc.rotulo_nf }}{% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">XML</label>
+                        <select name="documento_xml" required class="select-pv-dark w-full mt-1 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent px-2 py-2">
+                            <option value="" {% if not log.documento_xml_id %}selected{% endif %} disabled>Escolha o XML...</option>
+                            {% for doc in documentos_xml %}
+                            <option value="{{ doc.pk }}" {% if log.documento_xml_id == doc.pk %}selected{% endif %}>{{ doc.arquivo.name|slice:"-40:" }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                {% if log.resultado == 'erro' %}
+                <p class="text-[11px] font-bold text-red-500 dark:text-red-400 mt-2">
+                    Motivo: {{ log.motivo_erro }}
+                    {% if log.inep_pdf or log.valor_pdf %}
+                    (NF lida: INEP {{ log.inep_pdf|default:"?" }}, valor {{ log.valor_pdf|default:"?" }}{% if log.valor_portal %}, valor no portal {{ log.valor_portal }}{% endif %})
+                    {% endif %}
+                </p>
+                {% endif %}
+
+                <button type="submit" class="mt-3 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 transition shadow">
+                    {% if log.resultado == 'erro' %}Tentar novamente{% else %}Disparar RPA{% endif %}
+                </button>
+            </form>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+</div>

@@ -1,5 +1,5 @@
 # Arquitetura Técnica — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-08-28_
+_Última atualização: 2026-09-03_
 
 > Esta pasta documenta um **sistema novo e separado** do `modulo-posVenda`
 > (repositório e banco de dados próprios, ver `requisitos.md`, bloco 0 e
@@ -234,8 +234,32 @@ INEP é considerado concluído (Faturado).
 
 **Versão 2 — entrega 04/09/2026:**
 - RPA de download do relatório EACE (substitui a digitação manual do "lado
-  EACE").
-- RPA de anexo dos arquivos no portal EACE (substitui a marcação manual).
+  EACE") — ainda sem decisão própria.
+- RPA de anexo dos arquivos no portal EACE (substitui a marcação manual da
+  `FEAT-010`) — decisão de reaproveitar o protótipo já existente
+  `doc/auto_eace_nf_servidor` (Playwright), descartando a camada de
+  frontend (dashboard FastAPI) e a cópia duplicada `ProjetoFinal/`,
+  registrada em `ADR-004`. Num novo submódulo `apps/integracoes/eace/`,
+  ao lado do já existente `apps/integracoes/ad/`. **Gatilho (RN-056,
+  2026-09-03):** a resposta do financeiro (RN-016, N PDF/N XML) gera 1 log
+  por Nota Fiscal esperada, com listas de XML/PDF para o usuário escolher
+  o par certo e disparar a RPA a partir do próprio log (1 disparo = 1
+  PDF + 1 XML) — a criação dos logs é automática, o disparo da RPA é
+  manual. Entrega em 2 fases (`FEAT-033`): Fase 1 só o núcleo da
+  automação, validado via terminal, sem tela — entregue; Fase 2 o log/
+  seleção com tela própria — entregue em 2026-09-03. RI avança sozinho
+  para "Aguardando validação EACE" só quando todos os logs do RI derem
+  "Sucesso"; 1 "Erro" mantém o status atual; botão manual da `FEAT-010`
+  segue como alternativa (ver `ADR-004`). **Fase 3 (RN-058, `ADR-005`,
+  lógica entregue em 2026-09-03):** execução deixa de ser síncrona —
+  vira uma fila única para todo o sistema (só 1 execução do RPA por vez,
+  mesmo com várias pessoas disparando ao mesmo tempo, garantido por
+  `select_for_update(skip_locked=True)`); erro não mapeado (falha
+  técnica/ambiente) reprocessa 1 vez sozinho, voltando pro final da
+  fila; erro de regra de negócio nunca reprocessa sozinho; tela atualiza
+  via polling HTMX (5s). **Gap real de infraestrutura:** o comando
+  `processar_fila_rpa_eace` existe, mas nenhum processo o chama ainda —
+  falta o serviço no `docker-compose.yml` (DevOps).
 
 **Versão 3 — entrega 10/09/2026:**
 - Integração automática com o IXC via API/parsing de atendimento
@@ -317,6 +341,11 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-09-03 | Fase 3 do RPA de anexo no portal EACE (fila serializada, RN-058) marcada como implementada pelo Dev — falta só o serviço no `docker-compose.yml` chamando o comando (DevOps); `ADR-005` atualizada (polling HTMX resolve a lacuna de UI que estava em aberto) | Dev entregou a lógica de fila/reprocessamento e a tela no mesmo dia do pedido; Orquestrador só formaliza a documentação |
+| 2026-09-03 | Fase 2 do RPA de anexo no portal EACE marcada como entregue; Fase 3 (fila de execução serializada, RN-058) registrada, com `ADR-005` — execução deixa de ser síncrona, erro não mapeado reprocessa 1 vez sozinho, erro de regra de negócio nunca reprocessa | Usuário pediu a fila logo após ver a Fase 2 (log/tela) ao vivo — várias pessoas podem disparar a RPA ao mesmo tempo; implementação (Dev) e infraestrutura do processo consumidor (DevOps) ainda não feitas |
+| 2026-09-03 | Regra de avanço automático de status da RPA de anexo no portal EACE fechada: RI avança de "Resposta Financeiro" para "Aguardando validação EACE" só se todos os logs do RI derem "Sucesso"; 1 "Erro" mantém o status | Usuário respondeu à pendência aberta na definição do gatilho; agregação "todos os logs" é interpretação do Orquestrador (CLAUDE.md §9), sujeita a confirmação |
+| 2026-09-03 | Gatilho da RPA de anexo no portal EACE definido (RN-056): log por Nota Fiscal com seleção manual de PDF/XML, disparo por log; entrega dividida em Fase 1 (backend via terminal) e Fase 2 (log/tela); `ADR-004` atualizada | Usuário detalhou o fluxo e pediu para validar o backend no terminal antes da tela; resolve a pendência de gatilho aberta na primeira versão desta seção, no mesmo dia |
+| 2026-09-03 | Item "RPA de anexo dos arquivos no portal EACE" (Versão 2 do gap "Hub de Integrações") detalhado com a decisão de reaproveitar o protótipo `doc/auto_eace_nf_servidor`, sem a camada de frontend, rodando em background em `apps/integracoes/eace/`; `ADR-004` criada | Usuário pediu, via Orquestrador, para reaproveitar o RPA já existente que sobe NF/XML no portal EACE, descartando o dashboard próprio do protótipo e rodando só em background; gatilho de disparo ainda não definido pelo usuário — `FEAT-033` criada em `checklist.md` como pendente |
 | 2026-08-31 | "Ciclo de vida do INEP" corrigido — nome do status 5 atualizado para "Resposta Financeiro" (estava com o nome antigo, "Aguardando Anexo portal EACE") | FEAT-020 já tinha renomeado o status em `business_rules.md` (RN-001); esta seção não tinha sido atualizada junto |
 | 2026-08-31 | "Auditoria" em "Módulos e Responsabilidades" deixa de descrever gap ("hoje só cobre login") e passa a listar o escopo entregue | FEAT-011 entregue pelo Dev — login, transição de status, alteração de campo/item, envio/recebimento de e-mail e erro não tratado passam a gerar registro de auditoria; aguardando QA |
 | 2026-08-28 | Abertura pontual de escopo de produção para o DevOps corrigir estático não servido em `192.168.90.109` (`ADR-003`) | Usuário confirmou que esse servidor é produção (não homologação) e pediu explicitamente a correção da logo quebrada; FEAT-012 |

@@ -22,6 +22,15 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt /app/
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
+# FEAT-033 (ADR-004/ADR-005): RPA de anexo no portal EACE - baixa o
+# Chromium do Playwright e as bibliotecas de sistema que ele precisa para
+# rodar headless (--with-deps roda o apt-get sozinho). Usado pelo serviço
+# rpa_eace_worker (docker-compose.yml); fica na imagem inteira porque o
+# projeto usa 1 Dockerfile só para todos os serviços (mesmo padrão já
+# aceito para o python-ldap, que também está na imagem toda mesmo só o
+# "web" fazendo login via AD).
+RUN python -m playwright install --with-deps chromium
+
 # Copia o resto do código
 COPY . /app/
 

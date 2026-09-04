@@ -1,0 +1,25 @@
+# Credenciais de acesso ao portal EACE
+# Copie este arquivo para ".env" e preencha com os dados reais.
+# O arquivo .env NÃO deve ser versionado (já está no .gitignore).
+
+EACE_URL=https://eace.org.br/login?login=login
+EACE_USUARIO=posvendas@megainfraestrutura.com.br
+EACE_SENHA=Megainfra2026*
+
+# Execução do navegador
+# HEADLESS=true  -> roda sem abrir janela (produção)
+# HEADLESS=false -> abre o navegador (útil para desenvolver/depurar)
+HEADLESS=false
+
+# Timeout padrão das ações do navegador (em milissegundos)
+TIMEOUT_MS=30000
+
+# Pausa entre trocas de tela (em milissegundos)
+DELAY_MS=1500
+
+# Número da OSP a pesquisar (ex: 2929)
+OSP=2940
+
+# INEP não é mais configurado aqui.
+# O sistema lê os INEPs diretamente do Excel (output/dados_notas_fiscais.xlsx),
+# coluna "Pasta". Organize os arquivos em EACE\{INEP}\KIT\ e EACE\{INEP}\NOBREAK\

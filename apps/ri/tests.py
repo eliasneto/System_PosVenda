@@ -17,14 +17,17 @@ from django.test import TestCase, override_settings
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
+from apps.auditoria.models import Auditoria
 from apps.core.email_tracking import montar_codigo_rastreio
 from apps.escolas.models import Escola
+from apps.integracoes.eace.rpa import ResultadoConsultaPendencias, ResultadoRpaEace, RpaEaceIndisponivel
 
 from .models import (
     Documento,
     EmailFinanceiroLog,
     EmailFinanceiroSync,
     KitPadrao,
+    LogRpaEace,
     PlanilhaEace,
     Ri,
     RiDivergencia,
@@ -40,6 +43,7 @@ from .services import (
     PlanilhaEaceSincronizacaoError,
     PlanilhaFaturamentoError,
     comparar_status_escola_relatorio,
+    consultar_pendencias_portal_eace,
     detectar_delimitador_planilha_eace,
     gerar_planilha_faturamento,
     montar_corpo_email_financeiro,
@@ -670,6 +674,781 @@ class RiStatusUpdateViewTests(TestCase):
         self.assertEqual(entrada.valor_anterior, "Aguardando validação EACE")
         self.assertEqual(entrada.valor_novo, "Faturamento Concluído")
         self.assertEqual(entrada.autor, self.user)
+
+
+class RiLogRpaEaceDispararViewTests(TestCase):
+    """FEAT-033 (Fase 3, RN-056/RN-058): "Disparar RPA" só enfileira - quem
+    executa de fato é `processar_proximo_da_fila_rpa_eace` (testado à
+    parte em `ProcessarFilaRpaEaceTests`). Aqui o núcleo do RPA nunca
+    precisa ser mockado, porque a view não chama mais."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-rpa", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola RPA EACE")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.pdf = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota.pdf", b"%PDF-fake"),
+        )
+        self.xml = Documento.objects.create(
+            ri=self.ri, tipo=Documento.XML,
+            arquivo=SimpleUploadedFile("nota.xml", b"<nfe/>"),
+        )
+        self.log = LogRpaEace.objects.create(ri=self.ri)
+
+    def _disparar(self, **post_extra):
+        post = {"documento_pdf": self.pdf.pk, "documento_xml": self.xml.pk, "next": ""}
+        post.update(post_extra)
+        return self.client.post(reverse("ri_log_rpa_eace_disparar", kwargs={"pk": self.log.pk}), post)
+
+    def test_exige_login(self):
+        resp = self._disparar()
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_sem_documentos_selecionados_nao_enfileira(self):
+        self.client.force_login(self.user)
+        self._disparar(documento_pdf="", documento_xml="")
+        self.log.refresh_from_db()
+        self.assertEqual(self.log.resultado, LogRpaEace.PENDENTE)
+
+    def test_sem_num_osp_nao_enfileira(self):
+        """Sem RiItemRelatorioEace.num_osp (FEAT-024), não há como saber a
+        OSP no portal — bloqueia antes de entrar na fila."""
+        self.client.force_login(self.user)
+        self._disparar()
+        self.log.refresh_from_db()
+        self.assertEqual(self.log.resultado, LogRpaEace.PENDENTE)
+
+    def test_disparo_valido_entra_na_fila_sem_executar_nada(self):
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
+        )
+        self.client.force_login(self.user)
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal") as mock_rpa:
+            self._disparar()
+            mock_rpa.assert_not_called()
+        self.log.refresh_from_db()
+        self.assertEqual(self.log.resultado, LogRpaEace.NA_FILA)
+        self.assertEqual(self.log.tentativas, 0)
+        self.assertIsNotNone(self.log.enfileirado_em)
+        self.assertEqual(self.log.documento_pdf_id, self.pdf.pk)
+        self.assertEqual(self.log.documento_xml_id, self.xml.pk)
+
+    def test_tentar_novamente_reseta_tentativas_e_reenfileira(self):
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
+        )
+        self.log.resultado = LogRpaEace.ERRO
+        self.log.motivo_erro = "valor_divergente"
+        self.log.tentativas = 1
+        self.log.save()
+        self.client.force_login(self.user)
+
+        self._disparar()
+
+        self.log.refresh_from_db()
+        self.assertEqual(self.log.resultado, LogRpaEace.NA_FILA)
+        self.assertEqual(self.log.tentativas, 0)
+        self.assertEqual(self.log.motivo_erro, "")
+
+    def test_log_ja_com_sucesso_nao_pode_ser_reenviado(self):
+        """Pedido do usuário (2026-09-03): depois de "Sucesso" os inputs
+        não podem mais ser editados - o template já esconde o formulário,
+        isso aqui garante que o backend também recusa (defesa em
+        profundidade, ex.: reenvio direto do formulário via POST)."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
+        )
+        self.log.resultado = LogRpaEace.SUCESSO
+        self.log.documento_pdf = self.pdf
+        self.log.documento_xml = self.xml
+        self.log.inep_pdf = "35083938"
+        self.log.save()
+        self.client.force_login(self.user)
+
+        outro_pdf = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("outra-nota.pdf", b"%PDF-fake-2"),
+        )
+        self._disparar(documento_pdf=outro_pdf.pk)
+
+        self.log.refresh_from_db()
+        self.assertEqual(self.log.resultado, LogRpaEace.SUCESSO, "não pode sair de Sucesso")
+        self.assertEqual(self.log.documento_pdf_id, self.pdf.pk, "não pode trocar o documento já aceito")
+
+
+class RotularDocumentosPdfTests(TestCase):
+    """Melhoria (2026-09-04, RN-057): usuário reportou não ter como saber,
+    antes de escolher o PDF no select de "Disparar RPA", qual Nota Fiscal
+    correspondia a qual produto/valor - só descobria depois de um "Erro
+    (valor divergente)". O select passa a mostrar Produto/Valor extraídos
+    do PDF junto do nome do arquivo."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-rotulo", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola Rótulo NF")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.pdf = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("1617_nota.pdf", b"%PDF-fake"),
+        )
+        Documento.objects.create(
+            ri=self.ri, tipo=Documento.XML, arquivo=SimpleUploadedFile("1617_nota.xml", b"<nfe/>"),
+        )
+        LogRpaEace.objects.create(ri=self.ri)
+
+    def test_select_mostra_produto_e_valor_extraidos_do_pdf(self):
+        self.client.force_login(self.user)
+        dados = {"inep": "35083938", "produto": "KIT WI-FI - 15 ACCESS POINT (LT 11)", "valor": "25.330,63"}
+        with patch("apps.integracoes.eace.extrair_dados_pdf.extrair_dados_nota_fiscal", return_value=dados):
+            resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "KIT WI-FI - 15 ACCESS POINT (LT 11)")
+        self.assertContains(resp, "R$ 25.330,63")
+
+    def test_falha_ao_ler_pdf_nao_quebra_a_tela(self):
+        """PDF ilegível (ou lib ausente) só deixa o rótulo sem o
+        complemento - a tela não pode quebrar por causa de um preview."""
+        self.client.force_login(self.user)
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_nota_fiscal",
+            side_effect=RuntimeError("boom"),
+        ):
+            resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(resp.status_code, 200)
+        # Nome exato no disco pode ganhar sufixo do storage se outro teste
+        # já tiver salvo um arquivo homônimo antes - confere pelo nome real
+        # gravado neste teste, não por um literal fixo.
+        self.pdf.refresh_from_db()
+        self.assertContains(resp, self.pdf.arquivo.name[-40:])
+
+
+class ConsultarPendenciasPortalEaceServiceTests(TestCase):
+    """RN-063 (melhoria 2026-09-04): serviço que dispara a consulta
+    somente-leitura ao portal e grava o resultado no próprio `Ri`."""
+
+    def setUp(self):
+        self.escola = Escola.objects.create(inep="53005090", nome="Escola Pendências")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_sem_osp_levanta_value_error(self):
+        with self.assertRaises(ValueError):
+            consultar_pendencias_portal_eace(self.ri)
+
+    def test_sucesso_grava_linhas_e_consultado_em(self):
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3905",
+        )
+        linhas = [{"inep": "53005090", "status": "Pendente", "descricao": "Nobreak", "valor": "1.491,72", "indice": 1}]
+        resultado_mock = ResultadoConsultaPendencias(sucesso=True, linhas=linhas)
+        with patch("apps.integracoes.eace.rpa.consultar_pendencias_eace", return_value=resultado_mock) as mock_consulta:
+            resultado = consultar_pendencias_portal_eace(self.ri)
+
+        mock_consulta.assert_called_once_with(osp="3905", inep="53005090")
+        self.assertTrue(resultado.sucesso)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.pendencias_portal_eace, [{**linhas[0], "osp": "3905"}])
+        self.assertEqual(self.ri.pendencias_portal_eace_motivo_erro, "")
+        self.assertIsNotNone(self.ri.pendencias_portal_eace_consultado_em)
+
+    def test_erro_grava_motivo_e_zera_linhas(self):
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3905",
+        )
+        # Pendências de uma consulta anterior não podem "vazar" como se
+        # fossem desta tentativa, que falhou.
+        self.ri.pendencias_portal_eace = [{"status": "Pendente", "descricao": "Antiga", "valor": "1,00"}]
+        self.ri.save(update_fields=["pendencias_portal_eace"])
+        resultado_mock = ResultadoConsultaPendencias(sucesso=False, motivo="osp_nao_encontrada")
+        with patch("apps.integracoes.eace.rpa.consultar_pendencias_eace", return_value=resultado_mock):
+            resultado = consultar_pendencias_portal_eace(self.ri)
+
+        self.assertFalse(resultado.sucesso)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.pendencias_portal_eace, [])
+        self.assertEqual(self.ri.pendencias_portal_eace_motivo_erro, "3905:osp_nao_encontrada")
+
+    def test_consulta_todas_as_osps_distintas_do_ri_e_junta_as_linhas(self):
+        """RN-064 (correção 2026-09-04): RI com itens em OSPs diferentes -
+        a consulta precisa cobrir TODAS, não só a 1ª OSP não vazia (senão
+        as pendências da 2ª OSP ficam escondidas da tela)."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario=1491.72, num_osp="3905",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Wi-Fi", quantidade=1, valor_unitario=25330.63, num_osp="4867",
+        )
+        linhas_3905 = [{"inep": "53005090", "status": "Enviado", "descricao": "Nobreak", "valor": "1.491,72", "indice": 1}]
+        linhas_4867 = [{"inep": "53005090", "status": "Pendente", "descricao": "Kit Wi-Fi", "valor": "25.330,63", "indice": 1}]
+
+        def _side_effect(*, osp, inep):
+            linhas = linhas_3905 if osp == "3905" else linhas_4867
+            return ResultadoConsultaPendencias(sucesso=True, linhas=linhas)
+
+        with patch("apps.integracoes.eace.rpa.consultar_pendencias_eace", side_effect=_side_effect) as mock_consulta:
+            resultado = consultar_pendencias_portal_eace(self.ri)
+
+        self.assertEqual(mock_consulta.call_count, 2)
+        self.assertTrue(resultado.sucesso)
+        self.ri.refresh_from_db()
+        osps_nas_linhas = {linha["osp"] for linha in self.ri.pendencias_portal_eace}
+        self.assertEqual(osps_nas_linhas, {"3905", "4867"})
+
+    def test_falha_parcial_mostra_o_que_deu_certo(self):
+        """1 OSP falhando (ex.: ambiente fora do ar naquele momento) não
+        pode esconder as pendências das OSPs que responderam certo."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Wi-Fi", quantidade=1, valor_unitario=25330.63, num_osp="4867",
+        )
+        linhas_4867 = [{"inep": "53005090", "status": "Pendente", "descricao": "Kit Wi-Fi", "valor": "25.330,63", "indice": 1}]
+
+        def _side_effect(*, osp, inep):
+            if osp == "3905":
+                return ResultadoConsultaPendencias(sucesso=False, motivo="erro_playwright")
+            return ResultadoConsultaPendencias(sucesso=True, linhas=linhas_4867)
+
+        with patch("apps.integracoes.eace.rpa.consultar_pendencias_eace", side_effect=_side_effect):
+            resultado = consultar_pendencias_portal_eace(self.ri)
+
+        self.assertTrue(resultado.sucesso)
+        self.ri.refresh_from_db()
+        self.assertEqual(len(self.ri.pendencias_portal_eace), 1)
+        self.assertEqual(self.ri.pendencias_portal_eace[0]["osp"], "4867")
+        self.assertEqual(self.ri.pendencias_portal_eace_motivo_erro, "")
+
+
+class RiConsultarPendenciasEaceViewTests(TestCase):
+    """RN-063 (melhoria 2026-09-04): view que dispara a consulta a partir
+    da tela do RI."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-pendencias", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="53005090", nome="Escola Pendências View")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3905",
+        )
+
+    def _consultar(self):
+        return self.client.post(
+            reverse("ri_consultar_pendencias_eace", kwargs={"pk": self.ri.pk}), {"next": ""},
+        )
+
+    def test_exige_login(self):
+        resp = self._consultar()
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_nao_roda_se_ja_tem_log_processando(self):
+        self.client.force_login(self.user)
+        LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.PROCESSANDO)
+        with patch("apps.ri.views.consultar_pendencias_portal_eace") as mock_consulta:
+            self._consultar()
+        mock_consulta.assert_not_called()
+
+    def test_sucesso_chama_o_servico(self):
+        self.client.force_login(self.user)
+        resultado_mock = ResultadoConsultaPendencias(sucesso=True, linhas=[])
+        with patch("apps.ri.views.consultar_pendencias_portal_eace", return_value=resultado_mock) as mock_consulta:
+            self._consultar()
+        mock_consulta.assert_called_once_with(self.ri)
+
+    def test_ambiente_indisponivel_nao_quebra_a_tela(self):
+        self.client.force_login(self.user)
+        with patch(
+            "apps.ri.views.consultar_pendencias_portal_eace",
+            side_effect=RpaEaceIndisponivel("Playwright nao instalado"),
+        ):
+            resp = self._consultar()
+        self.assertIn(resp.status_code, (200, 302))
+
+
+class ProcessarFilaRpaEaceTests(TestCase):
+    """FEAT-033 (Fase 3, RN-058): processo consumidor da fila - 1 execução
+    por chamada, FIFO, reprocessamento automático só de erro não mapeado.
+    `anexar_nota_fiscal` é sempre mockado — não há como (nem se deve)
+    testar contra o portal real aqui."""
+
+    def setUp(self):
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola RPA EACE")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
+        )
+        self.pdf = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota.pdf", b"%PDF-fake"),
+        )
+        self.xml = Documento.objects.create(
+            ri=self.ri, tipo=Documento.XML,
+            arquivo=SimpleUploadedFile("nota.xml", b"<nfe/>"),
+        )
+
+    def _enfileirar(self, ri=None, enfileirado_em=None, **extra):
+        return LogRpaEace.objects.create(
+            ri=ri or self.ri, documento_pdf=self.pdf, documento_xml=self.xml,
+            resultado=LogRpaEace.NA_FILA, enfileirado_em=enfileirado_em or timezone.now(), **extra,
+        )
+
+    def test_fila_vazia_retorna_none(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+        self.assertIsNone(processar_proximo_da_fila_rpa_eace())
+
+    def test_marca_processando_antes_de_chamar_a_rpa(self):
+        """O usuário reportou (2026-09-03) que o status ia direto de "Na
+        fila" pra "Erro", sem nunca mostrar "Processando" - a troca
+        precisa estar gravada (e comitada) já quando a RPA está rodando,
+        não só depois que ela termina."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        estados_capturados = []
+
+        def _side_effect(**kwargs):
+            estados_capturados.append(LogRpaEace.objects.get(pk=log.pk).resultado)
+            return ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
+
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", side_effect=_side_effect):
+            processar_proximo_da_fila_rpa_eace()
+
+        self.assertEqual(estados_capturados, [LogRpaEace.PROCESSANDO])
+
+    def test_sucesso_marca_log_e_avanca_status_com_1_log_so(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        resultado = ResultadoRpaEace(
+            sucesso=True,
+            dados_pdf={"inep": "35083938", "produto": "Kit Cobertura Wi-Fi", "valor": "22.644,43"},
+            valor_portal="22.644,43",
+        )
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=resultado) as mock_rpa:
+            saida = processar_proximo_da_fila_rpa_eace()
+            mock_rpa.assert_called_once()
+            kwargs = mock_rpa.call_args.kwargs
+            self.assertEqual(kwargs["osp"], "3929")
+            self.assertEqual(kwargs["inep"], "35083938")
+            self.assertEqual(kwargs["caminho_pdf"], self.pdf.arquivo.path)
+            self.assertEqual(kwargs["caminho_xml"], self.xml.arquivo.path)
+            self.assertTrue(callable(kwargs["progresso_callback"]), "barra de progresso (2026-09-03)")
+        log.refresh_from_db()
+        self.ri.refresh_from_db()
+        self.assertEqual(saida["resultado"], LogRpaEace.SUCESSO)
+        self.assertEqual(log.resultado, LogRpaEace.SUCESSO)
+        self.assertEqual(log.tentativas, 1)
+        self.assertEqual(log.produto_pdf, "Kit Cobertura Wi-Fi")
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_erro_de_regra_de_negocio_e_definitivo_na_1a_tentativa(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        resultado = ResultadoRpaEace(sucesso=False, motivo="valor_divergente", dados_pdf={"inep": "35083938"})
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=resultado):
+            processar_proximo_da_fila_rpa_eace()
+        log.refresh_from_db()
+        self.ri.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.ERRO)
+        self.assertEqual(log.motivo_erro, "valor_divergente")
+        self.assertEqual(log.tentativas, 1)
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_erro_nao_mapeado_reprocessa_1_vez_antes_de_ser_definitivo(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        erro_tecnico = ResultadoRpaEace(sucesso=False, motivo="login")
+
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=erro_tecnico):
+            processar_proximo_da_fila_rpa_eace()
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.NA_FILA, "1ª falha não mapeada volta pra fila")
+        self.assertEqual(log.tentativas, 1)
+        primeiro_enfileiramento = log.enfileirado_em
+
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=erro_tecnico):
+            processar_proximo_da_fila_rpa_eace()
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.ERRO, "2ª falha seguida vira definitiva")
+        self.assertEqual(log.tentativas, 2)
+        self.assertGreaterEqual(log.enfileirado_em, primeiro_enfileiramento)
+
+    def test_reprocessamento_com_sucesso_na_2a_tentativa(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        erro_tecnico = ResultadoRpaEace(sucesso=False, motivo="erro_playwright")
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=erro_tecnico):
+            processar_proximo_da_fila_rpa_eace()
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.NA_FILA)
+
+        sucesso = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "22.644,43"})
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=sucesso):
+            processar_proximo_da_fila_rpa_eace()
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.SUCESSO)
+        self.assertEqual(log.tentativas, 2)
+
+    def test_ambiente_indisponivel_conta_como_nao_mapeado(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        with patch(
+            "apps.integracoes.eace.rpa.anexar_nota_fiscal",
+            side_effect=RpaEaceIndisponivel("Playwright não instalado"),
+        ):
+            processar_proximo_da_fila_rpa_eace()
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.NA_FILA)
+        self.assertEqual(log.motivo_erro, "ambiente_indisponivel")
+
+    def test_ordem_fifo_processa_o_mais_antigo_primeiro(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        antigo = self._enfileirar(enfileirado_em=timezone.now() - timedelta(minutes=5), tentativas=0)
+        recente = self._enfileirar()
+        resultado = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=resultado):
+            saida = processar_proximo_da_fila_rpa_eace()
+        self.assertEqual(saida["log_id"], antigo.pk)
+        recente.refresh_from_db()
+        self.assertEqual(recente.resultado, LogRpaEace.NA_FILA, "o mais recente nem foi tocado")
+
+    def test_so_avanca_status_quando_todos_os_logs_do_ri_derem_sucesso(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log1 = self._enfileirar()
+        log2 = self._enfileirar()
+        sucesso = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
+
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=sucesso):
+            processar_proximo_da_fila_rpa_eace()
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE, "ainda falta o 2º log")
+
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=sucesso):
+            processar_proximo_da_fila_rpa_eace()
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_usa_a_osp_do_item_que_bate_com_o_valor_da_nf_quando_ri_tem_varias_osps(self):
+        """RN-064 (correção 2026-09-04): usuário reportou (INEP 53005090,
+        RI 202) um RI com itens em OSPs diferentes (Nobreak numa OSP, Kit
+        Wi-Fi/Access Point Adicional em outra) - pegar a 1ª OSP não vazia
+        do RI inteiro (ignorando qual NF está sendo processada) mandava a
+        NF certa pra OSP errada, mesmo com a OSP certa já cadastrada no
+        item certo. `self.ri` já nasce (setUp) com 1 item OSP=3929/
+        valor=1 - este teste soma um 2º item, em outra OSP, com o mesmo
+        valor da NF, e confere que é essa OSP (não a do 1º item) que é
+        usada."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Wi-Fi", quantidade=1, valor_unitario=25330.63, num_osp="4867",
+        )
+        self._enfileirar()
+        sucesso = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "25.330,63"})
+
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_nota_fiscal",
+            return_value={"inep": "35083938", "produto": "Kit Wi-Fi", "valor": "25.330,63"},
+        ), patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=sucesso) as mock_rpa:
+            processar_proximo_da_fila_rpa_eace()
+
+        self.assertEqual(mock_rpa.call_args.kwargs["osp"], "4867")
+
+    def test_casa_pelo_valor_total_do_item_nao_so_pelo_unitario(self):
+        """Correção (2026-09-04): usuário reportou um item de 3 Access
+        Points com Valor Unitário R$ 699,09 - a NF traz o valor TOTAL
+        (R$ 2.097,27 = 699,09 × 3), não o unitário. Comparar só o
+        unitário (sem multiplicar pela quantidade) nunca bate pra item
+        com quantidade > 1 - só "funcionava por acaso" pros itens de
+        quantidade 1 do RI de teste."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Access Point Adicional", quantidade=3, valor_unitario=699.09, num_osp="4867",
+        )
+        self._enfileirar()
+        sucesso = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "2.097,27"})
+
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_nota_fiscal",
+            return_value={"inep": "35083938", "produto": "Access Point Adicional", "valor": "2.097,27"},
+        ), patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=sucesso) as mock_rpa:
+            processar_proximo_da_fila_rpa_eace()
+
+        self.assertEqual(mock_rpa.call_args.kwargs["osp"], "4867")
+
+    def test_cada_tentativa_grava_1_registro_no_historico_do_ri_e_na_auditoria(self):
+        """Pedido do usuário (2026-09-03): as informações da NF e do
+        status de cada tentativa (mesmo reprocessando, o que sobrescreve
+        os campos do `LogRpaEace`) precisam ficar na mesma linha do tempo
+        onde já aparecem as trocas de status/descrições do RI
+        (`RiHistorico`) - e também em `Auditoria` (log técnico)."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        erro_tecnico = ResultadoRpaEace(sucesso=False, motivo="login")
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=erro_tecnico):
+            processar_proximo_da_fila_rpa_eace()
+
+        entradas = RiHistorico.objects.filter(
+            ri=self.ri, tipo=RiHistorico.LOG_CAMPO, campo=f"RPA EACE (Nota Fiscal #{log.pk})",
+        )
+        self.assertEqual(entradas.count(), 1)
+        primeira_entrada = entradas.first()
+        self.assertIsNone(primeira_entrada.autor)
+        self.assertIn("Na fila", primeira_entrada.valor_novo)
+        self.assertIn("tentativa 1", primeira_entrada.valor_novo)
+        self.assertIn("Motivo: login", primeira_entrada.valor_novo)
+
+        registros = Auditoria.objects.filter(
+            acao=Auditoria.EXECUCAO_RPA_EACE, entidade="LogRpaEace", entidade_id=log.pk,
+        )
+        self.assertEqual(registros.count(), 1)
+        primeiro_registro = registros.first()
+        self.assertIsNone(primeiro_registro.usuario)
+        self.assertIn("Na fila", primeiro_registro.valor_novo)
+        self.assertIn("tentativa 1", primeiro_registro.valor_novo)
+        self.assertIn("Motivo: login", primeiro_registro.valor_novo)
+
+        sucesso = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=sucesso):
+            processar_proximo_da_fila_rpa_eace()
+
+        entradas = RiHistorico.objects.filter(
+            ri=self.ri, tipo=RiHistorico.LOG_CAMPO, campo=f"RPA EACE (Nota Fiscal #{log.pk})",
+        )
+        self.assertEqual(entradas.count(), 2, "reprocessamento soma, não substitui, a entrada anterior")
+        segunda_entrada = entradas.order_by("criado_em").last()
+        self.assertIn("Sucesso", segunda_entrada.valor_novo)
+        self.assertIn("tentativa 2", segunda_entrada.valor_novo)
+
+        registros = Auditoria.objects.filter(
+            acao=Auditoria.EXECUCAO_RPA_EACE, entidade="LogRpaEace", entidade_id=log.pk,
+        )
+        self.assertEqual(registros.count(), 2, "reprocessamento soma, não substitui, o registro anterior")
+        segundo_registro = registros.order_by("criado_em").last()
+        self.assertIn("Sucesso", segundo_registro.valor_novo)
+        self.assertIn("tentativa 2", segundo_registro.valor_novo)
+
+    def test_estado_inconsistente_tambem_grava_historico_e_auditoria(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = LogRpaEace.objects.create(
+            ri=self.ri, documento_pdf=None, documento_xml=self.xml,
+            resultado=LogRpaEace.NA_FILA, enfileirado_em=timezone.now(),
+        )
+        processar_proximo_da_fila_rpa_eace()
+
+        entrada = RiHistorico.objects.get(
+            ri=self.ri, tipo=RiHistorico.LOG_CAMPO, campo=f"RPA EACE (Nota Fiscal #{log.pk})",
+        )
+        self.assertIn("Motivo: fila_sem_osp_ou_documento", entrada.valor_novo)
+
+        registro = Auditoria.objects.get(
+            acao=Auditoria.EXECUCAO_RPA_EACE, entidade="LogRpaEace", entidade_id=log.pk,
+        )
+        self.assertIn("Motivo: fila_sem_osp_ou_documento", registro.valor_novo)
+
+    def test_reporta_progresso_da_rpa_no_log_durante_a_execucao(self):
+        """Pedido do usuário (2026-09-03): a barra de progresso da tela
+        precisa refletir, em tempo real, a etapa que a RPA está
+        executando - aqui simula a RPA reportando 1 etapa no meio da
+        execução (via `progresso_callback`) e confere que o log já mostra
+        esse valor ANTES do processamento terminar, não só no resultado
+        final."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        capturado_no_meio = {}
+
+        def _side_effect(**kwargs):
+            callback = kwargs["progresso_callback"]
+            callback("Preenchendo usuário", 19)
+            atual = LogRpaEace.objects.get(pk=log.pk)
+            capturado_no_meio["etapa"] = atual.etapa_atual
+            capturado_no_meio["pct"] = atual.progresso_pct
+            callback("Enviando as notas", 100)
+            return ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
+
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", side_effect=_side_effect):
+            processar_proximo_da_fila_rpa_eace()
+
+        self.assertEqual(capturado_no_meio["etapa"], "Preenchendo usuário")
+        self.assertEqual(capturado_no_meio["pct"], 19)
+
+    def test_zera_progresso_ao_iniciar_um_novo_processamento(self):
+        """Reprocessamento reusa o mesmo log (RN-058) - o progresso de uma
+        tentativa anterior não pode "vazar" pra tela como se já fosse a
+        tentativa atual."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar(etapa_atual="Enviando as notas", progresso_pct=100)
+        estados_capturados = []
+
+        def _side_effect(**kwargs):
+            atual = LogRpaEace.objects.get(pk=log.pk)
+            estados_capturados.append((atual.etapa_atual, atual.progresso_pct))
+            return ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
+
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", side_effect=_side_effect):
+            processar_proximo_da_fila_rpa_eace()
+
+        self.assertEqual(estados_capturados, [("", 0)])
+
+
+class ProcessarFilaRpaEaceCommandTests(TestCase):
+    """FEAT-033 (Fase 3): comando de terminal que dá 1 passada na fila -
+    o loop de repetição fica por conta do agendador externo (DevOps)."""
+
+    def setUp(self):
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola RPA EACE Cmd")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_fila_vazia(self):
+        out = StringIO()
+        call_command("processar_fila_rpa_eace", stdout=out)
+        self.assertIn("vazia", out.getvalue())
+
+    def test_processa_1_item_da_fila(self):
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
+        )
+        pdf = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF, arquivo=SimpleUploadedFile("nota.pdf", b"%PDF"),
+        )
+        xml = Documento.objects.create(
+            ri=self.ri, tipo=Documento.XML, arquivo=SimpleUploadedFile("nota.xml", b"<nfe/>"),
+        )
+        log = LogRpaEace.objects.create(
+            ri=self.ri, documento_pdf=pdf, documento_xml=xml,
+            resultado=LogRpaEace.NA_FILA, enfileirado_em=timezone.now(),
+        )
+        resultado = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
+        out = StringIO()
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=resultado):
+            call_command("processar_fila_rpa_eace", stdout=out)
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.SUCESSO)
+        self.assertIn(str(log.pk), out.getvalue())
+
+
+class ContextoLogsRpaEaceTests(TestCase):
+    """FEAT-033: a seção "Notas Fiscais para anexar no portal EACE" só
+    aparece com o RI em "Resposta Financeiro" (pedido do usuário,
+    2026-09-03) - os logs continuam existindo depois que o RI avança,
+    só deixam de ser exibidos."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-contexto-rpa", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola Contexto RPA")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        LogRpaEace.objects.create(ri=self.ri)
+
+    def test_com_ri_em_resposta_financeiro_mostra_os_logs(self):
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        contexto = _contexto_logs_rpa_eace(self.ri, "")
+        self.assertEqual(len(contexto["logs_rpa_eace"]), 1)
+
+    def test_com_ri_em_outro_status_esconde_os_logs(self):
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        self.ri.status = Ri.AGUARDANDO_VALIDACAO_EACE
+        self.ri.save()
+        contexto = _contexto_logs_rpa_eace(self.ri, "")
+        self.assertEqual(contexto["logs_rpa_eace"], [])
+        self.assertFalse(contexto["existe_log_ativo"])
+
+    def test_secao_some_da_tela_quando_ri_avanca_de_status(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "Notas Fiscais para anexar no portal EACE")
+
+        self.ri.status = Ri.AGUARDANDO_VALIDACAO_EACE
+        self.ri.save()
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, "Notas Fiscais para anexar no portal EACE")
+
+    def test_processando_tambem_conta_como_log_ativo(self):
+        """RN-058: o polling precisa continuar enquanto o log estiver
+        "Processando", não só "Na fila" - senão a tela para de atualizar
+        sozinha bem na hora em que a RPA está rodando de verdade."""
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        log = self.ri.logs_rpa_eace.first()
+        log.resultado = LogRpaEace.PROCESSANDO
+        log.save()
+        contexto = _contexto_logs_rpa_eace(self.ri, "")
+        self.assertTrue(contexto["existe_log_ativo"])
+
+    def test_posicao_na_fila_e_calculada_por_ordem_de_chegada(self):
+        """RN-058: a fila é única pro sistema todo - a posição de um log
+        não conta só os logs deste RI."""
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        escola_2 = Escola.objects.create(inep="35083939", nome="Escola Contexto RPA 2")
+        ri_2 = Ri.objects.create(escola=escola_2, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+        log_deste_ri = self.ri.logs_rpa_eace.first()
+        log_deste_ri.resultado = LogRpaEace.NA_FILA
+        log_deste_ri.enfileirado_em = timezone.now() - timedelta(minutes=5)
+        log_deste_ri.save()
+
+        log_de_outro_ri = LogRpaEace.objects.create(
+            ri=ri_2, resultado=LogRpaEace.NA_FILA, enfileirado_em=timezone.now()
+        )
+
+        contexto = _contexto_logs_rpa_eace(self.ri, "")
+        self.assertEqual(contexto["logs_rpa_eace"][0].posicao_na_fila, 1)
+
+        contexto_2 = _contexto_logs_rpa_eace(ri_2, "")
+        self.assertEqual(contexto_2["logs_rpa_eace"][0].posicao_na_fila, 2)
+
+    def test_resposta_de_polling_nao_marca_a_secao_de_logs_como_oob(self):
+        """Bug real reportado pelo usuário em 2026-09-03: a seção só
+        atualizava sozinha com F5. Causa: a resposta do polling também
+        marcava a própria seção de logs como `hx-swap-oob`, o que competia
+        com o `hx-get`/`hx-trigger` que fez a consulta (o pill de status,
+        concatenado na mesma resposta, é outro elemento - continua
+        `hx-swap-oob` normalmente, isso nunca foi o problema)."""
+        self.client.force_login(self.user)
+        resp = self.client.get(
+            reverse("ri_logs_rpa_eace_status", kwargs={"inep": self.escola.inep})
+        )
+        self.assertNotContains(resp, f'id="logs-rpa-eace-{self.ri.pk}" hx-swap-oob="true"')
+
+    def test_resposta_do_disparo_continua_marcando_a_secao_de_logs_como_oob(self):
+        """A resposta do disparo (`hx-swap="none"` no form) só chega à
+        tela via out-of-band - continua precisando do `hx-swap-oob`."""
+        pdf = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF, arquivo=SimpleUploadedFile("nota.pdf", b"%PDF"),
+        )
+        xml = Documento.objects.create(
+            ri=self.ri, tipo=Documento.XML, arquivo=SimpleUploadedFile("nota.xml", b"<nfe/>"),
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
+        )
+        log = self.ri.logs_rpa_eace.first()
+        self.client.force_login(self.user)
+        resp = self.client.post(
+            reverse("ri_log_rpa_eace_disparar", kwargs={"pk": log.pk}),
+            {"documento_pdf": pdf.pk, "documento_xml": xml.pk, "next": ""},
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertContains(resp, f'id="logs-rpa-eace-{self.ri.pk}" hx-swap-oob="true"')
 
 
 class RiResponsavelUpdateViewTests(TestCase):
@@ -1528,6 +2307,54 @@ class SincronizarEmailFinanceiroTests(TestCase):
             {Documento.NOTA_FISCAL_PDF: b"%PDF-1.4 conteudo", Documento.XML: b"<nfe></nfe>"},
         )
         self.assertFalse(RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.ANEXO).exists())
+
+    def test_resposta_padrao_cria_1_log_rpa_eace_por_nota_fiscal(self):
+        """RN-056 (FEAT-033, Fase 2): resposta com 1 PDF + 1 XML cria 1 log,
+        sem nenhum Documento pré-selecionado (o usuário escolhe na tela)."""
+        bruto = _montar_email_bytes(
+            self.assunto_padrao,
+            anexos=[
+                ("nota_fiscal.pdf", "application", "pdf", b"%PDF-1.4 conteudo"),
+                ("nota_fiscal.xml", "text", "xml", b"<nfe></nfe>"),
+            ],
+        )
+        self._rodar_sync([("<msg-log-1@financeiro>", bruto)])
+
+        self.assertEqual(LogRpaEace.objects.filter(ri=self.ri).count(), 1)
+        log = LogRpaEace.objects.get(ri=self.ri)
+        self.assertIsNone(log.documento_pdf)
+        self.assertIsNone(log.documento_xml)
+        self.assertEqual(log.resultado, LogRpaEace.PENDENTE)
+
+    def test_resposta_com_2_notas_fiscais_cria_2_logs(self):
+        """RN-005/RN-056: e-mail com N PDF/N XML (N Notas Fiscais no mesmo
+        e-mail) cria N logs, um por Nota Fiscal esperada."""
+        bruto = _montar_email_bytes(
+            self.assunto_padrao,
+            anexos=[
+                ("nota1.pdf", "application", "pdf", b"%PDF nota 1"),
+                ("nota2.pdf", "application", "pdf", b"%PDF nota 2"),
+                ("nota1.xml", "text", "xml", b"<nfe>1</nfe>"),
+                ("nota2.xml", "text", "xml", b"<nfe>2</nfe>"),
+            ],
+        )
+        self._rodar_sync([("<msg-log-2@financeiro>", bruto)])
+
+        self.assertEqual(LogRpaEace.objects.filter(ri=self.ri).count(), 2)
+
+    def test_resposta_fora_do_padrao_nao_cria_log(self):
+        """RN-016: resposta fora do padrão (quantidade de PDF diferente da
+        de XML) avança o status, mas não anexa Documento nem cria log —
+        não há como saber quantas Notas Fiscais esperar."""
+        bruto = _montar_email_bytes(
+            self.assunto_padrao,
+            anexos=[("nota_fiscal.pdf", "application", "pdf", b"%PDF-1.4 conteudo")],
+        )
+        self._rodar_sync([("<msg-log-3@financeiro>", bruto)])
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.assertEqual(LogRpaEace.objects.filter(ri=self.ri).count(), 0)
 
     def test_email_sem_codigo_de_rastreio_nao_altera_nada(self):
         bruto = _montar_email_bytes("Assunto qualquer, sem código de rastreio")
@@ -4746,6 +5573,208 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
 
 
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_SINCRONIZADOR)
+class SincronizadorSubstituiPelaUltimaPlanilhaTests(TestCase):
+    """RN-062 (2026-09-04): fora de "Implantação EACE"/"Em Andamento", a
+    Planilha EACE ativa vira a fonte de verdade do Lado 3 — usuário
+    reportou que uma planilha nova com menos equipamentos que a anterior
+    não removia os itens que sumiram. Nesses 2 status iniciais, o
+    comportamento de sempre (só soma, nunca remove/atualiza) continua —
+    ver os testes desta classe que usam `Ri.ANDAMENTO`."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_SINCRONIZADOR, ignore_errors=True)
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-sync-rn062", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-sync-rn062", password="senha-teste-123",
+            perfil=User.PERFIL_ANALISTA,
+        )
+        self.escola = Escola.objects.create(
+            inep="61000001", nome="Escola RN-062", municipio="Fortaleza", estado="CE"
+        )
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_FINANCEIRO)
+        self.nobreak = KitPadrao.objects.create(
+            descricao="Nobreak", unidade="Unidade", valor_equipamento=Decimal("150.00"),
+        )
+        self.cabo = KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="Metro", valor_equipamento=Decimal("2.00"),
+        )
+
+    def _upload_planilha(self, linhas):
+        PlanilhaEace.substituir(_csv_planilha_eace(linhas=linhas), self.admin)
+
+    def test_quantidade_diferente_atualiza_o_mesmo_item_em_vez_de_duplicar(self):
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="3"),
+        ])
+        sincronizar_relatorio_eace_da_planilha(self.ri)
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="2"),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(resultado["criados"], [])
+        self.assertEqual(len(resultado["atualizados"]), 1)
+        item, resumo_anterior = resultado["atualizados"][0]
+        self.assertEqual(resumo_anterior, "Nobreak — 3 un. — R$ 150.00")
+        self.assertEqual(item.quantidade, 2)
+        # Continua 1 único item — não vira 3 + 2 = 5 (bug relatado).
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 1)
+
+    def test_item_ausente_na_planilha_nova_e_removido(self):
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO"),
+            _linha_planilha_eace(self.escola.inep, "Cabo de rede - Equip - MEGA - CO", qtd="10"),
+        ])
+        sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
+
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO"),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(len(resultado["removidos"]), 1)
+        descricao, quantidade, valor_unitario, eh_kit = resultado["removidos"][0]
+        self.assertEqual(descricao, "Cabo de rede")
+        self.assertEqual(quantidade, 10)
+        self.assertFalse(eh_kit)
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 1)
+        self.assertEqual(
+            RiItemRelatorioEace.objects.get(ri=self.ri).descricao_item, "Nobreak"
+        )
+
+    def test_item_lancado_manualmente_nunca_e_removido_pela_sincronizacao(self):
+        """Decisão do usuário (2026-09-04): item lançado manualmente
+        (`origem_sincronizador=False`) nunca é apagado por uma
+        sincronização, mesmo ausente da planilha ativa."""
+        manual = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Cabo de rede", quantidade=10,
+            valor_unitario=Decimal("2.00"),
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO"),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(resultado["removidos"], [])
+        manual.refresh_from_db()  # não levanta DoesNotExist
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
+
+    def test_item_manual_confirmado_por_planilha_passa_a_poder_ser_removido_depois(self):
+        """Depois que uma planilha real confirma a mesma Descrição de um
+        item lançado manualmente, ele passa a ser tratado como vindo do
+        Sincronizador — uma planilha seguinte sem essa Descrição pode
+        removê-lo (RN-062)."""
+        manual = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Cabo de rede", quantidade=10,
+            valor_unitario=Decimal("2.00"),
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Cabo de rede - Equip - MEGA - CO", qtd="10"),
+        ])
+        sincronizar_relatorio_eace_da_planilha(self.ri)
+        manual.refresh_from_db()
+        self.assertTrue(manual.origem_sincronizador)
+
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO"),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(len(resultado["removidos"]), 1)
+        self.assertEqual(RiItemRelatorioEace.objects.filter(pk=manual.pk).count(), 0)
+
+    def test_status_implantacao_eace_preserva_comportamento_antigo(self):
+        """Em "Implantação EACE"/"Em Andamento" (RN-062), a Planilha EACE
+        continua só somando — quantidade diferente cria outro item em vez
+        de atualizar, e nada é removido (comportamento intencionalmente
+        mantido, fora do escopo desta melhoria)."""
+        self.ri.status = Ri.ANDAMENTO
+        self.ri.save(update_fields=["status"])
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="3"),
+        ])
+        sincronizar_relatorio_eace_da_planilha(self.ri)
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="2"),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(len(resultado["criados"]), 1)
+        self.assertEqual(resultado["atualizados"], [])
+        self.assertEqual(resultado["removidos"], [])
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
+
+    def test_kit_diferente_ignorado_nao_remove_o_kit_ja_lancado(self):
+        """RN-015 continua valendo dentro do modo RN-062: uma planilha com
+        um KIT diferente do já lançado cai em "kit_ignorado" (não
+        substitui o KIT automaticamente) e o KIT já lançado não é
+        removido por "não veio na planilha"."""
+        kit_4ap = KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 4 Access Points", unidade="Escola",
+            valor_equipamento=Decimal("300.00"),
+        )
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 8 Access Points", unidade="Escola",
+            valor_equipamento=Decimal("500.00"),
+        )
+        kit_antigo = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario=Decimal("300.00"), eh_kit=True,
+            origem_sincronizador=True,
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(
+                self.escola.inep, "Kit Cobertura Wi-Fi - 8 Access Points - Equip - MEGA - CO"
+            ),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(
+            resultado["kit_ignorado"], ["Kit Cobertura Wi-Fi - 8 Access Points"]
+        )
+        self.assertEqual(resultado["removidos"], [])
+        self.assertEqual(RiItemRelatorioEace.objects.filter(pk=kit_antigo.pk).count(), 1)
+
+    def test_view_grava_historico_de_atualizacao_e_remocao(self):
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="3"),
+            _linha_planilha_eace(self.escola.inep, "Cabo de rede - Equip - MEGA - CO", qtd="10"),
+        ])
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "sincronizar_planilha_eace"},
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", qtd="2"),
+        ])
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "sincronizar_planilha_eace"},
+            follow=True,
+        )
+        mensagens = [str(m) for m in resp.context["messages"]]
+        self.assertIn("1 atualizado(s)", mensagens[-1])
+        self.assertIn("1 removido(s)", mensagens[-1])
+        self.assertTrue(
+            RiHistorico.objects.filter(
+                ri=self.ri, tipo=RiHistorico.LOG_CAMPO,
+                valor_anterior="Nobreak — 3 un. — R$ 150.00",
+                valor_novo__icontains="Nobreak — 2 un.",
+            ).exists()
+        )
+        self.assertTrue(
+            RiHistorico.objects.filter(
+                ri=self.ri, tipo=RiHistorico.LOG_CAMPO,
+                campo__icontains="removido",
+                valor_novo="Removido — não veio mais na Planilha EACE ativa",
+            ).exists()
+        )
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_SINCRONIZADOR)
 class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
     """FEAT-025/RN-023: botão "Sincronizar todas as RI" do card "Arquivo
     ativo" — aplica o Sincronizador (RN-022/FEAT-024) ao RI atual de cada
@@ -4881,10 +5910,13 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
         self._upload_planilha([
             _linha_planilha_eace(self.escola_1.inep, "Kit Cobertura Wi-Fi - 4 Access Points - MEGA - CO"),
         ])
-        # 10, não 11 (RN-003 ajustada em 2026-09-02): o KIT lançado aqui só
+        # 9, não 11 (RN-003 ajustada em 2026-09-02): o KIT lançado aqui só
         # entra no Lado Relatório EACE — Lado IXC vazio não gera mais
-        # `RiDivergencia` (1 INSERT a menos que antes da correção).
-        with self.assertNumQueries(10):
+        # `RiDivergencia` (1 INSERT a menos que antes da correção). RN-062
+        # (2026-09-04) tira mais 1 consulta: "já existe KIT lançado?"
+        # (RN-015) passa a ser calculado a partir da lista de itens já
+        # carregada, em vez de um `.filter(eh_kit=True).exists()` à parte.
+        with self.assertNumQueries(9):
             sincronizar_relatorio_eace_de_todas_as_ri()
 
 

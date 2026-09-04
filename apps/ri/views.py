@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import quote
@@ -35,8 +36,10 @@ from .forms import (
     RiItemRelatorioEaceProdutoFormSet,
 )
 from .models import (
+    Documento,
     EmailFinanceiroLog,
     KitPadrao,
+    LogRpaEace,
     PlanilhaEace,
     Ri,
     RiHistorico,
@@ -50,6 +53,7 @@ from .services import (
     PlanilhaFaturamentoError,
     comparar_kit_e_produtos_ixc_relatorio,
     comparar_status_escola_relatorio,
+    consultar_pendencias_portal_eace,
     gerar_planilha_faturamento,
     montar_corpo_email_financeiro,
     nome_arquivo_planilha_faturamento,
@@ -73,6 +77,7 @@ from .services import (
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 # RF-16/17/18 e architecture.md ("Fluxo de e-mail com o financeiro"):
 # destinatários fixos, nunca em lote — 1 e-mail por INEP.
@@ -305,6 +310,44 @@ def _resumo_item_ixc(descricao, quantidade, valor_unitario=None):
     if valor_unitario is not None:
         resumo += f" — R$ {valor_unitario:.2f}"
     return resumo
+
+
+def _registrar_historico_sincronizador(ri, usuario, resultado, origem):
+    """RN-062/RN-008: grava na linha do tempo do RI todo item criado,
+    atualizado (Quantidade/Valor mudou de uma planilha para outra) ou
+    removido (não veio mais na Planilha EACE ativa) por uma sincronização
+    — mesmo padrão de rótulo já usado para item criado. `origem`
+    distingue o Sincronizador individual (FEAT-024, "Sincronizador") do em
+    lote (FEAT-025, "Sincronizador em lote"), único texto que muda entre
+    as duas chamadas. `resultado["atualizados"]`/`resultado["removidos"]`
+    só vêm preenchidos fora de "Implantação EACE"/"Em Andamento" (RN-062,
+    `sincronizar_relatorio_eace_da_planilha`)."""
+    for item in resultado["criados"]:
+        campo = (
+            f"KIT Instalado (Relatório EACE, {origem})"
+            if item.eh_kit
+            else f"Produto (Relatório EACE, {origem})"
+        )
+        _registrar_log_campo(
+            ri, usuario, campo, "",
+            _resumo_item_ixc(item.descricao_item, item.quantidade, item.valor_unitario),
+        )
+    for item, resumo_anterior in resultado["atualizados"]:
+        campo = (
+            f"KIT Instalado (Relatório EACE, {origem})"
+            if item.eh_kit
+            else f"Produto (Relatório EACE, {origem})"
+        )
+        _registrar_log_campo(
+            ri, usuario, campo, resumo_anterior,
+            _resumo_item_ixc(item.descricao_item, item.quantidade, item.valor_unitario),
+        )
+    for descricao_item, quantidade, valor_unitario, eh_kit in resultado["removidos"]:
+        _registrar_log_campo(
+            ri, usuario, f"Item do Relatório EACE (removido, {origem})",
+            _resumo_item_ixc(descricao_item, quantidade, valor_unitario),
+            "Removido — não veio mais na Planilha EACE ativa",
+        )
 
 
 # RN-008/RN-014/RN-048: rótulo de log de cada campo do formulário único de
@@ -577,6 +620,267 @@ def _fragmento_status_detail_htmx(request, ri, next_url):
         request=request,
     )
     html += render_to_string("core/_messages.html", request=request)
+    return HttpResponse(html)
+
+
+def _posicoes_na_fila():
+    """RN-058: posição (1-based) de cada log "Na fila" - a fila é única
+    para todo o sistema, não por RI, então a posição também precisa ser
+    calculada contra todos os logs "Na fila" que existirem, não só os
+    deste RI."""
+    ids_em_ordem = list(
+        LogRpaEace.objects.filter(resultado=LogRpaEace.NA_FILA)
+        .order_by("enfileirado_em")
+        .values_list("pk", flat=True)
+    )
+    return {pk: posicao for posicao, pk in enumerate(ids_em_ordem, start=1)}
+
+
+def _rotular_documentos_pdf(documentos_pdf):
+    """RN-057 (melhoria 2026-09-04): o nome do arquivo ("1617_04-09-2026_
+    NOME_MEGA INFRA.pdf") não diz o que tem dentro - usuário reportou não
+    ter como saber, antes de disparar a RPA, qual NF é de qual produto
+    (Kit Wi-Fi, Nobreak etc.) nem qual valor esperar, e só descobria o
+    valor errado depois de um "Erro (valor_divergente)". Reaproveita a
+    mesma extração de PDF da RPA (`extrair_dados_nota_fiscal`, RN-057) só
+    pra exibir Produto/Valor junto de cada opção do select - não abre
+    portal nem faz rede, só lê o arquivo local. Nunca quebra a tela: PDF
+    ilegível ou lib ausente (ambiente sem Playwright/pdfplumber) só deixa
+    o rótulo sem o complemento."""
+    try:
+        from apps.integracoes.eace.extrair_dados_pdf import extrair_dados_nota_fiscal
+    except ImportError:
+        return documentos_pdf
+
+    documentos_pdf = list(documentos_pdf)
+    for doc in documentos_pdf:
+        try:
+            dados = extrair_dados_nota_fiscal(doc.arquivo.path)
+        except Exception:
+            logger.exception("Falha ao ler dados da NF %s pra exibir no select.", doc.pk)
+            continue
+        if dados.get("produto") or dados.get("valor"):
+            partes = [p for p in (dados.get("produto"), f'R$ {dados["valor"]}' if dados.get("valor") else "") if p]
+            doc.rotulo_nf = " — ".join(partes)
+    return documentos_pdf
+
+
+def _contexto_logs_rpa_eace(ri, next_url, oob=True):
+    """FEAT-033 (Fase 2/3): contexto para `_logs_rpa_eace_detail.html`,
+    reaproveitado por `ri_detail_view` e `_fragmento_logs_rpa_eace_htmx` -
+    calcula `existe_log_ativo` 1 vez só (RN-058: liga o polling da tela só
+    enquanto fizer sentido - "Na fila" ou "Processando" -, evita
+    `hx-trigger="every Ns"` parado pra sempre num RI sem nada acontecendo)
+    e a posição de cada log "Na fila" (`_posicoes_na_fila`, RN-058: fila é
+    única pro sistema todo).
+
+    `oob=False` quando esta seção é a resposta direta de uma consulta de
+    polling (`ri_logs_rpa_eace_status_view`) - nesse caso o próprio
+    `hx-get`/`hx-trigger` do elemento é quem pede a atualização, então a
+    resposta não pode also se marcar `hx-swap-oob` (as duas coisas competem
+    pelo mesmo elemento e a atualização automática trava, só volta a
+    funcionar com F5 - bug real reportado pelo usuário em 2026-09-03).
+    `oob=True` (padrão) é usado quando esta seção viaja concatenada com
+    outros fragmentos numa resposta `hx-swap="none"` (disparo do log).
+
+    A seção só aparece com o RI em "Resposta Financeiro" (pedido do
+    usuário, 2026-09-03) - os logs continuam existindo depois que o RI
+    avança (RN-056) ou é destravado manualmente (FEAT-010), só deixam de
+    ser exibidos aqui. Isso também faz a seção sumir sozinha (via
+    polling) assim que o RI avançar de status."""
+    if ri.status != Ri.AGUARDANDO_ANEXO_PORTAL_EACE:
+        return {
+            "ri": ri, "logs_rpa_eace": [], "documentos_pdf": [], "documentos_xml": [],
+            "next_url": next_url, "existe_log_ativo": False, "oob": oob,
+        }
+
+    logs_rpa_eace = list(ri.logs_rpa_eace.select_related("documento_pdf", "documento_xml").all())
+    posicoes = _posicoes_na_fila()
+    for log in logs_rpa_eace:
+        log.posicao_na_fila = posicoes.get(log.pk)
+
+    return {
+        "ri": ri,
+        "logs_rpa_eace": logs_rpa_eace,
+        "documentos_pdf": _rotular_documentos_pdf(ri.documentos.filter(tipo=Documento.NOTA_FISCAL_PDF)),
+        "documentos_xml": ri.documentos.filter(tipo=Documento.XML),
+        "next_url": next_url,
+        "existe_log_ativo": any(
+            log.resultado in (LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO) for log in logs_rpa_eace
+        ),
+        "oob": oob,
+    }
+
+
+@login_required
+def ri_log_rpa_eace_disparar_view(request, pk):
+    """FEAT-033 (Fase 3, RN-056/RN-057/RN-058): enfileira 1 log para o RPA
+    de anexo no portal EACE, depois de o usuario escolher o par PDF+XML
+    entre os `Documento` daquela resposta do financeiro. Não executa na
+    hora — quem executa de fato é o processo consumidor único da fila
+    (`apps/ri/services.py`, `processar_proximo_da_fila_rpa_eace`), que
+    garante no máximo 1 execução por vez em todo o sistema (RN-058).
+
+    Grava o resultado ("Sucesso"/"Erro" + motivo) e os dados extraidos do
+    PDF no proprio log (RN-057) só quando o consumidor processar; quando
+    todos os logs do RI ficam "Sucesso", o consumidor avança o status
+    para "Aguardando validação EACE" sozinho (RN-056) - a transição
+    manual que já existia (`FEAT-010`) continua disponível como
+    alternativa (RN-019, mesmo padrão de exceção manual).
+    """
+    log = get_object_or_404(LogRpaEace.objects.select_related("ri", "ri__escola"), pk=pk)
+    ri = log.ri
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
+
+    if request.method == "POST" and log.resultado == LogRpaEace.SUCESSO:
+        # Pedido do usuário (2026-09-03): depois de "Sucesso" os dados não
+        # podem mais ser editados/reenviados - o template já esconde o
+        # formulário nesse caso (`_logs_rpa_eace_detail.html`), isso aqui é
+        # a validação no backend (defesa em profundidade).
+        messages.error(
+            request,
+            "Esta Nota Fiscal já foi processada com sucesso e não pode ser reenviada.",
+        )
+    elif request.method == "POST":
+        pdf_id = request.POST.get("documento_pdf") or None
+        xml_id = request.POST.get("documento_xml") or None
+        documento_pdf = (
+            ri.documentos.filter(pk=pdf_id, tipo=Documento.NOTA_FISCAL_PDF).first() if pdf_id else None
+        )
+        documento_xml = (
+            ri.documentos.filter(pk=xml_id, tipo=Documento.XML).first() if xml_id else None
+        )
+
+        if not documento_pdf or not documento_xml:
+            messages.error(request, "Escolha 1 PDF e 1 XML antes de disparar a RPA.")
+        else:
+            osp = ri.itens_relatorio_eace.exclude(num_osp="").values_list("num_osp", flat=True).first()
+            if not osp:
+                messages.error(
+                    request,
+                    'RI sem "Num OSP" (Sincronizador da Planilha EACE, FEAT-024) - '
+                    "não é possível disparar a RPA sem saber a OSP no portal.",
+                )
+            else:
+                # RN-058 (Fase 3): só enfileira - reseta tentativas (disparo
+                # novo/"Tentar novamente" é um ciclo novo de reprocessamento,
+                # não continuação do anterior) e manda pro final da fila.
+                log.documento_pdf = documento_pdf
+                log.documento_xml = documento_xml
+                log.resultado = LogRpaEace.NA_FILA
+                log.motivo_erro = ""
+                log.tentativas = 0
+                log.enfileirado_em = timezone.now()
+                log.save()
+                messages.success(request, "Nota Fiscal enviada para a fila do RPA EACE.")
+
+    if _requisicao_htmx(request):
+        return _fragmento_logs_rpa_eace_htmx(request, ri, next_url)
+    return redirect(next_url)
+
+
+@login_required
+def ri_consultar_pendencias_eace_view(request, pk):
+    """RN-063 (melhoria 2026-09-04): dispara 1 consulta somente-leitura ao
+    portal EACE (`consultar_pendencias_portal_eace`) - roda na hora,
+    dentro da própria requisição (pode levar dezenas de segundos, mesma
+    ordem de grandeza de "Disparar RPA"), sem passar pela fila do RPA
+    (RN-058): não sobe arquivo, então não concorre pela mesma garantia de
+    "1 execução por vez" - só evita rodar junto de um upload real em
+    andamento, pra não abrir 2 navegadores contra o mesmo login."""
+    ri = get_object_or_404(Ri.objects.select_related("escola"), pk=pk)
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
+
+    if request.method == "POST":
+        if ri.logs_rpa_eace.filter(resultado=LogRpaEace.PROCESSANDO).exists():
+            messages.error(
+                request,
+                "Uma Nota Fiscal está sendo enviada ao portal agora - tente consultar as "
+                "pendências de novo assim que terminar.",
+            )
+        else:
+            from apps.integracoes.eace.rpa import RpaEaceIndisponivel
+
+            try:
+                resultado = consultar_pendencias_portal_eace(ri)
+            except ValueError:
+                messages.error(
+                    request,
+                    'RI sem "Num OSP" (Sincronizador da Planilha EACE, FEAT-024) - '
+                    "não é possível consultar o portal sem saber a OSP.",
+                )
+            except RpaEaceIndisponivel as exc:
+                messages.error(request, str(exc))
+            else:
+                if resultado.sucesso:
+                    messages.success(request, "Pendências do portal EACE atualizadas.")
+                else:
+                    messages.error(
+                        request,
+                        f"Não foi possível consultar o portal EACE (motivo: {resultado.motivo}).",
+                    )
+
+    if _requisicao_htmx(request):
+        return _fragmento_logs_rpa_eace_htmx(request, ri, next_url)
+    return redirect(next_url)
+
+
+@login_required
+def ri_logs_rpa_eace_status_view(request, inep):
+    """FEAT-033 (Fase 3, RN-058): endpoint leve para a tela consultar o
+    estado dos logs periodicamente (`hx-trigger="every Ns"`) - a execução
+    agora acontece no processo consumidor da fila, não na hora do clique
+    (ver `ri_log_rpa_eace_disparar_view`), então a tela precisa perguntar
+    de novo para saber quando um log saiu de "Na fila"/"Processando"."""
+    escola = get_object_or_404(Escola, inep=inep)
+    ri = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+    if not ri:
+        return HttpResponse("")
+    return _fragmento_logs_rpa_eace_htmx(
+        request, ri, request.GET.get("next") or "", incluir_mensagens=False, oob_logs=False,
+    )
+
+
+def _fragmento_logs_rpa_eace_htmx(request, ri, next_url, incluir_mensagens=True, oob_logs=True):
+    """FEAT-033 (Fase 2/3): fragmento devolvido a
+    `ri_log_rpa_eace_disparar_view` (e ao polling de
+    `ri_logs_rpa_eace_status_view`) - repõe a seção de logs (com o
+    resultado/dados extraídos atualizados) e o pill de status (pode ter
+    avançado sozinho, RN-056). `incluir_mensagens=False` no polling evita
+    reenviar o toast (`core/_messages.html`) a cada consulta automática -
+    são só mensagens de verdade novas (ex.: `messages.success` de outra
+    ação), não haveria nada de novo pra mostrar.
+
+    `oob_logs=False` no polling (bug real reportado pelo usuário em
+    2026-09-03: a seção de logs só atualizava sozinha com F5) - a própria
+    consulta de polling já tem como alvo direto esse elemento
+    (`hx-get`/`hx-trigger` nele mesmo), então marcar a resposta também
+    como `hx-swap-oob` faz as duas trocas competirem pelo mesmo elemento e
+    a atualização automática trava. No disparo do log (`hx-swap="none"`
+    no form), a seção de logs só chega à tela via OOB mesmo - por isso o
+    padrão continua `True` ali."""
+    html = render_to_string(
+        "ri/_logs_rpa_eace_detail.html",
+        _contexto_logs_rpa_eace(ri, next_url, oob=oob_logs),
+        request=request,
+    )
+    html += render_to_string(
+        "ri/_status_pill_detail.html",
+        {
+            "ri": ri,
+            "next_url": next_url,
+            "status_ri_manuais": STATUS_RI_MANUAIS,
+            "status_ri_opcoes_disponiveis": _status_ri_opcoes_disponiveis(ri),
+            "usuario_administrador": request.user.is_administrador,
+        },
+        request=request,
+    )
+    if incluir_mensagens:
+        html += render_to_string("core/_messages.html", request=request)
     return HttpResponse(html)
 
 
@@ -1080,20 +1384,20 @@ def ri_detail_view(request, inep):
                 messages.error(request, str(erro))
                 return redirect("ri_detail", inep=inep)
 
-            for item in resultado["criados"]:
-                campo = (
-                    "KIT Instalado (Relatório EACE, Sincronizador)"
-                    if item.eh_kit
-                    else "Produto (Relatório EACE, Sincronizador)"
-                )
-                _registrar_log_campo(
-                    ri, request.user, campo, "",
-                    _resumo_item_ixc(item.descricao_item, item.quantidade, item.valor_unitario),
-                )
+            _registrar_historico_sincronizador(ri, request.user, resultado, "Sincronizador")
 
             partes = []
             if resultado["criados"]:
                 partes.append(f"{len(resultado['criados'])} item(ns) lançado(s)")
+            # RN-062: só vêm preenchidos fora de "Implantação EACE"/"Em
+            # Andamento" — nesses 2 status a mensagem continua idêntica à
+            # de sempre (listas sempre vazias).
+            if resultado["atualizados"]:
+                partes.append(f"{len(resultado['atualizados'])} atualizado(s) (planilha trouxe dado novo)")
+            if resultado["removidos"]:
+                partes.append(
+                    f"{len(resultado['removidos'])} removido(s) (não vieram mais na planilha)"
+                )
             if resultado["duplicados"]:
                 partes.append(f"{len(resultado['duplicados'])} já lançado(s) antes")
             if resultado["sem_correspondencia"]:
@@ -1107,7 +1411,7 @@ def ri_detail_view(request, inep):
                     f"{len(resultado['quantidade_invalida'])} com quantidade inválida na planilha"
                 )
             resumo = "Sincronização: " + (", ".join(partes) if partes else "nada para lançar") + "."
-            if resultado["criados"]:
+            if resultado["criados"] or resultado["atualizados"] or resultado["removidos"]:
                 messages.success(request, resumo)
             else:
                 messages.error(request, resumo)
@@ -1255,6 +1559,12 @@ def ri_detail_view(request, inep):
             "remetente_financeiro": settings.DEFAULT_FROM_EMAIL,
             "para_financeiro_sugestao": ", ".join(DESTINATARIOS_FINANCEIRO),
             "cc_financeiro_sugestao": ", ".join(COPIA_FINANCEIRO),
+            # FEAT-033 (Fase 2/3, RN-056/RN-057/RN-058): logs de anexo no
+            # portal EACE (log/seleção manual + estado "Na fila").
+            **(_contexto_logs_rpa_eace(ri, request.get_full_path()) if ri else {
+                "logs_rpa_eace": [], "documentos_pdf": [], "documentos_xml": [],
+                "existe_log_ativo": False, "oob": True,
+            }),
         },
     )
 
@@ -1323,21 +1633,13 @@ def planilha_eace_sincronizar_todas_view(request):
         if resultado in (RI_BLOQUEADO_FATURAMENTO_CONCLUIDO, RI_SEM_LINHA_NA_PLANILHA):
             continue
 
-        # RN-023/RN-008: cada item lançado pelo lote entra na linha do
-        # tempo do RI correspondente, igual ao Sincronizador individual
-        # (FEAT-024) — mesmo rótulo, só identificando a origem em lote.
-        for item in resultado["criados"]:
-            campo = (
-                "KIT Instalado (Relatório EACE, Sincronizador em lote)"
-                if item.eh_kit
-                else "Produto (Relatório EACE, Sincronizador em lote)"
-            )
-            _registrar_log_campo(
-                ri, request.user, campo, "",
-                _resumo_item_ixc(item.descricao_item, item.quantidade, item.valor_unitario),
-            )
+        # RN-023/RN-008/RN-062: cada item criado, atualizado ou removido
+        # pelo lote entra na linha do tempo do RI correspondente, igual ao
+        # Sincronizador individual (FEAT-024) — mesmo rótulo, só
+        # identificando a origem em lote.
+        _registrar_historico_sincronizador(ri, request.user, resultado, "Sincronizador em lote")
 
-        if resultado["criados"]:
+        if resultado["criados"] or resultado["atualizados"] or resultado["removidos"]:
             total_atualizados += 1
 
     # RN-023 (ajustada em 2026-08-27): usuário pediu só a contagem de

@@ -13,6 +13,7 @@ class Auditoria(models.Model):
     ENVIO_EMAIL = "envio_email"
     RECEBIMENTO_EMAIL = "recebimento_email"
     ERRO = "erro"
+    EXECUCAO_RPA_EACE = "execucao_rpa_eace"
     ACAO_CHOICES = [
         (LOGIN, "Login"),
         (ALTERACAO_CAMPO, "Alteração de campo"),
@@ -20,6 +21,12 @@ class Auditoria(models.Model):
         (ENVIO_EMAIL, "Envio de e-mail"),
         (RECEBIMENTO_EMAIL, "Recebimento de e-mail"),
         (ERRO, "Erro"),
+        # FEAT-033 (RN-058): 1 registro por tentativa de execução do RPA de
+        # anexo no portal EACE - o usuário pediu (2026-09-03) que cada
+        # rodada fique registrada, mesmo quando `LogRpaEace` (que só guarda
+        # o estado mais recente) já sobrescreveu os dados da tentativa
+        # anterior por cima.
+        (EXECUCAO_RPA_EACE, "Execução RPA EACE"),
     ]
 
     usuario = models.ForeignKey(

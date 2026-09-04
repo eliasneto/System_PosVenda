@@ -48,4 +48,19 @@ urlpatterns = [
         views.ri_item_relatorio_eace_delete_view,
         name="ri_item_relatorio_eace_delete",
     ),
+    path(
+        "ri/logs-rpa-eace/<int:pk>/disparar/",
+        views.ri_log_rpa_eace_disparar_view,
+        name="ri_log_rpa_eace_disparar",
+    ),
+    path(
+        "inep/<str:inep>/logs-rpa-eace/status/",
+        views.ri_logs_rpa_eace_status_view,
+        name="ri_logs_rpa_eace_status",
+    ),
+    path(
+        "ri/<int:pk>/pendencias-portal-eace/consultar/",
+        views.ri_consultar_pendencias_eace_view,
+        name="ri_consultar_pendencias_eace",
+    ),
 ]
