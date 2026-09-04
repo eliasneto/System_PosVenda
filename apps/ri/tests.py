@@ -1342,6 +1342,71 @@ class ProcessarFilaRpaEaceCommandTests(TestCase):
         self.assertIn(str(log.pk), out.getvalue())
 
 
+class BackfillLogsRpaEaceCommandTests(TestCase):
+    """Correção (2026-09-04): usuário reportou em produção "vários INEPs
+    já com status de Resposta Financeiro e não aparece os inputs do
+    RPA" - RIs que chegaram nesse status antes do LogRpaEace existir já
+    têm Documento (PDF+XML), mas zero logs, e a seção some da tela
+    (`_contexto_logs_rpa_eace` só mostra com `logs_rpa_eace` não
+    vazio)."""
+
+    def setUp(self):
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola Backfill")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def _documento(self, tipo, nome):
+        return Documento.objects.create(ri=self.ri, tipo=tipo, arquivo=SimpleUploadedFile(nome, b"conteudo"))
+
+    def test_cria_1_log_por_pdf_quando_ri_nao_tem_nenhum_log(self):
+        self._documento(Documento.NOTA_FISCAL_PDF, "1.pdf")
+        self._documento(Documento.XML, "1.xml")
+        self._documento(Documento.NOTA_FISCAL_PDF, "2.pdf")
+        self._documento(Documento.XML, "2.xml")
+
+        call_command("backfill_logs_rpa_eace")
+
+        self.assertEqual(self.ri.logs_rpa_eace.count(), 2)
+        self.assertTrue(all(log.resultado == LogRpaEace.PENDENTE for log in self.ri.logs_rpa_eace.all()))
+
+    def test_nao_cria_nada_se_ri_ja_tem_algum_log(self):
+        """Nunca duplica em quem já foi processado pelo fluxo normal (RN-056) -
+        só preenche o que nasceu ANTES do log existir."""
+        self._documento(Documento.NOTA_FISCAL_PDF, "1.pdf")
+        self._documento(Documento.XML, "1.xml")
+        LogRpaEace.objects.create(ri=self.ri)
+
+        call_command("backfill_logs_rpa_eace")
+
+        self.assertEqual(self.ri.logs_rpa_eace.count(), 1)
+
+    def test_nao_cria_nada_sem_pdf_recebido(self):
+        """RI "fora do padrão" (RN-016): sem anexo recebido, nada a
+        anexar - a seção continua escondida até o financeiro reenviar."""
+        call_command("backfill_logs_rpa_eace")
+        self.assertEqual(self.ri.logs_rpa_eace.count(), 0)
+
+    def test_ignora_ri_fora_do_status_resposta_financeiro(self):
+        outra_escola = Escola.objects.create(inep="35083939", nome="Escola Fora do Status")
+        outro_ri = Ri.objects.create(escola=outra_escola, status=Ri.AGUARDANDO_FINANCEIRO)
+        Documento.objects.create(
+            ri=outro_ri, tipo=Documento.NOTA_FISCAL_PDF, arquivo=SimpleUploadedFile("x.pdf", b"x"),
+        )
+
+        call_command("backfill_logs_rpa_eace")
+
+        self.assertEqual(outro_ri.logs_rpa_eace.count(), 0)
+
+    def test_dry_run_nao_grava_nada(self):
+        self._documento(Documento.NOTA_FISCAL_PDF, "1.pdf")
+        self._documento(Documento.XML, "1.xml")
+
+        out = StringIO()
+        call_command("backfill_logs_rpa_eace", "--dry-run", stdout=out)
+
+        self.assertEqual(self.ri.logs_rpa_eace.count(), 0)
+        self.assertIn("seriam criados", out.getvalue())
+
+
 class ContextoLogsRpaEaceTests(TestCase):
     """FEAT-033: a seção "Notas Fiscais para anexar no portal EACE" só
     aparece com o RI em "Resposta Financeiro" (pedido do usuário,
