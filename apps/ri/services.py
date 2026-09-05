@@ -1923,15 +1923,58 @@ def processar_proximo_da_fila_rpa_eace():
     log.save()
     _registrar_execucao_rpa_eace(log)
 
-    # RN-056: avança o status do RI quando TODOS os logs derem "Sucesso".
-    if (
-        log.resultado == LogRpaEace.SUCESSO
-        and ri.status == Ri.AGUARDANDO_ANEXO_PORTAL_EACE
-        and not ri.logs_rpa_eace.exclude(resultado=LogRpaEace.SUCESSO).exists()
-    ):
-        trocar_status_com_log(ri, Ri.AGUARDANDO_VALIDACAO_EACE, usuario=None)
+    if log.resultado == LogRpaEace.SUCESSO:
+        _avancar_status_se_todos_os_logs_sucesso(ri)
 
     return {"log_id": log.pk, "resultado": log.resultado, "motivo": log.motivo_erro}
+
+
+def _avancar_status_se_todos_os_logs_sucesso(ri, usuario=None):
+    """RN-056: avança o status do RI de "Resposta Financeiro" para
+    "Aguardando validação EACE" quando TODOS os logs derem "Sucesso" -
+    automático (RPA de verdade) ou manual (RN-065). Extraído à parte pra
+    ser reaproveitado pelos dois caminhos sem duplicar a condição."""
+    if (
+        ri.status == Ri.AGUARDANDO_ANEXO_PORTAL_EACE
+        and not ri.logs_rpa_eace.exclude(resultado=LogRpaEace.SUCESSO).exists()
+    ):
+        trocar_status_com_log(ri, Ri.AGUARDANDO_VALIDACAO_EACE, usuario=usuario)
+
+
+def marcar_log_rpa_eace_concluido_manualmente(log, usuario):
+    """RN-065 (2026-09-05): usuário reportou precisar marcar 1 Nota
+    Fiscal como concluída manualmente (ex.: anexou direto no portal EACE
+    por fora, sem passar pela RPA) - sem isso o RI nunca avança de
+    "Resposta Financeiro" enquanto sobrar 1 log que não seja "Sucesso"
+    (RN-056), mesmo com o trabalho de verdade já feito manualmente.
+
+    Grava o mesmo resultado "Sucesso" da RPA automática, só que com
+    `concluido_manualmente=True` pra distinguir na tela (nunca finge que
+    foi a automação que fez), e segue o mesmo critério de avanço de
+    status (RN-056) - manual ou automático conta igual pra liberar o
+    RI."""
+    log.resultado = LogRpaEace.SUCESSO
+    log.concluido_manualmente = True
+    log.motivo_erro = ""
+    log.executado_em = timezone.now()
+    log.save(update_fields=["resultado", "concluido_manualmente", "motivo_erro", "executado_em"])
+
+    RiHistorico.objects.create(
+        ri=log.ri,
+        tipo=RiHistorico.LOG_CAMPO,
+        autor=usuario,
+        campo=f"RPA EACE (Nota Fiscal #{log.pk})",
+        valor_novo="Concluído manualmente (anexado direto no portal EACE, fora da automação).",
+    )
+    auditar(
+        usuario,
+        Auditoria.EXECUCAO_RPA_EACE,
+        entidade="LogRpaEace",
+        entidade_id=log.pk,
+        campo="resultado",
+        valor_novo="concluido_manualmente",
+    )
+    _avancar_status_se_todos_os_logs_sucesso(log.ri, usuario=usuario)
 
 
 def consultar_pendencias_portal_eace(ri):

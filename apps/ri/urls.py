@@ -54,6 +54,11 @@ urlpatterns = [
         name="ri_log_rpa_eace_disparar",
     ),
     path(
+        "ri/logs-rpa-eace/<int:pk>/marcar-manual/",
+        views.ri_log_rpa_eace_marcar_manual_view,
+        name="ri_log_rpa_eace_marcar_manual",
+    ),
+    path(
         "inep/<str:inep>/logs-rpa-eace/status/",
         views.ri_logs_rpa_eace_status_view,
         name="ri_logs_rpa_eace_status",

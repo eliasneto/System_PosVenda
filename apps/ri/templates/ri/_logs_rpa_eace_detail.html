@@ -23,6 +23,10 @@ barra de progresso enquanto "Processando" - `apps/integracoes/eace/rpa.py`
 (`ETAPAS_RPA_EACE`) reporta cada etapa concluída da RPA (login,
 navegação, upload...) por callback, gravada em tempo real pra esse
 polling mostrar que o processo está andando, não travado.
+
+Correção (2026-09-05): a seção não some mais quando o RI avança de
+status - fica pra auditoria (ver `_contexto_logs_rpa_eace`, views.py:
+o gate agora é só "existe algum log", não mais o status do RI).
 {% endcomment %}
 <div id="logs-rpa-eace-{{ ri.pk }}" {% if oob %}hx-swap-oob="true"{% endif %}
      {% if existe_log_ativo %}
@@ -115,7 +119,7 @@ polling mostrar que o processo está andando, não travado.
                 <span class="text-xs font-black uppercase italic">Nota Fiscal #{{ forloop.counter }}</span>
                 {% if log.resultado == 'sucesso' %}
                 <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-green-600 text-green-700 dark:text-green-400 dark:border-green-500">
-                    ✓ Sucesso
+                    {% if log.concluido_manualmente %}✓ Concluído manualmente{% else %}✓ Sucesso{% endif %}
                 </span>
                 {% elif log.resultado == 'erro' %}
                 <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-red-600 text-red-700 dark:text-red-400 dark:border-red-500">
@@ -138,7 +142,11 @@ polling mostrar que o processo está andando, não travado.
 
             {% if log.resultado == 'sucesso' %}
             <div class="text-xs text-gray-600 dark:text-gray-400">
+                {% if log.concluido_manualmente %}
+                <p>Marcado manualmente — anexado direto no portal EACE, fora da automação.</p>
+                {% else %}
                 <p><span class="font-bold">INEP na NF:</span> {{ log.inep_pdf }} · <span class="font-bold">Produto:</span> {{ log.produto_pdf }} · <span class="font-bold">Valor:</span> R$ {{ log.valor_pdf }}</p>
+                {% endif %}
             </div>
             {% elif log.resultado == 'processando' %}
             <div class="text-xs text-gray-600 dark:text-gray-400 flex flex-col gap-2">
@@ -203,8 +211,28 @@ polling mostrar que o processo está andando, não travado.
                 </p>
                 {% endif %}
 
-                <button type="submit" class="mt-3 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 transition shadow">
-                    {% if log.resultado == 'erro' %}Tentar novamente{% else %}Disparar RPA{% endif %}
+                <div class="flex items-center gap-2 flex-wrap">
+                    <button type="submit" class="mt-3 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 transition shadow">
+                        {% if log.resultado == 'erro' %}Tentar novamente{% else %}Disparar RPA{% endif %}
+                    </button>
+                </div>
+            </form>
+            {% comment %}
+            RN-065 (2026-09-05): usuário reportou precisar marcar 1 Nota
+            Fiscal como concluída manualmente (ex.: anexou direto no
+            portal EACE por fora, sem passar pela RPA) - sem isso o RI
+            nunca avança de "Resposta Financeiro" enquanto sobrar 1 log
+            que não seja "Sucesso" (RN-056). Form separado (não precisa
+            de PDF/XML escolhido) - `hx-confirm` evita marcar sem querer,
+            já que essa ação não tem como ser desfeita pela tela.
+            {% endcomment %}
+            <form method="POST" action="{% url 'ri_log_rpa_eace_marcar_manual' pk=log.pk %}"
+                  hx-post="{% url 'ri_log_rpa_eace_marcar_manual' pk=log.pk %}" hx-swap="none"
+                  hx-confirm="Confirma que esta Nota Fiscal já foi anexada manualmente no portal EACE, fora da automação?">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ next_url }}">
+                <button type="submit" class="mt-1 px-3 py-1.5 border-2 border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 font-black uppercase text-[10px] rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+                    Marcar como concluído manualmente
                 </button>
             </form>
             {% endif %}

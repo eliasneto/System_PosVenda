@@ -1,5 +1,5 @@
 # Regras de Negócio — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-09-04_ (RN-053 criada — Mês da Operação do Lado IXC na planilha, ano sempre corrente; RN-054 criada — linhas de grade ocultas em toda aba criada automaticamente; RN-055 criada — produto sem valor de Equipamento sai da lista do Lado IXC; RN-056 criada — gatilho da RPA de anexo no portal EACE, log por Nota Fiscal com seleção manual de PDF/XML, ampliada com os motivos "OSP não encontrada"/"Documento já enviado"; RN-057 criada — validação dos dados da Nota Fiscal extraídos do PDF contra o portal EACE antes do anexo, ampliada em 2026-09-04 com Produto/Valor extraídos do PDF exibidos no select antes de escolher; RN-058 criada — fila de execução serializada do RPA EACE, com reprocessamento automático só de erro não mapeado, implementada e testada em 2026-09-03; RN-063 criada em 2026-09-04 — consulta somente-leitura das pendências do portal EACE antes de escolher a Nota Fiscal; RN-064 criada em 2026-09-04 — correção: OSP resolvida pelo item que bate com o Valor da NF, não mais "qualquer" OSP do RI, e consulta de pendências cobrindo todas as OSPs distintas do RI)
+_Última atualização: 2026-09-05_ (RN-065 criada — botão "Marcar como concluído manualmente" por Nota Fiscal, conta como Sucesso pro avanço de status do RI; correção: a seção de Notas Fiscais não some mais quando o RI avança de status, fica visível pra auditoria; RN-053 criada — Mês da Operação do Lado IXC na planilha, ano sempre corrente; RN-054 criada — linhas de grade ocultas em toda aba criada automaticamente; RN-055 criada — produto sem valor de Equipamento sai da lista do Lado IXC; RN-056 criada — gatilho da RPA de anexo no portal EACE, log por Nota Fiscal com seleção manual de PDF/XML, ampliada com os motivos "OSP não encontrada"/"Documento já enviado"; RN-057 criada — validação dos dados da Nota Fiscal extraídos do PDF contra o portal EACE antes do anexo, ampliada em 2026-09-04 com Produto/Valor extraídos do PDF exibidos no select antes de escolher; RN-058 criada — fila de execução serializada do RPA EACE, com reprocessamento automático só de erro não mapeado, implementada e testada em 2026-09-03; RN-063 criada em 2026-09-04 — consulta somente-leitura das pendências do portal EACE antes de escolher a Nota Fiscal; RN-064 criada em 2026-09-04 — correção: OSP resolvida pelo item que bate com o Valor da NF, não mais "qualquer" OSP do RI, e consulta de pendências cobrindo todas as OSPs distintas do RI)
 
 ## Ciclo de Vida do RI
 
@@ -996,11 +996,13 @@ que já cheguem pareados ou na ordem certa.
   portal já não está mais "Pendente" — já enviada, aprovada, reprovada
   etc. (motivo "Documento já enviado"). Ver também RN-057 para os
   motivos de bloqueio ligados aos dados do próprio PDF.
-- **Visibilidade na tela (pedido do usuário, 2026-09-03):** a seção com os
-  logs de Nota Fiscal só aparece na tela de detalhe do RI enquanto o
-  status for "Resposta Financeiro" (RN-016). Os logs continuam existindo
-  depois que o RI avança (item acima) ou é destravado manualmente
-  (FEAT-010) — só deixam de ser exibidos nessa tela.
+- **Visibilidade na tela (correção 2026-09-05):** a seção com os logs de
+  Nota Fiscal aparece sempre que o RI tem pelo menos 1 log (não mais só
+  enquanto o status for "Resposta Financeiro") — usuário reportou
+  precisar dela visível mesmo depois que o RI avança, pra auditoria (ex.:
+  conferir quais Notas Fiscais foram concluídas manualmente, RN-065). RI
+  sem log nenhum (RN-016 "fora do padrão", sem anexo recebido) continua
+  sem mostrar a seção, não importa o status.
 - **Imutabilidade após "Sucesso":** ver RN-060 — log com resultado
   "Sucesso" não aceita novo disparo nem troca de PDF/XML.
 
@@ -1384,6 +1386,53 @@ sempre "ganhava", mesmo com a OSP certa já cadastrada no item certo.
 (`_resolver_osp_da_nota_fiscal`, usada por
 `processar_proximo_da_fila_rpa_eace`; `consultar_pendencias_portal_eace`
 ampliada pra iterar todas as OSPs distintas do RI).
+
+**Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
+### RN-065 — Marcar Nota Fiscal como concluída manualmente
+
+**Descrição:** Em qualquer log de Nota Fiscal que não esteja "Sucesso",
+"Na fila" ou "Processando" (ou seja, "Pendente" ou "Erro"), um botão
+separado "Marcar como concluído manualmente" grava o mesmo resultado
+"Sucesso" de uma execução automática da RPA, com um campo à parte
+(`concluido_manualmente`) marcando que não foi a automação que fez —
+nunca finge que foi. Conta igual a um "Sucesso" de verdade pro avanço
+automático de status do RI (RN-056): quando todos os logs do RI ficam
+"Sucesso" (manual ou automático), o RI avança para "Aguardando
+validação EACE".
+
+**Contexto:** Usuário reportou (2026-09-05) precisar de um jeito de
+marcar uma Nota Fiscal como concluída quando ela foi anexada direto no
+portal EACE por fora da automação (ex.: RPA falhando persistentemente
+por um motivo que só se resolve manualmente) — sem isso, o RI ficava
+travado em "Resposta Financeiro" para sempre, mesmo com o trabalho de
+verdade já feito.
+
+**Critérios:**
+- Disponível nos mesmos estados que aceitam "Disparar RPA"/"Tentar
+  novamente" (Pendente/Erro) — nunca a partir de "Sucesso", "Na fila" ou
+  "Processando" (mesma defesa em profundidade de RN-060, validada no
+  backend além de escondida na tela).
+- Não exige PDF/XML escolhido — é uma marcação, não um disparo.
+- Grava na linha do tempo do RI (`RiHistorico`) e em `Auditoria`, com o
+  usuário logado como autor (diferente da execução automática, que grava
+  com autor nulo) — rastreável quem marcou e quando.
+- A tela mostra "✓ Concluído manualmente" (badge) e uma nota distinta de
+  "✓ Sucesso" — nunca mistura com os dados extraídos do PDF (RN-057),
+  que não existem nesse caminho.
+- `hx-confirm` no clique — ação sem desfazer pela tela.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `LogRpaEace.concluido_manualmente` (migração
+`0034`); `apps/ri/services.py`
+(`marcar_log_rpa_eace_concluido_manualmente`,
+`_avancar_status_se_todos_os_logs_sucesso` — extraída de
+`processar_proximo_da_fila_rpa_eace` pra ser reaproveitada pelos dois
+caminhos); `apps/ri/views.py` (`ri_log_rpa_eace_marcar_manual_view`);
+`_logs_rpa_eace_detail.html`.
 
 **Features relacionadas:** FEAT-033.
 

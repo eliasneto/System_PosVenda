@@ -629,6 +629,13 @@ class LogRpaEace(models.Model):
     # aqui a cada avanço para o polling da tela mostrar que não travou.
     etapa_atual = models.CharField("Etapa atual da RPA", max_length=100, blank=True)
     progresso_pct = models.PositiveSmallIntegerField("Progresso da RPA (%)", default=0)
+    # RN-065 (2026-09-05): usuário reportou precisar marcar 1 Nota Fiscal
+    # como concluída manualmente (ex.: anexou direto no portal EACE, sem
+    # passar pela RPA) - grava o mesmo `resultado="sucesso"` de uma
+    # execução automática (mesmo critério de avanço do RI, RN-056), só
+    # que este campo marca que não foi a automação que fez, pra tela
+    # distinguir sem inventar um resultado novo.
+    concluido_manualmente = models.BooleanField("Concluído manualmente", default=False)
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:

@@ -780,6 +780,120 @@ class RiLogRpaEaceDispararViewTests(TestCase):
         self.assertEqual(self.log.documento_pdf_id, self.pdf.pk, "não pode trocar o documento já aceito")
 
 
+class MarcarLogRpaEaceConcluidoManualmenteServiceTests(TestCase):
+    """RN-065 (2026-09-05): usuário reportou precisar marcar 1 Nota
+    Fiscal como concluída manualmente (anexada direto no portal EACE,
+    fora da automação) - sem isso o RI nunca avança de "Resposta
+    Financeiro" enquanto sobrar 1 log que não seja "Sucesso" (RN-056)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-manual", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola Manual")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_marca_sucesso_e_flag_manual(self):
+        from apps.ri.services import marcar_log_rpa_eace_concluido_manualmente
+
+        log = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO, motivo_erro="valor_divergente")
+        marcar_log_rpa_eace_concluido_manualmente(log, usuario=self.user)
+
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.SUCESSO)
+        self.assertTrue(log.concluido_manualmente)
+        self.assertEqual(log.motivo_erro, "")
+        self.assertIsNotNone(log.executado_em)
+
+    def test_grava_historico_e_auditoria(self):
+        from apps.ri.services import marcar_log_rpa_eace_concluido_manualmente
+
+        log = LogRpaEace.objects.create(ri=self.ri)
+        marcar_log_rpa_eace_concluido_manualmente(log, usuario=self.user)
+
+        historico = self.ri.historico.get(campo=f"RPA EACE (Nota Fiscal #{log.pk})")
+        self.assertIn("manualmente", historico.valor_novo)
+        self.assertEqual(historico.autor, self.user)
+
+        registro = Auditoria.objects.get(
+            acao=Auditoria.EXECUCAO_RPA_EACE, entidade="LogRpaEace", entidade_id=log.pk,
+        )
+        self.assertEqual(registro.usuario, self.user)
+
+    def test_avanca_status_do_ri_quando_todos_os_logs_ficam_sucesso(self):
+        from apps.ri.services import marcar_log_rpa_eace_concluido_manualmente
+
+        log1 = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.SUCESSO)
+        log2 = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO)
+
+        marcar_log_rpa_eace_concluido_manualmente(log2, usuario=self.user)
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_nao_avanca_status_se_sobrar_outro_log_sem_sucesso(self):
+        from apps.ri.services import marcar_log_rpa_eace_concluido_manualmente
+
+        log1 = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.PENDENTE)
+        log2 = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO)
+
+        marcar_log_rpa_eace_concluido_manualmente(log2, usuario=self.user)
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+
+class RiLogRpaEaceMarcarManualViewTests(TestCase):
+    """RN-065 (2026-09-05): view do botão "Marcar como concluído
+    manualmente"."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-manual-view", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola Manual View")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.log = LogRpaEace.objects.create(ri=self.ri)
+
+    def _marcar(self):
+        return self.client.post(
+            reverse("ri_log_rpa_eace_marcar_manual", kwargs={"pk": self.log.pk}), {"next": ""},
+        )
+
+    def test_exige_login(self):
+        resp = self._marcar()
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_marca_como_sucesso_manual(self):
+        self.client.force_login(self.user)
+        self._marcar()
+
+        self.log.refresh_from_db()
+        self.assertEqual(self.log.resultado, LogRpaEace.SUCESSO)
+        self.assertTrue(self.log.concluido_manualmente)
+
+    def test_nao_deixa_marcar_log_ja_com_sucesso(self):
+        self.log.resultado = LogRpaEace.SUCESSO
+        self.log.save()
+        self.client.force_login(self.user)
+
+        self._marcar()
+
+        self.log.refresh_from_db()
+        self.assertFalse(self.log.concluido_manualmente, "não pode reescrever um sucesso já existente")
+
+    def test_nao_deixa_marcar_log_na_fila(self):
+        self.log.resultado = LogRpaEace.NA_FILA
+        self.log.save()
+        self.client.force_login(self.user)
+
+        self._marcar()
+
+        self.log.refresh_from_db()
+        self.assertEqual(self.log.resultado, LogRpaEace.NA_FILA, "não pode atropelar o consumidor da fila")
+
+
 class RotularDocumentosPdfTests(TestCase):
     """Melhoria (2026-09-04, RN-057): usuário reportou não ter como saber,
     antes de escolher o PDF no select de "Disparar RPA", qual Nota Fiscal
@@ -1408,10 +1522,13 @@ class BackfillLogsRpaEaceCommandTests(TestCase):
 
 
 class ContextoLogsRpaEaceTests(TestCase):
-    """FEAT-033: a seção "Notas Fiscais para anexar no portal EACE" só
-    aparece com o RI em "Resposta Financeiro" (pedido do usuário,
-    2026-09-03) - os logs continuam existindo depois que o RI avança,
-    só deixam de ser exibidos."""
+    """FEAT-033: a seção "Notas Fiscais para anexar no portal EACE"
+    aparece sempre que o RI tem pelo menos 1 `LogRpaEace` (RN-056) -
+    correção (2026-09-05): usuário reportou precisar dela continuar
+    visível mesmo depois que o RI avança de status, pra auditoria (ex.:
+    conferir quais Notas Fiscais foram concluídas manualmente, RN-065).
+    Sem log nenhum (RI "fora do padrão", sem anexo recebido) a seção
+    continua escondida, não importa o status."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -1427,16 +1544,26 @@ class ContextoLogsRpaEaceTests(TestCase):
         contexto = _contexto_logs_rpa_eace(self.ri, "")
         self.assertEqual(len(contexto["logs_rpa_eace"]), 1)
 
-    def test_com_ri_em_outro_status_esconde_os_logs(self):
+    def test_com_ri_em_outro_status_ainda_mostra_os_logs_para_auditoria(self):
         from apps.ri.views import _contexto_logs_rpa_eace
 
         self.ri.status = Ri.AGUARDANDO_VALIDACAO_EACE
         self.ri.save()
         contexto = _contexto_logs_rpa_eace(self.ri, "")
+        self.assertEqual(len(contexto["logs_rpa_eace"]), 1)
+
+    def test_sem_nenhum_log_esconde_a_secao_mesmo_em_resposta_financeiro(self):
+        """RI "fora do padrão" (RN-016): sem anexo recebido, sem log -
+        nada a mostrar, não importa o status."""
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        outra_escola = Escola.objects.create(inep="35083939", nome="Escola Sem Log")
+        outro_ri = Ri.objects.create(escola=outra_escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        contexto = _contexto_logs_rpa_eace(outro_ri, "")
         self.assertEqual(contexto["logs_rpa_eace"], [])
         self.assertFalse(contexto["existe_log_ativo"])
 
-    def test_secao_some_da_tela_quando_ri_avanca_de_status(self):
+    def test_secao_continua_na_tela_quando_ri_avanca_de_status(self):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
         self.assertContains(resp, "Notas Fiscais para anexar no portal EACE")
@@ -1444,7 +1571,7 @@ class ContextoLogsRpaEaceTests(TestCase):
         self.ri.status = Ri.AGUARDANDO_VALIDACAO_EACE
         self.ri.save()
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
-        self.assertNotContains(resp, "Notas Fiscais para anexar no portal EACE")
+        self.assertContains(resp, "Notas Fiscais para anexar no portal EACE")
 
     def test_processando_tambem_conta_como_log_ativo(self):
         """RN-058: o polling precisa continuar enquanto o log estiver

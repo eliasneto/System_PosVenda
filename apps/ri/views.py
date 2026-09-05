@@ -54,6 +54,7 @@ from .services import (
     comparar_kit_e_produtos_ixc_relatorio,
     comparar_status_escola_relatorio,
     consultar_pendencias_portal_eace,
+    marcar_log_rpa_eace_concluido_manualmente,
     gerar_planilha_faturamento,
     montar_corpo_email_financeiro,
     nome_arquivo_planilha_faturamento,
@@ -683,18 +684,24 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
     `oob=True` (padrão) é usado quando esta seção viaja concatenada com
     outros fragmentos numa resposta `hx-swap="none"` (disparo do log).
 
-    A seção só aparece com o RI em "Resposta Financeiro" (pedido do
-    usuário, 2026-09-03) - os logs continuam existindo depois que o RI
-    avança (RN-056) ou é destravado manualmente (FEAT-010), só deixam de
-    ser exibidos aqui. Isso também faz a seção sumir sozinha (via
-    polling) assim que o RI avançar de status."""
-    if ri.status != Ri.AGUARDANDO_ANEXO_PORTAL_EACE:
+    Correção (2026-09-05): a seção mostrava os logs só com o RI em
+    "Resposta Financeiro" e sumia sozinha assim que o RI avançava de
+    status (RN-056) - usuário reportou que precisa dela continuar visível
+    depois, pra auditoria (ex.: conferir quais Notas Fiscais foram
+    concluídas manualmente, RN-065). Agora o gate é só "existe algum log"
+    - uma vez criado (RN-056), o log nunca some da tela, esteja o RI em
+    "Resposta Financeiro" ou já tenha avançado (ou até voltado, FEAT-010).
+    Seguro mostrar o formulário de Disparar RPA junto: por construção, um
+    RI só avança de "Resposta Financeiro" quando TODOS os logs já são
+    "Sucesso" - então nesse ponto o `{% else %}` do template (onde mora o
+    formulário) nunca bate, só o bloco de resultado final."""
+    logs_rpa_eace = list(ri.logs_rpa_eace.select_related("documento_pdf", "documento_xml").all())
+    if not logs_rpa_eace:
         return {
             "ri": ri, "logs_rpa_eace": [], "documentos_pdf": [], "documentos_xml": [],
             "next_url": next_url, "existe_log_ativo": False, "oob": oob,
         }
 
-    logs_rpa_eace = list(ri.logs_rpa_eace.select_related("documento_pdf", "documento_xml").all())
     posicoes = _posicoes_na_fila()
     for log in logs_rpa_eace:
         log.posicao_na_fila = posicoes.get(log.pk)
@@ -775,6 +782,37 @@ def ri_log_rpa_eace_disparar_view(request, pk):
                 log.enfileirado_em = timezone.now()
                 log.save()
                 messages.success(request, "Nota Fiscal enviada para a fila do RPA EACE.")
+
+    if _requisicao_htmx(request):
+        return _fragmento_logs_rpa_eace_htmx(request, ri, next_url)
+    return redirect(next_url)
+
+
+@login_required
+def ri_log_rpa_eace_marcar_manual_view(request, pk):
+    """RN-065 (2026-09-05): usuário reportou precisar marcar 1 Nota
+    Fiscal como concluída manualmente (ex.: anexou direto no portal EACE
+    por fora, sem passar pela RPA) - sem isso o RI nunca avança de
+    "Resposta Financeiro" enquanto sobrar 1 log que não seja "Sucesso"
+    (RN-056). Disponível nos mesmos estados que aceitam "Disparar RPA"
+    (Pendente/Erro, ver `_logs_rpa_eace_detail.html`) - nunca a partir de
+    "Sucesso", "Na fila" ou "Processando"."""
+    log = get_object_or_404(LogRpaEace.objects.select_related("ri", "ri__escola"), pk=pk)
+    ri = log.ri
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
+
+    if request.method == "POST":
+        if log.resultado in (LogRpaEace.SUCESSO, LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO):
+            messages.error(
+                request,
+                "Esta Nota Fiscal não pode ser marcada como manual neste estado "
+                f"({log.get_resultado_display()}).",
+            )
+        else:
+            marcar_log_rpa_eace_concluido_manualmente(log, usuario=request.user)
+            messages.success(request, "Nota Fiscal marcada como concluída manualmente.")
 
     if _requisicao_htmx(request):
         return _fragmento_logs_rpa_eace_htmx(request, ri, next_url)
