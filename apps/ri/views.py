@@ -155,13 +155,40 @@ def _status_ri_opcoes_disponiveis(ri):
     pronto para envio hoje (`_pronto_para_envio_email_financeiro`) OU
     quando já é o status atual do RI (mantém visível/selecionado mesmo
     que algo tenha mudado depois, ex.: item excluído — mesmo tratamento
-    gracioso já usado para status automático em `_status_form.html`)."""
+    gracioso já usado para status automático em `_status_form.html`).
+
+    RN-066 (2026-09-05): a partir de "Implantação EACE", a única opção
+    oferecida é "Em Andamento".
+
+    RN-067 (2026-09-05, pedido do usuário): "Aguardando validação EACE" e
+    "Faturamento Concluído" só entram na lista a partir de "Resposta
+    Financeiro" (ou de onde o backend já aceitava chegar até eles - ver
+    `_validar_transicao_status_ri`); de "Em Andamento" (e de qualquer outro
+    status anterior) os dois somem do <select>. Também retirada "Correção
+    MEGA" fora de "Em Andamento" (mesma origem exigida no backend), por
+    consistência - só não fazia parte do pedido original.
+
+    Em todos os casos, o próprio destino continua na lista quando já é o
+    status atual do RI (senão o <select> nem conseguiria mostrá-lo como
+    selecionado) - mesma regra geral do "Envio de Email para Faturamento"
+    acima. Tudo aqui só evita sugerir um destino que o backend já recusa;
+    não substitui a validação de `_validar_transicao_status_ri`."""
+    if ri.status == Ri.IMPLANTACAO_EACE:
+        return [(valor, rotulo) for valor, rotulo in STATUS_RI_EDITAVEIS if valor == Ri.ANDAMENTO]
     return [
         (valor, rotulo)
         for valor, rotulo in STATUS_RI_EDITAVEIS
-        if valor != Ri.ENVIO_EMAIL_FATURAMENTO
-        or ri.status == Ri.ENVIO_EMAIL_FATURAMENTO
-        or _pronto_para_envio_email_financeiro(ri)
+        if (
+            valor != Ri.ENVIO_EMAIL_FATURAMENTO
+            or ri.status == Ri.ENVIO_EMAIL_FATURAMENTO
+            or _pronto_para_envio_email_financeiro(ri)
+        )
+        and (
+            valor != Ri.AGUARDANDO_VALIDACAO_EACE
+            or ri.status in (Ri.AGUARDANDO_ANEXO_PORTAL_EACE, Ri.FATURAMENTO_CONCLUIDO, Ri.AGUARDANDO_VALIDACAO_EACE)
+        )
+        and (valor != Ri.FATURAMENTO_CONCLUIDO or ri.status in (Ri.AGUARDANDO_VALIDACAO_EACE, Ri.FATURAMENTO_CONCLUIDO))
+        and (valor != Ri.CORRECAO_MEGA or ri.status in (Ri.ANDAMENTO, Ri.CORRECAO_MEGA))
     ]
 
 
@@ -209,6 +236,15 @@ def _validar_transicao_status_ri(ri, novo_status, usuario):
         # que tem nos demais status editáveis (RN-001). Sai antes de
         # qualquer outra regra, inclusive quando o destino seria permitido.
         return 'Só o Administrador pode alterar o status a partir de "Faturamento Concluído" (RN-020).'
+    # RN-066 (2026-09-05): pedido do usuário — a partir de "Implantação
+    # EACE", a única transição manual permitida é para "Em Andamento".
+    # Antes desta regra, "Implantação EACE" não tinha guarda de destino
+    # própria: por só não estar em STATUS_RI_MANUAIS (RN-001), o <select>
+    # (`_status_ri_opcoes_disponiveis`) oferecia todos os status manuais a
+    # partir dele, deixando pular etapas do fluxo (ex.: ir direto para
+    # "Envio de Email para Faturamento") sem passar por "Em Andamento".
+    if ri.status == Ri.IMPLANTACAO_EACE and novo_status != Ri.ANDAMENTO:
+        return 'A partir de "Implantação EACE", só é possível mudar o status para "Em Andamento" (RN-066).'
     if novo_status not in STATUS_RI_MANUAIS:
         # RN-019: exceção do Administrador — força a saída de "Aguardando
         # financeiro" direto para "Resposta Financeiro" (mesmo destino do
@@ -474,6 +510,11 @@ def grid_inep_view(request):
             "ri": ri_atual,
             "divergencia_aberta": divergencia_aberta,
             "kit_declarado_referencia": kit_declarado_referencia,
+            # RN-051/RN-066: mesma lista filtrada por RI já usada na tela de
+            # detalhe (`_status_ri_opcoes_disponiveis`) - antes o <select>
+            # do drill-down usava a lista global `STATUS_RI_EDITAVEIS`, sem
+            # filtrar por regra nenhuma (nem RN-051, nem a nova RN-066).
+            "status_ri_opcoes_disponiveis": _status_ri_opcoes_disponiveis(ri_atual) if ri_atual else [],
         }
         # FEAT-008: assunto sugerido (com o código de rastreio RN-009) para
         # pré-preencher a tela de composição de e-mail — só quando o botão
@@ -506,7 +547,6 @@ def grid_inep_view(request):
             "divergencia_filtro": divergencia_filtro,
             "status_conexao_opcoes": Escola.STATUS_CONEXAO_CHOICES,
             "status_ri_opcoes": Ri.STATUS_CHOICES,
-            "status_ri_editaveis": STATUS_RI_EDITAVEIS,
             "status_ri_manuais": STATUS_RI_MANUAIS,
             # RN-012: usuários do sistema para o <select> de reatribuição do
             # responsável, dentro do drill-down.
@@ -568,7 +608,7 @@ def _fragmento_status_htmx(request, ri, next_url):
             "ri": ri,
             "next_url": next_url,
             "status_ri_manuais": STATUS_RI_MANUAIS,
-            "status_ri_editaveis": STATUS_RI_EDITAVEIS,
+            "status_ri_opcoes_disponiveis": _status_ri_opcoes_disponiveis(ri),
             # RN-019: exceção do Administrador — botão para forçar a saída
             # manual de "Aguardando financeiro".
             "usuario_administrador": request.user.is_administrador,
@@ -697,14 +737,44 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
     formulário) nunca bate, só o bloco de resultado final."""
     logs_rpa_eace = list(ri.logs_rpa_eace.select_related("documento_pdf", "documento_xml").all())
     if not logs_rpa_eace:
+        # Melhoria (pedido do usuário, 2026-09-07): usuário reportou um RI
+        # em "Resposta Financeiro" sem a seção de Notas Fiscais aparecer
+        # (INEP 35271561) - causa real: RN-016 avança o status a QUALQUER
+        # resposta do financeiro, mesmo "fora do padrão" (sem PDF/XML
+        # anexado, ver `sincronizar_email_financeiro`), e sem PDF/XML não
+        # há Nota Fiscal (`LogRpaEace`) pra criar. Antes disso só ficava
+        # registrado no Histórico de Comunicação, fácil de passar batido -
+        # aviso aqui avisa direto onde o usuário esperava ver a automação.
+        aviso_resposta_fora_padrao = ri.status in (
+            Ri.AGUARDANDO_ANEXO_PORTAL_EACE, Ri.AGUARDANDO_VALIDACAO_EACE, Ri.FATURAMENTO_CONCLUIDO,
+        )
         return {
             "ri": ri, "logs_rpa_eace": [], "documentos_pdf": [], "documentos_xml": [],
             "next_url": next_url, "existe_log_ativo": False, "oob": oob,
+            "aviso_resposta_fora_padrao": aviso_resposta_fora_padrao,
         }
 
     posicoes = _posicoes_na_fila()
     for log in logs_rpa_eace:
         log.posicao_na_fila = posicoes.get(log.pk)
+
+    # Melhoria (pedido do usuário, 2026-09-05): usuário reportou escolher às
+    # vezes o PDF errado pra cada "Nota Fiscal #N" e só descobrir depois de
+    # um "Erro (valor divergente)" - pediu pra ver OSP/Produto/Valor de cada
+    # uma ANTES de escolher, pra se guiar. Já existiu uma versão disso
+    # consultando o portal EACE ao vivo (RN-063), removida por pedido do
+    # próprio usuário no mesmo dia (lenta, exigia clique); desta vez optou
+    # explicitamente por usar o dado JÁ sincronizado localmente (Lado
+    # Relatório EACE/RN-022) em vez de consultar o portal de novo -
+    # instantâneo, mas pode estar desatualizado em relação ao portal.
+    # Sem chave real ligando 1 log a 1 item (o e-mail do financeiro só diz
+    # "recebi N PDF/N XML", RN-016), a correspondência é só posicional (1º
+    # item com OSP preenchido == "Nota Fiscal #1" etc.) - serve de guia, não
+    # de garantia.
+    itens_com_osp = list(ri.itens_relatorio_eace.exclude(num_osp="").order_by("id"))
+    for log, item in zip(logs_rpa_eace, itens_com_osp):
+        item.valor_total = item.valor_unitario * item.quantidade
+        log.item_referencia = item
 
     return {
         "ri": ri,

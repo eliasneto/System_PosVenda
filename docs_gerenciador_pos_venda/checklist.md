@@ -1,5 +1,5 @@
 # Checklist — Gerenciador Pós-Venda (v1 · Faturamento EACE por INEP)
-_Última atualização: 2026-09-03_
+_Última atualização: 2026-09-08_
 
 > **Versão-alvo:** 1.0.0. **Nome exibido no menu do sistema:** "Gerenciador
 > Pós Venda" (sem hífen) — ver `architecture.md`, "Identidade do Sistema e
@@ -3021,7 +3021,15 @@ processo em segundo plano — ver "Critérios de aceite")
 consumidor rodando de verdade em produção — DevOps —, mais 3 extensões
 pós-Fase 3: correção de bugs reais de tela, registro de cada execução na
 linha do tempo/auditoria — RN-059 — e imutabilidade pós-sucesso — RN-060
-—, e barra de progresso por etapa — RN-061; ver Entrega do Dev/DevOps)
+—, e barra de progresso por etapa — RN-061; mais 5 extensões em
+2026-09-04/05: rótulo de Produto/Valor no select de PDF, consulta de
+pendências do portal antes de escolher a NF — RN-063 —, OSP resolvida
+pelo item certo da NF — RN-064 —, correção de um falso positivo do
+Django que travava a barra de progresso, e botão para marcar Nota
+Fiscal como concluída manualmente — RN-065; seção de Notas Fiscais não
+some mais quando o RI avança de status, fica visível para auditoria;
+**deploy em produção concluído** com todas essas mudanças; ver Entrega
+do Dev/DevOps)
 **Prioridade:** Alta — parte do gap "Hub de Integrações v2", prazo já
 registrado em `architecture.md` (04/09/2026).
 **Critérios de aceite:**
@@ -3097,8 +3105,30 @@ _Extensões pós-Fase 3 (2026-09-03/04):_
   XML, validado também no backend — RN-060. ✅
 - Barra de progresso por etapa (16 etapas fixas) enquanto "Processando",
   atualizada em tempo real via o mesmo polling — RN-061. ✅
-**Regras relacionadas:** RN-056, RN-057, RN-058, RN-059 (nova), RN-060
-(nova), RN-061 (nova), RN-005, RN-016, RN-001, RN-006, RN-008.
+
+_Extensões 2026-09-04/05 (RN-063/064/065, correções de tela e produção):_
+- Select de PDF mostra Produto/Valor extraídos do arquivo (extensão da
+  RN-057) — evita escolher às cegas. ✅
+- Botão "Consultar pendências no portal EACE" (RN-063) mostra o que cada
+  OSP do RI tem cadastrado antes de disparar, cobrindo todas as OSPs
+  distintas do RI. ✅
+- OSP resolvida pelo item cujo Valor TOTAL (unitário × quantidade) bate
+  com o Valor da NF, não mais "qualquer" OSP do RI — RI com itens em
+  OSPs diferentes mandava a NF certa pra OSP errada (RN-064). ✅
+- Corrigido falso positivo do Django (`SynchronousOnlyOperation`) que
+  travava a barra de progresso (RN-061) durante a execução real. ✅
+- Botão "Marcar como concluído manualmente" (RN-065) por Nota Fiscal,
+  conta como "Sucesso" pro avanço automático do RI, com registro de
+  quem marcou. ✅
+- Seção de Notas Fiscais não some mais quando o RI avança de status —
+  fica visível para auditoria. ✅
+- 22 RIs que já estavam em "Resposta Financeiro" antes do log existir
+  corrigidos com log retroativo (comando `backfill_logs_rpa_eace`). ✅
+- Deploy em produção concluído e validado (login, logo, migrations só
+  as novas). ✅
+**Regras relacionadas:** RN-056, RN-057, RN-058, RN-059, RN-060, RN-061,
+RN-063 (nova), RN-064 (nova), RN-065 (nova), RN-005, RN-016, RN-001,
+RN-006, RN-008.
 **Dependências:** FEAT-010 (fluxo manual hoje existente, `🔍 Aguardando
 QA`); FEAT-009 (identificação da resposta do financeiro, RN-016).
 **Tipo de validação:** QA (QA-033) — ainda não acionado; Fase 1/2/3 e as
@@ -3220,17 +3250,301 @@ testes automatizados.
   enquanto "Processando".
 - 7 testes novos; suíte completa (502 testes) sem regressão; validado
   renderizando o fragmento HTML de verdade (barra e texto corretos).
-**Pendência atual:** Fase 1 falta 1 upload real para fechar 100% (mesma
-pendência de antes). Regra de avanço automático (RN-056) registrada como
-interpretação do Orquestrador (todos os logs com sucesso) — confirmar
-com o usuário antes de fechar o QA. Feature segue `🔄 Em andamento`;
-QA-033 ainda não foi criado nem acionado.
+**Entrega do Dev (2026-09-04, rótulo de PDF + RN-063 consulta de pendências):**
+- Select de "Nota fiscal (PDF)" passa a mostrar Produto/Valor extraídos
+  do próprio arquivo (extensão RN-057) — usuário reportou escolher às
+  cegas, só descobria a NF errada depois de um "Erro (valor
+  divergente)".
+- Botão "Consultar pendências no portal EACE" (RN-063, nova) — leitura
+  somente-consulta, sem subir nada, cobrindo todas as OSPs distintas do
+  RI.
+- Testes novos cobrindo o núcleo de consulta, o serviço e a view; suíte
+  completa sem regressão.
+**Entrega do Dev (2026-09-04, RN-064 — OSP pelo item certo da NF):**
+- Usuário testou ao vivo (INEP 53005090, upload real contra o portal
+  em produção) e reportou: corrigiu a OSP do item, mas a RPA continuava
+  usando a OSP errada — causa: o código pegava "qualquer" OSP não vazia
+  do RI, ignorando qual NF estava sendo processada.
+- OSP resolvida (RN-064, nova) casando o Valor TOTAL da NF (Valor
+  Unitário × Quantidade) contra os itens do Relatório EACE — 2ª correção
+  no mesmo dia: comparar só o Valor Unitário nunca batia para item com
+  mais de 1 unidade.
+- Corrigido também um falso positivo do Django
+  (`SynchronousOnlyOperation`) que travava a gravação da barra de
+  progresso (RN-061) durante a execução real da RPA.
+- Suíte completa (410 testes) sem regressão.
+**Entrega do Dev (2026-09-04, backfill de RIs anteriores ao log por Nota Fiscal):**
+- Usuário reportou em produção: vários INEPs já em "Resposta
+  Financeiro" não mostravam os inputs de anexar NF — causa: chegaram
+  nesse status antes do `LogRpaEace` existir, já tinham os documentos
+  mas nenhum log.
+- Comando `backfill_logs_rpa_eace` (com `--dry-run`) cria 1 log por PDF
+  recebido, só para RI sem log nenhum ainda — nunca duplica quem já foi
+  processado pelo fluxo normal.
+- Rodado em produção: 50 logs criados em 22 RIs.
+- Suíte completa sem regressão.
+**Entrega do Dev (2026-09-04, indicador de carregamento):**
+- Usuário reportou: clique em "Consultar pendências" não mostrava se
+  estava rodando (requisição de até 1 minuto, sem indicação visual).
+- Spinner + texto "Consultando..." enquanto a requisição está em voo;
+  botão desabilitado no mesmo intervalo (evita clique duplo abrindo 2
+  navegadores contra o mesmo login do portal).
+**Entrega do Dev (2026-09-05, RN-065 — marcar Nota Fiscal como concluída manualmente):**
+- Usuário reportou precisar de um jeito de marcar 1 Nota Fiscal como
+  concluída quando foi anexada direto no portal EACE por fora da
+  automação — sem isso o RI ficava travado em "Resposta Financeiro"
+  para sempre.
+- Botão "Marcar como concluído manualmente" (RN-065, nova; estados
+  Pendente/Erro) grava o mesmo resultado "Sucesso" de uma execução
+  automática, com registro de quem marcou (linha do tempo do RI +
+  Auditoria) e badge própria na tela, distinta de "Sucesso" automático.
+- Corrigido também: a seção de Notas Fiscais não some mais quando o RI
+  avança de status — usuário reportou precisar dela visível para
+  auditoria.
+- Suíte completa (419 testes) sem regressão.
+**Entrega do DevOps (2026-09-04/05, deploy em produção):**
+- Deploy do código desta sessão em produção (`192.168.90.109`),
+  seguindo o runbook de `DEPLOYMENT.md`: backup do banco validado antes
+  de cada mudança, código atualizado, containers reconstruídos,
+  migrations aplicadas (só as novas, confirmando que o volume real foi
+  usado), Nginx reiniciado, site validado (login/logo/200).
+- Disco do servidor ficou sem espaço no meio do 1º build (92% cheio) —
+  limpeza da stack antiga aposentada + cache de build do Docker liberou
+  espaço (~2,6GB) para concluir.
+- Credenciais do portal EACE (`EACE_URL`/`EACE_USUARIO`/`EACE_SENHA`)
+  configuradas no `.env.hml` do servidor — 1º deploy com o
+  `rpa_eace_worker` rodando lá.
+- **Risco em aberto:** disco do servidor segue em ~86% de uso — vale
+  uma revisão de capacidade/rotina de limpeza antes do próximo deploy.
+**Pendência atual:** upload real contra o portal confirmado de ponta a
+ponta em produção (INEP 53005090, múltiplas Notas Fiscais) — a
+pendência antiga de Fase 1 está resolvida. Regra de avanço automático
+(RN-056) confirmada na prática (manual e automático contam igual,
+RN-065). Risco em aberto: capacidade de disco do servidor de produção
+(~86% em uso). Feature segue `🔄 Em andamento`; QA-033 ainda não foi
+criado nem acionado.
+
+---
+
+### FEAT-034 — Submenu MIP (Projeto > MIP): grid de INEPs em Validação EACE com os 3 lados do RI
+**Descrição:** Novo item de menu dentro de "Projeto" (ver "Estrutura de
+navegação", `architecture.md`), ao lado de "Equipamentos" (grid da
+FEAT-007). Duas telas: (1) grid `/mip/`, mostrando só os INEPs cujo RI
+atual está em "Aguardando validação EACE" (RN-074) — colunas INEP (com
+bolinha de sincronização, RN-081), Nome, Estado, Município (RN-078),
+Valor Total (IXC) e Valor Total (EACE) (RN-076/RN-077); filtros de
+busca, Estado/Município (RN-079) e data de entrada nesse status
+(RN-075); cards "Com divergência" (RN-071) e "No período" (RN-073);
+linha de total geral (RN-080); lista à parte "Fora da Validação EACE"
+para INEPs encontrados na última sincronização mas fora desse status
+(RN-081); (2) ao clicar em qualquer INEP, tela `/mip/<inep>/` (sem o
+filtro de status) com os mesmos 3 lados do RI (Kit declarado, IXC,
+Relatório EACE) juntos, só leitura, usando o Valor de serviço do
+catálogo em vez do Valor de equipamento usado no RI (RN-067), mais o
+histórico de comunicação — o mesmo do RI, não um separado (RN-068).
+**Tipo:** frontend-functional
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média — pedida pelo usuário fora do roadmap original;
+sem prazo formal registrado.
+**Critérios de aceite:**
+- Menu "Projeto" ganha o item "MIP", ao lado de "Equipamentos"
+  (`core/base.html`). ✅
+- Grid `/mip/` mostra só os INEPs com RI atual em "Aguardando validação
+  EACE" (RN-074), com busca por INEP/nome/Estado/Município, filtros de
+  Estado/Município do tipo lista (RN-079) e de data de entrada nesse
+  status (RN-075), e paginação (25 por página). ✅
+- Clique em qualquer INEP (grid ou qualquer um dos 3 cards do
+  drill-down) abre `/mip/<inep>/`, sem esse filtro de status, com os 3
+  lados juntos (mesma estrutura da tela do RI, `ri_detail`), só
+  leitura:
+  - Lado 1 (Kit declarado): mesmos itens do RI (`RiItemEace`) quando já
+    lançados; sem lançamento, cai na mesma referência ao vivo que o
+    Grid de Equipamentos já usa (RN-010). ✅
+  - Lado 2 (IXC): mesmos itens do RI (`RiItemIxc`). ✅
+  - Lado 3 (Relatório EACE): itens sincronizados pela FEAT-035
+    (RN-070). ✅
+- Valor mostrado nos lados 1 e 2 é `KitPadrao.valor_servico`, não
+  `KitPadrao.valor_faturavel` (valor de equipamento) usado no RI
+  (RN-067); sem correspondência no catálogo, mostra aviso — nunca
+  inventa valor. ✅
+- Grid mostra as colunas Valor Total (IXC) e Valor Total (EACE)
+  (RN-076/RN-077), com destaque em amarelo quando os dois totais
+  divergem, e uma linha de total geral que reflete os filtros aplicados
+  (RN-080). ✅
+- Bolinha verde/vermelha no INEP, sobre o resultado da última
+  sincronização do Relatório EACE (MIP); INEP encontrado na planilha
+  mas fora da Validação EACE aparece numa lista própria abaixo do grid
+  (RN-081). ✅
+- Histórico de comunicação reaproveita o do RI (`RiHistorico`/
+  `ri/_historico_panel.html`) — mesmo formulário, mesmos dados; não é
+  um histórico separado do MIP (RN-068). Sem RI iniciado para o INEP,
+  mostra aviso no lugar do histórico. ✅
+- Tela de detalhe mostra, junto do card "IXC (2º)", a data de
+  recebimento da Nota Fiscal (PDF+XML) mais recente enviada pelo
+  financeiro para o RI daquele INEP; com mais de 1 Nota Fiscal, mostra
+  só a mais recente; não aparece no grid principal (RN-072). ✅
+**Regras relacionadas:** RN-066 (substituída por RN-074), RN-067,
+RN-068, RN-010, RN-072, RN-073, RN-074, RN-075, RN-076, RN-077, RN-078,
+RN-079, RN-080, RN-081.
+**Dependências:** FEAT-002 (Escola), FEAT-004 (cadastro do RI e
+itens), FEAT-007 (grid de Equipamentos), FEAT-015 (catálogo LPU/
+`KitPadrao`), FEAT-035 (Sincronizador do Lado 3 e da bolinha de status).
+**Tipo de validação:** QA (QA-034).
+**Entrega do Dev:**
+- Grid `/mip/` restrito a INEPs em "Aguardando validação EACE"
+  (RN-074), com filtros de busca, Estado/Município (RN-079) e data de
+  entrada nesse status (RN-075).
+- Colunas Valor Total (IXC) e Valor Total (EACE) com destaque de
+  divergência (RN-076/RN-077), Estado/Município no lugar de Endereço
+  (RN-078), linha de total geral (RN-080) e bolinha de sincronização
+  com lista "Fora da Validação EACE" (RN-081).
+- Tela de detalhe (`/mip/<inep>/`) mantém os 3 lados e o histórico
+  compartilhado com o RI (RN-067/RN-068), sem o filtro de status —
+  qualquer INEP cadastrado continua acessível direto pela URL.
+- `KitPadrao.resolver_por_item` criado (promovido de uma função privada
+  do RI), reaproveitado pelo RI (valor de equipamento) e pelo MIP
+  (valor de serviço), sem duplicar a regra de cruzamento.
+- Suíte completa `apps.escolas` + `apps.ri`: 530 testes, sem regressão.
+- Validado no navegador real (Docker + Playwright), desktop e mobile,
+  inclusive contra dado real de produção (INEPs reais em Validação
+  EACE e sincronização real já rodada no ambiente).
+**Pendência atual:** Nenhuma pendência funcional conhecida. QA-034
+ainda não foi acionado.
+
+---
+
+### FEAT-035 — Administrador > Relatório EACE (MIP): upload e Sincronizador do Lado 3
+**Descrição:** Nova tela dentro de "Administrador" (`apps.escolas`), no
+mesmo padrão de arquivo único (singleton, substituído a cada envio) da
+"Planilha EACE" já usada pelo RI (FEAT-023) — telas e models separados,
+sem alterar o que já existe para o RI (que passa a se chamar
+"Relatório EACE (RI)" no menu, só para os dois ficarem no mesmo
+padrão de nome). Diferença pedida pelo usuário: cada envio exige
+também um período (Data inicial e Data final). Fonte real indicada
+pelo usuário: `doc/Base MIP.xlsx`. Usuário pediu, na sequência, que o
+Sincronizador use "as mesmas regras de sincronização do RI" — o botão
+"Sincronizar todos os INEPs" agora lança os itens do Lado 3 do MIP por
+Escola, casando a Descrição com o catálogo pelo mesmo critério do
+Sincronizador do RI (RN-022), mas gravando o Valor de serviço (RN-067)
+numa tabela própria, independente do Lado 3 do RI. Usuário pediu, na
+sequência, o mesmo confronto de divergência que o RI já tem (RN-003),
+só que comparando **Valor de serviço** entre o Lado IXC (2º) e o Lado
+Relatório EACE do MIP (3º) — nunca Quantidade nem Valor de
+equipamento: card "Com divergência" (com filtro) no grid do MIP, linha
+destacada em vermelho, item divergente destacado no drill-down e na
+tela de detalhe.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média — resolve a pendência do Lado 3 (Relatório EACE)
+do MIP, aberta na FEAT-034.
+**Critérios de aceite:**
+- Menu "Administrador" ganha o item "Relatório EACE (MIP)". ✅
+- Upload aceita só `.xlsx`, validado pelas colunas Projeto (INEP),
+  Descrição do Item, Qtde Produto, Valor Unit UR, Data Emissão ACS, UF
+  e CIDADE, em qualquer aba do arquivo — nome da aba não é fixo
+  (RN-069). ✅
+- Upload não exige Data inicial/Data final — período é editado à parte,
+  direto no card "Arquivo ativo", sem precisar reimportar o arquivo;
+  data inicial não pode ser depois da final (RN-069 alterada). ✅
+- Botão "Sincronizar todos os INEPs" lança/atualiza/remove os itens do
+  Lado 3 do MIP por Escola, mesmo casamento Descrição×catálogo do
+  Sincronizador do RI, protegendo o já lançado quando a planilha traz
+  outro KIT (RN-070). ✅
+- Cada sincronização grava, em toda Escola, se o INEP apareceu ou não
+  na planilha daquela rodada — alimenta a bolinha verde/vermelha do
+  grid do MIP (RN-081, FEAT-034). ✅
+- Acesso restrito a Administrador (RN-004). ✅
+- Card "Com divergência" (com filtro `?divergencia=1`) no grid do MIP,
+  linha destacada em vermelho, comparando Valor de serviço entre Lado
+  IXC (2º) e Lado Relatório EACE do MIP (3º); item divergente destacado
+  no drill-down do grid e na tela de detalhe (RN-071). ✅
+- Card "No período", no grid do MIP, conta/filtra os INEPs com item do
+  Lado 3 cuja Data Emissão ACS cai dentro do período definido no
+  arquivo ativo (RN-073). ✅
+**Regras relacionadas:** RN-069, RN-067, RN-070, RN-071, RN-073,
+RN-081.
+**Dependências:** FEAT-034 (MIP), FEAT-023/FEAT-024 (padrão de upload,
+Sincronizador e confronto de divergência já usados pelo RI, RN-003).
+**Tipo de validação:** QA (QA-035).
+**Entrega do Dev:**
+- Reaproveitadas as funções de casamento do Sincronizador do RI
+  (promovidas para público em `apps.ri.services`), sem duplicar a
+  regra — só o Valor de serviço e a tabela de destino mudam.
+- Confronto de divergência calculado ao vivo a cada requisição (sem
+  tabela própria, diferente do `RiDivergencia` do RI) — Lado 2 pode
+  mudar a qualquer momento pela tela do RI, então não daria pra
+  confiar num valor persistido só atualizado no Sincronizador.
+- Período (Data inicial/Data final) passou a ser editado à parte, no
+  card "Arquivo ativo", sem precisar reimportar o arquivo; usado pelo
+  card/filtro "No período" do grid do MIP (RN-073).
+- Sincronização grava campo novo em `Escola`
+  (`encontrado_relatorio_eace_mip`) usado pela bolinha do grid do MIP
+  (RN-081, FEAT-034).
+- Testado com o arquivo real `doc/Base MIP.xlsx` — validação e
+  sincronização passam; suíte completa (`apps.ri` + `apps.escolas`, 530
+  testes) sem regressão.
+- Coluna "Cod Fornecedor" da planilha passou a ser obrigatória no
+  upload e gravada em `Escola.cod_fornecedor` pelo Sincronizador —
+  usuário pediu para usar esse código junto com o INEP num arquivo
+  Excel futuro. Preservado quando o INEP some de uma rodada, mesma
+  regra do `encontrado_relatorio_eace_mip`.
+  **Pendência:** registrar a regra em `business_rules.md` (Orquestrador) —
+  fora do escopo do Dev.
+- Validado no navegador real (Docker + Playwright): grid (com e sem
+  divergência), detalhe e tela de upload, desktop e mobile, sem erro de
+  console, sem rolagem horizontal; sincronização real já rodada no
+  ambiente de desenvolvimento, dado usado para validar a bolinha.
+**Pendência atual:** Nenhuma pendência funcional conhecida. QA-035
+ainda não foi acionado.
+
+---
+
+### FEAT-036 — Limite de altura e rolagem interna nos cards de itens do detalhe do RI
+**Descrição:** Os 3 cards da tela de detalhe do RI (Kit declarado, IXC,
+Relatório EACE) cresciam sem limite conforme itens eram lançados — com
+muitos equipamentos no RI, o card esticava a página inteira para baixo.
+**Tipo:** frontend-layout
+**Status:** ✅ Concluída
+**Prioridade:** Baixa — ajuste puramente visual, sem impacto funcional.
+**Critérios de aceite:**
+- Lista de itens lançados de cada um dos 3 cards (Kit declarado, IXC,
+  Relatório EACE) tem altura máxima de 384px, com rolagem interna
+  própria quando os itens ultrapassam esse limite.
+- Nenhuma mudança de comportamento, dado ou item disponível nos 3
+  cards.
+**Regras relacionadas:** nenhuma — ajuste exclusivamente visual, sem
+regra de negócio (CLAUDE.md, `.claude/agents/dev.md` §3).
+**Dependências:** nenhuma (tela já existente do RI).
+**Tipo de validação:** Validação visual do usuário — sem QA (ajuste
+`frontend-layout` sem RN vinculada).
+**Entrega do Dev (2026-09-08):**
+- Altura travada (`max-h-96`) + rolagem própria (`overflow-y-auto`)
+  aplicada nas 3 listas de itens lançados
+  (`apps/ri/templates/ri/ri_detail.html`), mesmo padrão já usado no
+  formulário de "Produtos" da mesma tela.
+- Validado no navegador real (Docker + Playwright): RI de teste com 10
+  itens em cada lado, screenshot desktop e mobile, e confirmação de que
+  os 3 containers são roláveis (`scrollHeight > clientHeight`); dados
+  de teste apagados ao final.
+**Pendência atual:** nenhuma — validado pelo usuário em 2026-09-08
+(confirmou o valor de 384px).
 
 ---
 
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-08 | Dev implementou, fora do fluxo Orquestrador→Dev (autorizado pelo usuário), a geração da planilha de faturamento de implantação a partir do filtro Estado+Município do grid Projeto > MIP — 1 arquivo por Município, somando o Valor Total (IXC) das escolas do filtro (RN-076) e listando os INEPs/Cód. Fornecedor no texto da Nota Fiscal; ainda sem tela própria (só um comando de gestão provisório, para gerar/testar o arquivo); testes novos passando, suíte completa de `apps.escolas` e `apps.ri` sem regressão | Usuário pediu a geração automática dessa planilha a partir do filtro do MIP; falta ao Orquestrador formalizar a RN desta feature em `business_rules.md` e criar a `FEAT-XXX` correspondente, e ao usuário/Orquestrador decidir onde o arquivo fica disponível na tela e como/quando informar a "Data de envio" (por ora é só parâmetro da função) |
+| 2026-09-08 | `FEAT-036` criada e já `✅ Concluída` — cards de itens da tela de detalhe do RI (Kit declarado, IXC, Relatório EACE) ganham altura máxima de 384px com rolagem interna, evitando que cresçam sem limite com muitos equipamentos lançados | Usuário reportou que, com muitos equipamentos no RI, os cards ficavam muito grandes "pra baixo"; Dev aplicou o mesmo padrão `max-h-96 overflow-y-auto` já usado no formulário de Produtos da mesma tela e validou visualmente (Playwright); usuário confirmou o valor de 384px |
+| 2026-09-07 | `FEAT-034` recebe adição — Lado 2 (IXC) da tela de detalhe do MIP passa a mostrar a data de recebimento da Nota Fiscal (PDF+XML) mais recente do financeiro (RN-072 nova, mesmo dado já usado pela RN-056 do RI); com mais de 1 Nota Fiscal, mostra só a mais recente; 4 testes novos, suíte completa (605 testes) sem regressão | Usuário pediu para mostrar a data do recebimento do e-mail do financeiro com XML/PDF no Lado 2 do MIP; questionado sobre múltiplas Notas Fiscais e onde exibir, confirmou "só a mais recente" e "só na tela de detalhe"; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |
+| 2026-09-07 | `FEAT-035` atualizada — Sincronizador do Lado 3 do MIP (RN-070 nova, botão "Sincronizar todos os INEPs", mesma regra de casamento Descrição×catálogo do RI, RN-022, gravando Valor de serviço em `EscolaItemRelatorioEaceMip`) e confronto de divergência de Valor de serviço entre Lado IXC e Lado Relatório EACE do MIP (RN-071 nova, mesmo card/filtro/destaque do RN-003, calculado ao vivo); 27 testes novos, suíte completa (404 `apps.ri` + 64 `apps.escolas`) sem regressão | Usuário pediu o Sincronizador "com as mesmas regras do RI" e, na sequência, "o mesmo card de divergente que tem na RI", validando só Valor de serviço; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |
+| 2026-09-07 | `FEAT-035` criada — "Administrador > Relatório EACE (MIP)" (RN-069 nova): upload de arquivo `.xlsx` único (singleton, mesmo padrão da Planilha EACE do RI), validado pelas colunas Projeto/Descrição do Item/Qtde Produto/Valor Unit UR/Data Emissão ACS/UF/CIDADE em qualquer aba, mais período obrigatório (Data inicial/Data final); item existente do menu renomeado de "Planilha EACE" para "Relatório EACE (RI)"; testado com o arquivo real (`doc/Base MIP.xlsx`); 8 testes novos, suíte completa (404 `apps.ri` + 45 `apps.escolas`) sem regressão; `FEAT-034` (pendência do Lado 3) atualizada para apontar pra esta feature | Usuário pediu a tela de upload (mesmo padrão da Planilha EACE do RI, com Data inicial/Data final a mais) para resolver a pendência do Lado 3 do MIP e, na sequência, indicou a fonte real e as colunas a ler; Sincronizador (uso do período, o que alimenta no Lado 3) segue em aberto |
+| 2026-09-07 | `FEAT-034` criada — submenu "MIP" em Projeto (RN-066/067/068 novas): grid cadastral de INEPs (`/mip/`) e tela com os 3 lados do RI juntos (`/mip/<inep>/` — Kit declarado/IXC/Relatório EACE-pendente), só leitura, usando Valor de serviço do catálogo em vez do Valor de equipamento; histórico de comunicação reaproveitado do RI, não duplicado; 24 testes novos, suíte completa (574 testes) sem regressão | Usuário pediu o submenu MIP com "a visão de todos os INEPs" e, na sequência, a mesma estrutura de cards e a mesma tela de histórico do RI, unificando num histórico só para os dois; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |
+| 2026-09-05 | RN-065 criada (botão "Marcar como concluído manualmente" por Nota Fiscal — conta como "Sucesso" pro avanço automático do RI, RN-056, com registro de quem marcou); correção: a seção "Notas Fiscais para anexar no portal EACE" não some mais quando o RI avança de status (gate passa a ser "existe algum log", não mais o status do RI) — RN-056 (Visibilidade na tela) atualizada; 19 testes novos/atualizados, suíte completa (419 testes) sem regressão; deploy em produção validado | Usuário testou ao vivo em produção (INEP 53005090) e reportou precisar marcar Nota Fiscal concluída manualmente quando a RPA não consegue (ex.: anexada por fora) e reportou a seção sumindo da tela ao avançar o status, quando precisava dela visível para auditoria; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |
+| 2026-09-04 | Comando `backfill_logs_rpa_eace` criado — 50 `LogRpaEace` retroativos criados em produção para 22 RIs que chegaram em "Resposta Financeiro" antes desse log existir (já tinham os documentos, nenhum log); botão "Consultar pendências no portal EACE" (RN-063 nova) ganha indicador de carregamento (spinner + botão desabilitado durante a requisição) | Usuário reportou em produção "vários INEPs já com status de Resposta Financeiro e não aparece os inputs do RPA"; depois reportou que o clique em "Consultar pendências" não dava nenhum sinal de estar rodando |
+| 2026-09-04 | RN-064 criada (OSP resolvida pelo item do Relatório EACE cujo Valor TOTAL — unitário × quantidade — bate com o Valor da NF, não mais "qualquer" OSP não vazia do RI); corrigido falso positivo do Django (`SynchronousOnlyOperation`, causado pelo event loop do `sync_playwright`) que travava a barra de progresso (RN-061) durante a execução real; upload real contra o portal em produção confirmado de ponta a ponta (INEP 53005090), fechando a pendência antiga da Fase 1 | Usuário testou ao vivo em produção (INEP 53005090, RI com itens em OSPs diferentes) e reportou a RPA usando a OSP errada mesmo após corrigir o dado, e depois que o valor unitário de um item de 3 unidades não batia porque faltava multiplicar pela quantidade |
+| 2026-09-04 | RN-063 criada (consulta somente-leitura das pendências do portal EACE, por OSP, antes de escolher a Nota Fiscal); select de PDF passa a mostrar Produto/Valor extraídos do arquivo (extensão da RN-057) | Usuário reportou não ter como saber, escolhendo às cegas, qual NF batia com qual linha do portal — só descobria depois de um "Erro (valor divergente)" |
+| 2026-09-04/05 | Deploy em produção (`192.168.90.109`) de todas as mudanças desta sessão da FEAT-033, seguindo o runbook de `DEPLOYMENT.md` (backup validado, migrations só as novas, Nginx reiniciado, site validado); limpeza de disco (stack antiga aposentada + cache de build) para concluir o 1º build; credenciais do portal EACE configuradas no `.env.hml` do servidor (1º deploy com o `rpa_eace_worker` lá) | Usuário pediu para levar o trabalho da sessão pro servidor pra testar com outros INEPs reais; disco ficou sem espaço no meio do processo (92%), resolvido com limpeza segura (sem mexer em outros sistemas do mesmo servidor) |
 | 2026-09-04 | FEAT-033 recebe a extensão da barra de progresso por etapa (RN-061 nova) — 16 etapas fixas no núcleo do RPA, `LogRpaEace.etapa_atual`/`progresso_pct` (migração `0031`), zerados a cada nova tentativa; 7 testes novos, suíte completa (502 testes) sem regressão | Usuário pediu para acompanhar cada etapa da RPA como porcentagem numa barra de progresso, "até pra que o usuário possa ver se não está travado"; Orquestrador formaliza entrega já validada pelo Dev (renderização real do fragmento conferida) |
 | 2026-09-03 | FEAT-033 recebe 3 extensões pós-Fase 3: correção de 3 bugs reais de tela (estado "Processando" ausente, posição na fila ausente, conflito real de `hx-swap-oob` com o próprio polling), opção "Disparar RPA" restrita ao status "Resposta Financeiro", registro de cada execução na linha do tempo do RI e em Auditoria (RN-059 nova) e imutabilidade do log "Sucesso" (RN-060 nova, validada também no backend); RN-006/RN-008/RN-056/RN-058 ganham referência cruzada; processo consumidor da fila confirmado rodando de verdade em produção via serviço `rpa_eace_worker` (DevOps) | Usuário testou ao vivo (INEP 90000002) e reportou os 3 bugs; depois pediu registro permanente de cada execução (corrigindo a 1ª tentativa, que gravou só em Auditoria, para também usar a linha do tempo do RI) e bloqueio de edição pós-"Sucesso"; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev/DevOps em turnos anteriores desta mesma sessão |
 | 2026-09-03 | FEAT-033 (Fase 3) entregue pelo Dev — fila serializada (`select_for_update(skip_locked=True)`), reprocessamento automático de erro não mapeado, comando `processar_fila_rpa_eace`, estado "Na fila" na tela com polling HTMX a cada 5s; 484 testes sem regressão; falta só o serviço no `docker-compose.yml` rodando o comando (DevOps) | Usuário pediu a Fase 3 direto ao Dev; lacuna de UI deixada em aberto no `ADR-005` ("como a tela reflete sem reload") foi resolvida pelo Dev com polling HTMX — decisão técnica simples e reversível (CLAUDE.md §9), registrada aqui |

@@ -557,6 +557,109 @@ class RiStatusUpdateViewTests(TestCase):
         ri.refresh_from_db()
         self.assertEqual(ri.status, Ri.ENVIO_EMAIL_FATURAMENTO)
 
+    def test_de_implantacao_eace_permite_ir_para_em_andamento(self):
+        """RN-066 (pedido do usuário, 2026-09-05): a partir de "Implantação
+        EACE", a única transição manual permitida é para "Em Andamento"."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.ANDAMENTO, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.ANDAMENTO)
+
+    def test_de_implantacao_eace_bloqueia_qualquer_outro_destino(self):
+        """RN-066: nenhum outro destino é aceito a partir de "Implantação
+        EACE" - nem os que normalmente são manuais (RN-001) para outros
+        status de origem."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.ENVIO_EMAIL_FATURAMENTO, "next": reverse("grid_inep")},
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertContains(resp, "RN-066")
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.IMPLANTACAO_EACE)
+
+    def test_de_implantacao_eace_bloqueia_ate_para_administrador(self):
+        """RN-066: a restrição não tem exceção de perfil - diferente da
+        RN-019, aqui nem o Administrador pula "Em Andamento"."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.FATURAMENTO_CONCLUIDO, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.IMPLANTACAO_EACE)
+
+    def test_select_do_grid_so_oferece_em_andamento_a_partir_de_implantacao_eace(self):
+        """RN-066: o <select> do drill-down do grid não pode sugerir um
+        destino que o backend vai recusar. A página também tem o <select>
+        de FILTRO por status (todos os status, sempre) no topo — por isso
+        conferimos a contagem: cada status "proibido" só pode aparecer 1
+        vez (no filtro), nunca 2 (filtro + drill-down)."""
+        Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, '<option value="andamento"')
+        self.assertContains(resp, '<option value="envio_email_faturamento"', count=1)
+        self.assertContains(resp, '<option value="faturamento_concluido"', count=1)
+        self.assertContains(resp, '<option value="correcao_mega"', count=1)
+
+    def test_select_da_tela_de_detalhe_so_oferece_em_andamento_a_partir_de_implantacao_eace(self):
+        """RN-066: mesma restrição no <select> da tela de detalhe."""
+        escola = Escola.objects.create(inep="30000002", nome="Escola RI Status Detalhe")
+        Ri.objects.create(escola=escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": escola.inep}))
+        self.assertContains(resp, '<option value="andamento"')
+        self.assertNotContains(resp, '<option value="envio_email_faturamento"')
+        self.assertNotContains(resp, '<option value="faturamento_concluido"')
+        self.assertNotContains(resp, '<option value="correcao_mega"')
+
+    def test_select_esconde_validacao_eace_e_faturamento_concluido_antes_de_resposta_financeiro(self):
+        """RN-067 (pedido do usuário, 2026-09-05): "Aguardando validação
+        EACE" e "Faturamento Concluído" não podem aparecer no <select>
+        antes de "Resposta Financeiro" - aqui a partir de "Em Andamento"."""
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, '<option value="aguardando_validacao_eace"', count=1)
+        self.assertContains(resp, '<option value="faturamento_concluido"', count=1)
+
+    def test_select_mostra_validacao_eace_a_partir_de_resposta_financeiro(self):
+        """RN-067: a partir de "Resposta Financeiro", "Aguardando validação
+        EACE" volta a aparecer (RN-001) - "Faturamento Concluído" continua
+        escondido, só entra a partir de "Aguardando validação EACE"."""
+        Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, '<option value="aguardando_validacao_eace"', count=2)
+        self.assertContains(resp, '<option value="faturamento_concluido"', count=1)
+
+    def test_select_mostra_faturamento_concluido_a_partir_de_aguardando_validacao_eace(self):
+        """RN-067: "Faturamento Concluído" só aparece a partir de
+        "Aguardando validação EACE"."""
+        Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, '<option value="faturamento_concluido"', count=2)
+
+    def test_select_da_tela_de_detalhe_tambem_esconde_antes_de_resposta_financeiro(self):
+        """RN-067: mesma restrição no <select> da tela de detalhe (grid e
+        detalhe usam a mesma função de filtro, `_status_ri_opcoes_
+        disponiveis`)."""
+        escola = Escola.objects.create(inep="30000003", nome="Escola RI Status RN-067")
+        Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": escola.inep}))
+        self.assertNotContains(resp, '<option value="aguardando_validacao_eace"')
+        self.assertNotContains(resp, '<option value="faturamento_concluido"')
+
     def test_forcar_saida_gera_entrada_no_historico_com_administrador_como_autor(self):
         """RN-019/RN-008: a transição forçada grava log igual às demais
         trocas de status, identificando o Administrador como autor."""
@@ -1527,8 +1630,12 @@ class ContextoLogsRpaEaceTests(TestCase):
     correção (2026-09-05): usuário reportou precisar dela continuar
     visível mesmo depois que o RI avança de status, pra auditoria (ex.:
     conferir quais Notas Fiscais foram concluídas manualmente, RN-065).
-    Sem log nenhum (RI "fora do padrão", sem anexo recebido) a seção
-    continua escondida, não importa o status."""
+    Sem log nenhum, a própria seção continua escondida - mas, a partir de
+    "Resposta Financeiro" (RI que já deveria ter Nota Fiscal, RN-016), um
+    aviso aparece no lugar dela (pedido do usuário, 2026-09-07, INEP
+    35271561): sem isso, o motivo (resposta do financeiro "fora do
+    padrão", sem PDF/XML) só ficava no Histórico de Comunicação, fácil de
+    passar batido."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -1553,8 +1660,10 @@ class ContextoLogsRpaEaceTests(TestCase):
         self.assertEqual(len(contexto["logs_rpa_eace"]), 1)
 
     def test_sem_nenhum_log_esconde_a_secao_mesmo_em_resposta_financeiro(self):
-        """RI "fora do padrão" (RN-016): sem anexo recebido, sem log -
-        nada a mostrar, não importa o status."""
+        """RI "fora do padrão" (RN-016): sem anexo recebido, sem log - a
+        seção de Notas Fiscais em si não tem nada a mostrar, não importa o
+        status (o aviso que aparece no lugar dela é outro bloco, coberto
+        pelos testes abaixo)."""
         from apps.ri.views import _contexto_logs_rpa_eace
 
         outra_escola = Escola.objects.create(inep="35083939", nome="Escola Sem Log")
@@ -1562,6 +1671,49 @@ class ContextoLogsRpaEaceTests(TestCase):
         contexto = _contexto_logs_rpa_eace(outro_ri, "")
         self.assertEqual(contexto["logs_rpa_eace"], [])
         self.assertFalse(contexto["existe_log_ativo"])
+
+    def test_aviso_fora_padrao_quando_sem_log_a_partir_de_resposta_financeiro(self):
+        """Melhoria (pedido do usuário, 2026-09-07, INEP 35271561): sem
+        nenhuma Nota Fiscal e o RI já em "Resposta Financeiro" (ou além) -
+        a resposta do financeiro veio sem PDF/XML (RN-016 avança o status
+        mesmo assim); o aviso substitui o silêncio de antes."""
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        for indice, status in enumerate(
+            (Ri.AGUARDANDO_ANEXO_PORTAL_EACE, Ri.AGUARDANDO_VALIDACAO_EACE, Ri.FATURAMENTO_CONCLUIDO)
+        ):
+            escola = Escola.objects.create(inep=f"350810{indice}", nome=f"Escola Aviso {status}")
+            ri = Ri.objects.create(escola=escola, status=status)
+            contexto = _contexto_logs_rpa_eace(ri, "")
+            self.assertTrue(contexto["aviso_resposta_fora_padrao"], f"deveria avisar no status {status}")
+
+    def test_sem_aviso_quando_sem_log_antes_de_resposta_financeiro(self):
+        """Nesses status é normal ainda não existir nenhuma Nota Fiscal
+        (o financeiro simplesmente ainda não respondeu) - não é o mesmo
+        cenário do aviso acima, não deve aparecer."""
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        for indice, status in enumerate(
+            (Ri.IMPLANTACAO_EACE, Ri.ANDAMENTO, Ri.ENVIO_EMAIL_FATURAMENTO, Ri.AGUARDANDO_FINANCEIRO)
+        ):
+            escola = Escola.objects.create(inep=f"350920{indice}", nome=f"Escola Sem Aviso {status}")
+            ri = Ri.objects.create(escola=escola, status=status)
+            contexto = _contexto_logs_rpa_eace(ri, "")
+            self.assertFalse(contexto["aviso_resposta_fora_padrao"], f"não deveria avisar no status {status}")
+
+    def test_tela_de_detalhe_mostra_o_aviso_de_resposta_fora_do_padrao(self):
+        escola = Escola.objects.create(inep="35083940", nome="Escola Aviso Detalhe")
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": escola.inep}))
+        self.assertContains(resp, "Resposta do financeiro sem Nota Fiscal anexada")
+
+    def test_tela_de_detalhe_nao_mostra_aviso_quando_ainda_aguardando_financeiro(self):
+        escola = Escola.objects.create(inep="35083941", nome="Escola Sem Aviso Detalhe")
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_FINANCEIRO)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": escola.inep}))
+        self.assertNotContains(resp, "Resposta do financeiro sem Nota Fiscal anexada")
 
     def test_secao_continua_na_tela_quando_ri_avanca_de_status(self):
         self.client.force_login(self.user)
@@ -1620,6 +1772,46 @@ class ContextoLogsRpaEaceTests(TestCase):
             reverse("ri_logs_rpa_eace_status", kwargs={"inep": self.escola.inep})
         )
         self.assertNotContains(resp, f'id="logs-rpa-eace-{self.ri.pk}" hx-swap-oob="true"')
+
+    def test_item_referencia_casa_item_com_osp_com_o_log_na_mesma_ordem(self):
+        """Melhoria (pedido do usuário, 2026-09-05): usuário reportou
+        escolher o PDF errado pra cada "Nota Fiscal #N" e só descobrir
+        depois de um erro de valor - o item já sincronizado (Lado
+        Relatório EACE, com OSP preenchida) vira uma referência
+        (OSP/Produto/Valor) anexada ao log na mesma posição, pra guiar a
+        escolha ANTES de disparar. Item sem OSP (lançado manualmente,
+        RN-018) não conta como referência."""
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Sem OSP (lançado manual)", quantidade=1, valor_unitario=10,
+        )
+        item_com_osp = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Wi-Fi Indoor", quantidade=2, valor_unitario="100.00", num_osp="3905",
+        )
+
+        contexto = _contexto_logs_rpa_eace(self.ri, "")
+        log = contexto["logs_rpa_eace"][0]
+        self.assertEqual(log.item_referencia.pk, item_com_osp.pk)
+        self.assertEqual(log.item_referencia.valor_total, 200)
+
+    def test_sem_item_com_osp_log_fica_sem_referencia(self):
+        from apps.ri.views import _contexto_logs_rpa_eace
+
+        contexto = _contexto_logs_rpa_eace(self.ri, "")
+        log = contexto["logs_rpa_eace"][0]
+        self.assertFalse(hasattr(log, "item_referencia"))
+
+    def test_tela_mostra_a_referencia_esperada_antes_de_escolher_o_pdf(self):
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Wi-Fi Indoor", quantidade=1, valor_unitario="330.63", num_osp="3905",
+        )
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "Esperado (Relatório EACE)")
+        self.assertContains(resp, "OSP 3905")
+        self.assertContains(resp, "Kit Wi-Fi Indoor")
+        self.assertContains(resp, "R$ 330,63")
 
     def test_resposta_do_disparo_continua_marcando_a_secao_de_logs_como_oob(self):
         """A resposta do disparo (`hx-swap="none"` no form) só chega à
@@ -4557,6 +4749,20 @@ class RiDetailStatusEnvioEmailTests(TestCase):
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
         self.assertContains(resp, f'data-abrir-modal-email="modal-email-{ri.pk}"')
         self.assertContains(resp, f'INEP {self.escola.inep} — {self.escola.nome}')
+
+    def test_modal_de_envio_troca_o_confirm_nativo_por_painel_de_confirmacao(self):
+        """Melhoria (pedido do usuário, 2026-09-05): o `confirm()` cru do
+        navegador deu lugar a um 2º painel dentro do próprio modal, com
+        layout e mensagem mais profissionais - `_modal_enviar_email.html`."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
+        self._preencher_requisitos_envio(ri)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, "onsubmit=\"return confirm(")
+        self.assertContains(resp, f'id="painel-compor-{ri.pk}"')
+        self.assertContains(resp, f'id="painel-confirmar-{ri.pk}"')
+        self.assertContains(resp, "Confirmar envio ao financeiro")
+        self.assertContains(resp, f'data-validar-form="form-enviar-email-{ri.pk}"')
 
     def test_trocar_status_via_htmx_da_tela_de_detalhe_mostra_botao_enviar_email_sem_reload(self):
         ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)

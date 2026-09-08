@@ -344,6 +344,33 @@ class KitPadrao(models.Model):
         qs = cls.objects.filter(lote=lote) if lote else cls.objects
         return qs.filter(descricao_curta=nobreak_inicial).first()
 
+    @classmethod
+    def resolver_por_item(cls, descricao, eh_kit=False, lote=None, catalogo=None):
+        """Cruza de volta com o catálogo um item já lançado (Lado IXC ou
+        Relatório EACE, RN-013/018) a partir do texto gravado no item —
+        mesmo critério usado para resolver o Valor Unitário na hora do
+        lançamento: KIT cruza pelo número de Access Points (extraído da
+        própria descrição, mesma regra de `resolver_kit_declarado`);
+        produto avulso cruza pela Descrição curta exata. Promovido de
+        `apps.ri.services._resolver_catalogo_ixc` (usada ali para achar o
+        Valor de equipamento) para reuso pela tela MIP (Projeto > MIP),
+        que mostra o Valor de serviço (`valor_servico`) dos mesmos itens
+        do RI, em vez do Valor de equipamento (`valor_faturavel`).
+        `catalogo`, quando informado, evita 1 consulta por item (mesmo
+        padrão de `resolver_kit_declarado`)."""
+        if eh_kit:
+            numero = _derivar_numero_access_points(descricao)
+            if numero is None:
+                return None
+            return cls.resolver_kit_declarado(str(numero), lote=lote, catalogo=catalogo)
+        if catalogo is not None:
+            candidatos = [k for k in catalogo if not lote or k.lote == lote]
+            return next((k for k in candidatos if k.descricao_curta == descricao), None)
+        qs = cls.objects.filter(descricao_curta=descricao)
+        if lote is not None:
+            qs = qs.filter(lote=lote)
+        return qs.first()
+
 
 class PlanilhaEace(models.Model):
     """FEAT-023/RN-021: arquivo ativo da Planilha EACE (faturamento por

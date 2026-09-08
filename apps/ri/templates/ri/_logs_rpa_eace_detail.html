@@ -2,7 +2,7 @@
 FEAT-033 (Fase 2/3, RN-056/RN-057/RN-058): 1 log por Nota Fiscal
 esperada, criado quando o financeiro responde (RN-016) com N PDF/N XML.
 Usuário escolhe manualmente o par PDF+XML (nenhum vem pré-selecionado,
-RN-056) e aciona a RPA — "Disparar RPA" só enfileira (RN-058); quem
+RN-056) e aciona a RPA — "Processar" só enfileira (RN-058); quem
 executa de fato é o processo consumidor único da fila, um log de cada
 vez. Os dados extraídos do PDF (INEP/Produto/Valor, RN-057) e o
 resultado (Na fila/Processando/Sucesso/Erro) ficam gravados no próprio
@@ -27,6 +27,22 @@ polling mostrar que o processo está andando, não travado.
 Correção (2026-09-05): a seção não some mais quando o RI avança de
 status - fica pra auditoria (ver `_contexto_logs_rpa_eace`, views.py:
 o gate agora é só "existe algum log", não mais o status do RI).
+
+Ajustes (pedido do usuário, 2026-09-05): removida a opção "Consultar
+pendências no portal EACE" (RN-063) desta tela - view, URL e campos do
+model (`pendencias_portal_eace*`) continuam existindo, só não há mais
+botão aqui pra acioná-la. Botão "Disparar RPA" renomeado para
+"Processar" e reposicionado na mesma linha do "Marcar como concluído
+manualmente" (lados opostos).
+
+`aviso_resposta_fora_padrao` (pedido do usuário, 2026-09-07, INEP
+35271561): RN-016 avança o status a qualquer resposta do financeiro,
+mesmo sem PDF/XML anexado ("fora do padrão") - sem anexo não há Nota
+Fiscal (`LogRpaEace`) pra criar, e a seção inteira ficava muda sobre o
+motivo (só registrado no Histórico de Comunicação, fácil de não notar).
+Calculado em `_contexto_logs_rpa_eace` (views.py) só quando não há log
+nenhum E o RI já passou do ponto em que o financeiro deveria ter
+respondido de verdade.
 {% endcomment %}
 <div id="logs-rpa-eace-{{ ri.pk }}" {% if oob %}hx-swap-oob="true"{% endif %}
      {% if existe_log_ativo %}
@@ -37,80 +53,6 @@ o gate agora é só "existe algum log", não mais o status do RI).
     <h2 class="text-sm font-black uppercase italic text-gray-400 dark:text-gray-500 mb-4">
         Notas Fiscais para anexar no portal EACE
     </h2>
-
-    {% comment %}
-    RN-063 (melhoria 2026-09-04): mostra o que o portal já tem cadastrado
-    (Produto/Valor por linha) ANTES do usuário escolher o PDF - usuário
-    reportou não ter como saber, escolhendo às cegas, qual NF batia com
-    qual linha, só descobria depois de um "Erro (valor divergente)".
-    Consulta somente-leitura, sob demanda (não roda sozinha) - pode levar
-    dezenas de segundos, por isso o botão avisa antes de clicar.
-    {% endcomment %}
-    <div class="border border-dashed border-gray-200 dark:border-gray-700 rounded-2xl p-4 mb-4">
-        <div class="flex items-center justify-between gap-3 flex-wrap">
-            <span class="text-xs font-black uppercase italic text-gray-500 dark:text-gray-400">
-                Pendências no portal EACE
-            </span>
-            {% comment %}
-            Usuário reportou (2026-09-04): clique não mostra se está
-            consultando ou não - a requisição roda de verdade por até 1
-            minuto (mesma ordem de "Disparar RPA"), mas sem polling nem
-            troca de estado no meio (só a resposta final), então sem
-            indicador o botão parece travado/sem efeito. Sem
-            `hx-indicator` explícito, o htmx já marca o próprio `<form>`
-            (quem tem o `hx-post`) com a classe `htmx-request` durante a
-            requisição - suficiente pra mostrar o spinner (`.htmx-
-            indicator`, filho do form) e esconder o rótulo normal (seletor
-            `[.htmx-request_&]`), os dois via CSS, sem JS. `hx-disabled-
-            elt` desabilita o botão no mesmo intervalo, pra não dar pra
-            clicar de novo (abriria 2 navegadores contra o mesmo login do
-            portal).
-            {% endcomment %}
-            <form method="POST" action="{% url 'ri_consultar_pendencias_eace' pk=ri.pk %}"
-                  hx-post="{% url 'ri_consultar_pendencias_eace' pk=ri.pk %}" hx-swap="none"
-                  hx-disabled-elt="find button">
-                {% csrf_token %}
-                <input type="hidden" name="next" value="{{ next_url }}">
-                <button type="submit" class="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-black uppercase text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                    <span class="htmx-indicator inline-flex items-center gap-1">
-                        <svg class="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                        </svg>
-                        Consultando...
-                    </span>
-                    <span class="[.htmx-request_&]:hidden">
-                        {% if ri.pendencias_portal_eace_consultado_em %}Atualizar{% else %}Consultar{% endif %} pendências
-                        <span class="font-normal normal-case">(pode levar até 1 minuto)</span>
-                    </span>
-                </button>
-            </form>
-        </div>
-        {% if ri.pendencias_portal_eace_consultado_em %}
-        <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-2">
-            Consultado em {{ ri.pendencias_portal_eace_consultado_em|date:"d/m/Y H:i" }}
-        </p>
-        {% if ri.pendencias_portal_eace_motivo_erro %}
-        <p class="text-[11px] font-bold text-red-500 dark:text-red-400 mt-1">
-            Não foi possível consultar o portal (motivo: {{ ri.pendencias_portal_eace_motivo_erro }})
-        </p>
-        {% elif ri.pendencias_portal_eace %}
-        <ul class="mt-2 flex flex-col gap-1">
-            {% for linha in ri.pendencias_portal_eace %}
-            <li class="text-xs text-gray-600 dark:text-gray-400">
-                <span class="font-bold">{{ linha.status }}</span> — {{ linha.descricao }} — R$ {{ linha.valor }}
-            </li>
-            {% endfor %}
-        </ul>
-        {% else %}
-        <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-1">Nenhuma linha encontrada para este INEP.</p>
-        {% endif %}
-        {% else %}
-        <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-2">
-            Ainda não consultado - clique para ver o que o portal espera antes de escolher a NF de cada linha abaixo.
-        </p>
-        {% endif %}
-    </div>
 
     <div class="flex flex-col gap-4">
         {% for log in logs_rpa_eace %}
@@ -177,7 +119,23 @@ o gate agora é só "existe algum log", não mais o status do RI).
                 {% endif %}
             </div>
             {% else %}
-            <form method="POST" action="{% url 'ri_log_rpa_eace_disparar' pk=log.pk %}"
+            {% if log.item_referencia %}
+            {% comment %}
+            Melhoria (pedido do usuário, 2026-09-05): guia pra saber qual
+            Nota Fiscal física corresponde a este card, ANTES de escolher o
+            PDF - mostra OSP/Produto/Valor do item já sincronizado do Lado
+            Relatório EACE (RN-022), na mesma ordem dos logs. Vínculo é
+            posicional, não uma chave real (ver `_contexto_logs_rpa_eace`,
+            views.py) - serve de referência, não de garantia.
+            {% endcomment %}
+            <div class="rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700 px-3 py-2 mb-3">
+                <p class="text-[11px] text-gray-500 dark:text-gray-400">
+                    <span class="font-black uppercase text-gray-400 dark:text-gray-500">Esperado (Relatório EACE):</span>
+                    OSP {{ log.item_referencia.num_osp }} · {{ log.item_referencia.descricao_item }} · R$ {{ log.item_referencia.valor_total }}
+                </p>
+            </div>
+            {% endif %}
+            <form id="rpa-disparar-{{ log.pk }}" method="POST" action="{% url 'ri_log_rpa_eace_disparar' pk=log.pk %}"
                   hx-post="{% url 'ri_log_rpa_eace_disparar' pk=log.pk %}" hx-swap="none">
                 {% csrf_token %}
                 <input type="hidden" name="next" value="{{ next_url }}">
@@ -210,34 +168,58 @@ o gate agora é só "existe algum log", não mais o status do RI).
                     {% endif %}
                 </p>
                 {% endif %}
-
-                <div class="flex items-center gap-2 flex-wrap">
-                    <button type="submit" class="mt-3 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 transition shadow">
-                        {% if log.resultado == 'erro' %}Tentar novamente{% else %}Disparar RPA{% endif %}
-                    </button>
-                </div>
             </form>
             {% comment %}
             RN-065 (2026-09-05): usuário reportou precisar marcar 1 Nota
             Fiscal como concluída manualmente (ex.: anexou direto no
             portal EACE por fora, sem passar pela RPA) - sem isso o RI
             nunca avança de "Resposta Financeiro" enquanto sobrar 1 log
-            que não seja "Sucesso" (RN-056). Form separado (não precisa
-            de PDF/XML escolhido) - `hx-confirm` evita marcar sem querer,
-            já que essa ação não tem como ser desfeita pela tela.
+            que não seja "Sucesso" (RN-056). Form sem campos visíveis (não
+            precisa de PDF/XML escolhido) - `hx-confirm` evita marcar sem
+            querer, já que essa ação não tem como ser desfeita pela tela.
+            O botão fica fora deste form (atributo `form=""`) pra poder
+            ficar na mesma linha do botão "Processar", lado oposto (pedido
+            do usuário, 2026-09-05) - o envio (`hx-post`/`hx-confirm`)
+            continua sendo deste form, o HTML padrão associa o clique a
+            ele normalmente.
             {% endcomment %}
-            <form method="POST" action="{% url 'ri_log_rpa_eace_marcar_manual' pk=log.pk %}"
+            <form id="rpa-manual-{{ log.pk }}" method="POST" action="{% url 'ri_log_rpa_eace_marcar_manual' pk=log.pk %}"
                   hx-post="{% url 'ri_log_rpa_eace_marcar_manual' pk=log.pk %}" hx-swap="none"
                   hx-confirm="Confirma que esta Nota Fiscal já foi anexada manualmente no portal EACE, fora da automação?">
                 {% csrf_token %}
                 <input type="hidden" name="next" value="{{ next_url }}">
-                <button type="submit" class="mt-1 px-3 py-1.5 border-2 border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 font-black uppercase text-[10px] rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+            </form>
+
+            <div class="mt-3 flex items-center justify-between gap-2 flex-wrap">
+                <button type="submit" form="rpa-disparar-{{ log.pk }}" class="px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 transition shadow">
+                    {% if log.resultado == 'erro' %}Tentar novamente{% else %}Processar{% endif %}
+                </button>
+                <button type="submit" form="rpa-manual-{{ log.pk }}" class="px-3 py-1.5 border-2 border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 font-black uppercase text-[10px] rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition">
                     Marcar como concluído manualmente
                 </button>
-            </form>
+            </div>
             {% endif %}
         </div>
         {% endfor %}
+    </div>
+</div>
+{% elif aviso_resposta_fora_padrao %}
+<div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-amber-200 dark:border-amber-800/60 shadow-sm p-6 mt-6">
+    <div class="flex items-start gap-4">
+        <div class="shrink-0 w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-600 dark:text-amber-400"></i>
+        </div>
+        <div>
+            <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100 mb-1">
+                Resposta do financeiro sem Nota Fiscal anexada
+            </h2>
+            <p class="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                O financeiro respondeu este RI, mas o e-mail chegou sem nenhum PDF/XML anexado — por isso não há Nota Fiscal para processar aqui. O motivo exato fica registrado no Histórico de Comunicação, abaixo.
+            </p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-2 leading-relaxed">
+                Para seguir, reenvie o e-mail ao financeiro pedindo o reenvio com o PDF e o XML da Nota Fiscal anexados.
+            </p>
+        </div>
     </div>
 </div>
 {% endif %}

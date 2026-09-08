@@ -231,16 +231,11 @@ def _resolver_catalogo_ixc(descricao, eh_kit, lote):
     cruza pelo número de Access Points (mesmo critério de
     `resolver_kit_declarado`/RN-010 ampliada) — `descricao_item` guarda a
     forma curta ("Kit Cobertura Wi-Fi - N Access Points"), que não bate
-    com `KitPadrao.descricao` (forma completa), só com o número."""
-    if eh_kit:
-        numero = _derivar_numero_access_points(descricao)
-        if numero is None:
-            return None
-        return KitPadrao.resolver_kit_declarado(str(numero), lote=lote)
-    qs = KitPadrao.objects.filter(descricao_curta=descricao)
-    if lote is not None:
-        qs = qs.filter(lote=lote)
-    return qs.first()
+    com `KitPadrao.descricao` (forma completa), só com o número. Lógica
+    movida para `KitPadrao.resolver_por_item` (reuso pela tela MIP) —
+    esta função vira um atalho fino para não precisar trocar as várias
+    chamadas já existentes neste arquivo."""
+    return KitPadrao.resolver_por_item(descricao, eh_kit=eh_kit, lote=lote)
 
 
 def _item_lpu_e_aba(descricao, eh_kit, catalogo):
@@ -684,9 +679,14 @@ def _linhas_planilha_eace_para_inep(planilha, inep):
     return _agrupar_linhas_planilha_eace_por_inep(planilha).get(inep, [])
 
 
-def _casar_planilha_com_catalogo(descricao_planilha, lote):
+def casar_planilha_eace_com_catalogo(descricao_planilha, lote):
     """RN-022: casa a "Descrição do Item" da Planilha EACE com o catálogo
-    `KitPadrao`. A Descrição real da planilha traz sufixos que o texto
+    `KitPadrao`. Promovida de `_casar_planilha_com_catalogo` (nome
+    público, 2026-09-07) para o Sincronizador do Lado 3 do MIP
+    (`apps.escolas.services`, RN-070) reaproveitar a mesma regra de
+    casamento, sem duplicá-la — mesmo padrão já usado por
+    `KitPadrao.resolver_por_item` (FEAT-034). A Descrição real da
+    planilha traz sufixos que o texto
     limpo do catálogo não tem (ex.: "Kit Cobertura Wi-Fi - 12 Access
     Points - Equip - MEGA - CO"), então a comparação exata de texto não
     serve nos dois casos:
@@ -720,10 +720,12 @@ def _casar_planilha_com_catalogo(descricao_planilha, lote):
     return None, None
 
 
-def _quantidade_planilha_eace(valor_bruto):
+def quantidade_planilha_eace(valor_bruto):
     """"Qtde Produto" da planilha pode vir com separador decimal
     brasileiro (vírgula) — devolve `None` (em vez de inventar 1) quando o
-    valor não é um número válido."""
+    valor não é um número válido. Promovida de `_quantidade_planilha_eace`
+    (nome público, 2026-09-07) — mesmo motivo de
+    `casar_planilha_eace_com_catalogo`, acima."""
     texto = (valor_bruto or "").strip().replace(".", "").replace(",", ".")
     try:
         quantidade = int(Decimal(texto))
@@ -906,7 +908,7 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
         if not descricao_planilha:
             continue
 
-        catalogo, eh_kit = _casar_planilha_com_catalogo(descricao_planilha, escola.lote)
+        catalogo, eh_kit = casar_planilha_eace_com_catalogo(descricao_planilha, escola.lote)
         if not catalogo:
             resultado["sem_correspondencia"].append(descricao_planilha)
             continue
@@ -914,7 +916,7 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
         if eh_kit:
             quantidade = 1  # RN-018: KIT sempre quantidade 1 (kit fechado da escola).
         else:
-            quantidade = _quantidade_planilha_eace(linha.get("Qtde Produto"))
+            quantidade = quantidade_planilha_eace(linha.get("Qtde Produto"))
             if quantidade is None:
                 resultado["quantidade_invalida"].append(descricao_planilha)
                 continue

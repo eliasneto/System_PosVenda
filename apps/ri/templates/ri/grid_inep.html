@@ -112,7 +112,7 @@
                         </a>
                         {% else %}
                         <div class="flex flex-col sm:flex-row gap-3 mb-4">
-                            {% include "ri/_status_form.html" with ri=linha.ri next_url=request.get_full_path status_ri_manuais=status_ri_manuais status_ri_editaveis=status_ri_editaveis usuario_administrador=usuario_administrador status_resposta_financeiro=status_resposta_financeiro %}
+                            {% include "ri/_status_form.html" with ri=linha.ri next_url=request.get_full_path status_ri_manuais=status_ri_manuais status_ri_opcoes_disponiveis=linha.status_ri_opcoes_disponiveis usuario_administrador=usuario_administrador status_resposta_financeiro=status_resposta_financeiro %}
                             {% include "ri/_responsavel_form_grid.html" with ri=linha.ri next_url=request.get_full_path usuarios=usuarios %}
                         </div>
 

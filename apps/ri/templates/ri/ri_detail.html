@@ -62,7 +62,9 @@
         <!-- Item(ns) já lançado(s) via Django admin (RN-010) — mesma fonte
              (RiItemEace) exibida no Grid de INEPs (FEAT-007), para o card
              não divergir do que aparece lá. -->
-        <div class="flex flex-col gap-2 mb-4">
+        <!-- Altura travada + rolagem própria: card não cresce sem limite
+             conforme itens são lançados (ajuste pedido pelo usuário). -->
+        <div class="flex flex-col gap-2 mb-4 max-h-96 overflow-y-auto pr-1">
             {% for item in ri.itens_eace.all %}
             <div class="flex items-center justify-between bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3">
                 <span class="text-xs font-bold text-gray-700 dark:text-gray-300">{{ item.descricao_item }}</span>
@@ -108,7 +110,9 @@
         </p>
         {% endif %}
 
-        <div class="flex flex-col gap-2 mb-6">
+        <!-- Altura travada + rolagem própria: card não cresce sem limite
+             conforme itens são lançados (ajuste pedido pelo usuário). -->
+        <div class="flex flex-col gap-2 mb-6 max-h-96 overflow-y-auto pr-1">
             {% for item in ri.itens_ixc.all %}
             <div class="bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3{% if item.pk in divergencia_kit_relatorio.itens_ixc_divergentes_pks %} ring-2 ring-red-400{% elif item.eh_kit and divergencia_kit %} ring-2 ring-amber-400{% endif %}">
                 <div class="flex items-center justify-between">
@@ -392,7 +396,9 @@
         </form>
         {% endif %}
 
-        <div class="flex flex-col gap-2 mb-6">
+        <!-- Altura travada + rolagem própria: card não cresce sem limite
+             conforme itens são lançados (ajuste pedido pelo usuário). -->
+        <div class="flex flex-col gap-2 mb-6 max-h-96 overflow-y-auto pr-1">
             {% for item in ri.itens_relatorio_eace.all %}
             <div class="bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3{% if divergencia_status_escola.diverge %} ring-2 ring-red-400{% endif %}">
                 <div class="flex items-center justify-between">

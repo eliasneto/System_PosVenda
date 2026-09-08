@@ -2424,9 +2424,638 @@ view/seção do dashboard da RN-025 (`apps/core`, `home.html`).
 
 **Status:** Ativa
 
+## MIP (Projeto > MIP)
+
+### RN-066 — MIP: visão cadastral de todos os INEPs
+
+**Descrição:** Novo item de menu "MIP", dentro de "Projeto" (ao lado de
+"Equipamentos", o grid da FEAT-007) — grid com todos os INEPs cadastrados
+(`Escola`): INEP, Nome, Endereço, Lote, Município/UF, com busca (INEP/
+nome/município/UF) e paginação. Sem Status de conexão, Status do RI nem
+divergência — puramente cadastral, dado da Escola, não do fluxo de
+faturamento/RI.
+
+**Contexto:** Usuário pediu um submenu MIP dentro de "Projeto" com "a
+visão de todos os INEPs"; confirmado que é uma tela nova, independente
+do grid de Equipamentos, sem os dados de status que aquele já mostra.
+
+**Critérios:**
+- Lista todas as Escolas cadastradas, 25 por página.
+- Busca por INEP, nome, município ou UF (mesmo padrão do Grid de
+  Equipamentos).
+- Nunca mostra Status de conexão, Status do RI ou marcação de
+  divergência — isso continua exclusivo do grid de Equipamentos
+  (`grid_inep`).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps/escolas/views.py` (`mip_inep_view`),
+`apps/escolas/urls.py`, `apps/escolas/templates/escolas/mip_inep.html`
+— 1ª camada web do app `apps.escolas` (antes só tinha model/comandos de
+importação).
+
+**Features relacionadas:** FEAT-034.
+
+**Status:** Substituída por RN-074 (2026-09-08) — usuário pediu para o
+grid deixar de listar todas as Escolas e passar a mostrar só quem está
+em "Aguardando validação EACE". Texto original preservado abaixo como
+histórico; ver RN-074 para o critério em vigor (inclui também o
+descompasso com "nem divergência", já defasado desde a RN-071).
+
+### RN-067 — MIP: itens dos lados 1 e 2 espelham o RI, com Valor de serviço
+
+**Descrição:** Cada INEP no MIP mostra os mesmos 3 lados do RI (Kit
+declarado, IXC, Relatório EACE), só leitura — clicar em qualquer um
+abre a mesma tela, com os 3 juntos (RN-068 cobre o histórico dessa
+tela). Lado 1 (Kit declarado) e lado 2 (IXC) mostram os mesmos itens já
+lançados no RI (`RiItemEace`/`RiItemIxc`); sem lançamento do lado 1
+ainda, cai na mesma referência ao vivo que o Grid de Equipamentos já
+usa (RN-010), a partir de `Escola.kit_inicial`. Diferença deliberada em
+relação ao RI: o valor mostrado nos lados 1 e 2 é o **Valor de
+serviço** (`KitPadrao.valor_servico`), não o Valor de equipamento
+(`KitPadrao.valor_faturavel`) usado no RI.
+
+**Nota (2026-09-08):** o lado 3 (Relatório EACE) descrito abaixo como
+"pendente" deixou de estar em aberto — o Sincronizador (RN-070) já
+lança os itens desse lado normalmente desde a FEAT-035; texto mantido
+como registro histórico da decisão original.
+
+**Contexto:** Usuário pediu a mesma estrutura de 3 lados do RI dentro
+do MIP, com os mesmos equipamentos, mas usando o valor de serviço em
+vez do valor de equipamento; confirmou que os lados 1 e 2 espelham os
+lados 1 e 2 do RI (não uma combinação diferente) e que o lado 3 fica em
+aberto até a nova planilha ser definida.
+
+**Critérios:**
+- Lado 1 e lado 2 nunca têm formulário de edição no MIP — lançar/editar
+  continua exclusivo da tela do RI (Projeto > Equipamentos).
+- Valor de serviço resolvido pela mesma descrição gravada no item
+  (`KitPadrao.resolver_por_item`, cruza por número de Access Points
+  quando é o KIT, por Descrição curta exata quando é produto avulso —
+  mesmo critério já usado para achar o Valor de equipamento no RI).
+  Sem correspondência no catálogo, mostra aviso — nunca inventa valor
+  (CLAUDE.md §9).
+- Lado 3 (Relatório EACE) não é coberto por esta regra — ver RN-070
+  (Sincronizador, resolve a pendência original) e RN-077/RN-081 (coluna
+  e bolinha do grid do MIP).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `KitPadrao.resolver_por_item` (novo classmethod em
+`apps/ri/models.py`, promovido da função privada
+`apps.ri.services._resolver_catalogo_ixc`, que passa a delegar nele —
+elimina duplicação da regra de cruzamento, sem mudar o comportamento já
+usado pelo RI); `apps/escolas/views.py`
+(`_resolver_lado_kit_declarado`, `_resolver_lado_ixc`, `_valor_servico`).
+
+**Features relacionadas:** FEAT-034, FEAT-004, FEAT-007, FEAT-015.
+
+**Status:** Ativa
+
+### RN-068 — MIP e RI compartilham o mesmo histórico de comunicação (por INEP)
+
+**Descrição:** A tela de detalhe do MIP (RN-067) mostra, abaixo dos 3
+lados, o mesmo painel de Histórico de comunicação já usado na tela do
+RI (`RiHistorico`, RN-008) — não um histórico separado do MIP. O
+formulário de nova mensagem/anexo do painel posta para o mesmo endpoint
+que a tela do RI já usa (`ri_detail`); as duas telas leem e escrevem o
+mesmo conjunto de dados. Histórico é o do RI **atual/mais recente**
+daquele INEP (`escola.ris` mais novo) — não agrega histórico de RIs
+antigos da mesma escola, quando houver mais de um. Sem RI ainda para o
+INEP, a tela do MIP mostra um aviso no lugar do painel (não há onde
+gravar).
+
+**Contexto:** Usuário pediu para "complementar o histórico com o
+histórico do MIP", esclarecendo que deveria ser "um histórico para os
+dois" (RI e MIP) — não dois históricos separados; confirmou que o
+histórico é por INEP e que, havendo mais de um RI ao longo do tempo,
+usa só o atual/mais recente (mesmo critério que o resto do sistema já
+usa para "o RI" de um INEP).
+
+**Critérios:**
+- Painel reaproveitado sem duplicação: `ri/_historico_panel.html`,
+  incluído também na tela do MIP, com `ri`/`historico_form`/`historico`
+  no contexto.
+- Mensagem lançada a partir do MIP aparece na tela do RI (e vice-versa)
+  sem nenhuma sincronização adicional — é a mesma tabela.
+- Sem RI: MIP mostra aviso "Ainda não há RI iniciado para este INEP",
+  sem formulário.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps/escolas/views.py` (`mip_detail_view` monta
+o mesmo `historico_form`/`historico` que `ri_detail_view` monta, a
+partir do mesmo `ri.historico`); nenhuma mudança em `RiHistorico`
+nem em `ri_detail_view` — reuso puro de template e endpoint existentes.
+
+**Features relacionadas:** FEAT-034, FEAT-014.
+
+**Status:** Ativa
+
+### RN-069 — Upload do Relatório EACE (MIP): arquivo `.xlsx` com colunas fixas; período editado à parte
+
+**Descrição:** A tela "Administrador > Relatório EACE (MIP)" aceita
+upload de um único arquivo ativo por vez — mesmo padrão de singleton
+da Planilha EACE usada pelo RI (RN-021), um novo envio substitui o
+arquivo anterior. Só aceita `.xlsx`; valida a presença das colunas
+Projeto (INEP), Descrição do Item, Qtde Produto, Valor Unit UR, Data
+Emissão ACS, UF e CIDADE em qualquer aba do arquivo — o nome da aba não
+é fixo, porque o arquivo real (`doc/Base MIP.xlsx`) usa um nome de aba
+interno que pode variar entre exportações.
+
+**RN-069 alterada:** o período (Data inicial/Data final) deixou de ser
+exigido no upload — usuário pediu para editar o período direto no card
+"Arquivo ativo" (Sincronizador), sem precisar reimportar o arquivo só
+para ajustar a data. Um novo upload preserva o período do arquivo
+substituído (ou deixa em aberto, na 1ª importação); `definir_periodo`
+(mesma tela) grava a mudança feita pelo usuário. Uso desse período —
+card/filtro "No período" do grid do MIP — definido pela RN-073.
+
+**Contexto:** Resolve parcialmente a pendência do Lado 3 (Relatório
+EACE) do MIP (RN-067) — usuário indicou a fonte real e as colunas a
+serem lidas.
+
+**Critérios:**
+- Extensão `.xlsx` obrigatória; qualquer outro formato é rejeitado.
+- Aceita a 1ª aba cujo cabeçalho (1ª linha) contenha as 7 colunas
+  obrigatórias; sem nenhuma aba com essas colunas, rejeita o upload.
+- Upload não pede Data inicial/Data final — só o arquivo.
+- Card "Arquivo ativo" tem formulário próprio para definir/editar Data
+  inicial/Data final; data inicial não pode ser posterior à final.
+- Acesso restrito a Administrador (mesmo critério de RN-004/RN-021).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.models.PlanilhaRelatorioEaceMip`,
+`apps.escolas.forms.PlanilhaRelatorioEaceMipUploadForm`,
+`apps.escolas.views.relatorio_eace_mip_view`.
+
+**Features relacionadas:** FEAT-035, FEAT-034.
+
+**Status:** Ativa — cobre upload e validação. O Sincronizador que lê o
+arquivo já existe (RN-070, abaixo); o período (Data inicial/Data final)
+passou a ser editado à parte, direto no card do Sincronizador (RN-069
+alterada, ver Histórico), e seu uso — card/filtro "No período" do grid
+do MIP — foi definido pela RN-073.
+
+### RN-070 — Sincronizador do Lado 3 (Relatório EACE) do MIP
+
+**Descrição:** Botão "Sincronizar todos os INEPs" (tela "Administrador
+> Relatório EACE (MIP)", RN-069) lança/atualiza/remove os itens do
+Lado 3 (Relatório EACE) do MIP, por Escola/INEP — mesmas regras de
+casamento Descrição×catálogo do Sincronizador do Lado Relatório EACE
+do RI (RN-022): KIT por número de Access Points, Produto avulso por
+prefixo da Descrição curta, ambos restritos ao Lote da Escola. KIT
+sempre Quantidade 1; Produto avulso usa a Quantidade da planilha.
+Diferença deliberada: grava o **Valor de serviço**
+(`KitPadrao.valor_servico`), não o Valor de equipamento usado no RI
+(RN-067), numa tabela própria (`EscolaItemRelatorioEaceMip`) — nunca no
+Lado 3 do RI (`RiItemRelatorioEace`); as duas fontes de planilha
+(Planilha EACE do RI × planilha do MIP) são independentes e nunca se
+misturam.
+
+**Contexto:** Resolve a pendência do Lado 3 do MIP (RN-067) — usuário
+pediu explicitamente "as mesmas regras de sincronização do RI".
+
+**Critérios:**
+- Última planilha ativa é sempre a fonte de verdade para o Lado 3 do
+  MIP — sem o conceito de fase/status do RI que protege lançamento
+  manual (RN-062), porque o MIP não tem lançamento manual (RN-067,
+  100% leitura): Descrição confirmada na sincronização é criada/
+  atualizada; Descrição ausente é removida.
+- Mesma regra de 1 KIT por INEP do RI (RN-015): um KIT diferente do já
+  lançado nunca substitui o existente — só protege o já lançado de ser
+  removido.
+- Escola sem nenhuma linha na planilha ativa não é processada — itens
+  já lançados ficam intactos (mesmo critério do RI,
+  `RI_SEM_LINHA_NA_PLANILHA`).
+- Item sem correspondência no catálogo, ou com Quantidade inválida,
+  nunca é lançado (CLAUDE.md §9).
+- Ação restrita a Administrador (RN-004).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.models.EscolaItemRelatorioEaceMip`
+(novo model); `apps.escolas.services.
+sincronizar_relatorio_eace_mip_de_todas_as_escolas`; funções de
+casamento promovidas de privadas para públicas em `apps.ri.services`
+(`casar_planilha_eace_com_catalogo`, `quantidade_planilha_eace`) para
+serem reaproveitadas sem duplicar a regra.
+
+**Features relacionadas:** FEAT-035, FEAT-034, FEAT-024 (Sincronizador
+do RI, mesma regra de casamento).
+
+**Status:** Ativa — cobre o Sincronizador em lote (botão "Sincronizar
+todos os INEPs"), incluindo a marcação de INEP encontrado/não
+encontrado nesta rodada (`Escola.encontrado_relatorio_eace_mip`,
+RN-081). Uso do período (Data inicial/Data final, RN-069) definido pela
+RN-073.
+
+### RN-071 — Confronto de divergência de Valor de serviço (MIP: IXC × Relatório EACE)
+
+**Descrição:** Grid e tela de detalhe do MIP comparam o Valor de
+serviço entre o Lado IXC (2º, mesmos `RiItemIxc` do RI atual da
+Escola) e o Lado Relatório EACE do MIP (3º, `EscolaItemRelatorioEaceMip`,
+RN-070) — mesma estrutura do confronto formal do RI (RN-003): KIT
+comparado isolado (no máximo 1 de cada lado), Produtos comparados como
+conjunto por Descrição. Diferença pedida pelo usuário: compara **Valor
+de serviço**, nunca Quantidade nem Valor de equipamento — ao contrário
+do RI, os dois lados do MIP resolvem o mesmo Valor de serviço a partir
+do catálogo `KitPadrao`, então uma diferença aqui normalmente indica
+que o catálogo mudou depois da última sincronização do Lado 3.
+
+**Contexto:** Usuário pediu "o mesmo card de divergente que tem na
+RI", validando só Valor de serviço.
+
+**Critérios:**
+- Sem os dois lados (IXC e Relatório EACE do MIP) terem algum item, não
+  há divergência (mesmo ajuste da RN-003, 2026-09-02).
+- "KIT Instalado": divergência quando um lado tem KIT e o outro não, ou
+  quando o Valor de serviço do KIT difere entre os dois lados.
+- "Produtos": para cada Descrição presente em qualquer um dos dois
+  lados, divergência quando o Valor de serviço difere (produto ausente
+  de um lado conta como divergência contra o valor do outro).
+- Grid do MIP: card "Com divergência" (mesmo padrão da RN-003 no Grid
+  de Equipamentos), com filtro (`?divergencia=1`) e linha destacada em
+  vermelho; item divergente do Lado IXC destacado no drill-down.
+- Tela de detalhe: banner vermelho quando há divergência; item
+  divergente do Lado IXC destacado.
+- Calculado ao vivo a cada requisição — sem tabela própria de
+  divergência persistida (diferente do `RiDivergencia` do RI): o Lado
+  IXC pode mudar a qualquer momento pela tela do RI, então um valor
+  persistido, atualizado só no Sincronizador do MIP, ficaria
+  desatualizado.
+- Não bloqueia nenhuma ação — MIP é só leitura, sem transição de status
+  para bloquear (diferente da RN-003, que bloqueia o RI).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:**
+`apps.escolas.views._comparar_valor_servico_ixc_relatorio_mip`;
+templates `escolas/mip_inep.html`/`escolas/mip_detail.html`.
+
+**Features relacionadas:** FEAT-035, FEAT-034, FEAT-007 (card/filtro de
+divergência do Grid de Equipamentos, mesmo padrão visual).
+
+**Status:** Ativa.
+
+### RN-072 — Data do recebimento da Nota Fiscal do financeiro no Lado 2 (IXC) do MIP
+
+**Descrição:** A tela de detalhe do MIP (`/mip/<inep>/`) mostra, junto
+do card "IXC (2º)", a data de recebimento da Nota Fiscal (PDF + XML,
+RF-08) mais recente enviada pelo financeiro para o RI atual/mais
+recente daquele INEP — mesmo dado (`Documento.recebido_em`) já usado
+pelo RPA de anexo no portal EACE do RI (RN-056), sem duplicar
+informação. RI com mais de uma Nota Fiscal recebida (mais de um e-mail
+do financeiro com PDF+XML, cenário já coberto pela RN-056) mostra só a
+data da mais recente, não uma lista por Nota Fiscal. Só aparece na
+tela de detalhe do MIP — não no grid principal (`/mip/`).
+
+**Contexto:** Usuário pediu para "colocar a data do recebimento do
+e-mail do financeiro com os arquivos XML e PDF" no Lado 2 do MIP.
+Questionado (CLAUDE.md §9, por afetar critério de aceite e
+comportamento percebido) sobre o que mostrar quando o RI tem mais de 1
+Nota Fiscal e sobre onde exibir, confirmou: só a data mais recente, só
+na tela de detalhe.
+
+**Critérios:**
+- Fonte é `Documento.recebido_em` (RF-08/RN-056) do RI atual daquele
+  INEP (mesmo critério de "RI atual" já usado pela RN-068) — não um
+  dado novo nem duplicado.
+- RI sem nenhum Documento recebido, ou sem RI iniciado para o INEP:
+  nada aparece (sem mensagem de "vazio").
+- Não altera o grid principal do MIP (`/mip/`) nem a tela do RI — só a
+  tela de detalhe do MIP.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.views._resolver_lado2_nf_recebida_em`;
+template `escolas/mip_detail.html`.
+
+**Features relacionadas:** FEAT-034, RN-056 (RI).
+
+**Status:** Ativa.
+
+### RN-073 — Card "No período": filtro pela Data Emissão ACS do Relatório EACE (MIP)
+
+**Descrição:** Card "No período" no grid do MIP conta e filtra
+(`?periodo=1`) os INEPs que têm pelo menos um item do Lado 3
+(`EscolaItemRelatorioEaceMip`, RN-070) cuja Data Emissão ACS cai dentro
+do período (Data inicial/Data final) definido no arquivo ativo
+(RN-069 alterada). Mesmo padrão de card/filtro do "Com divergência"
+(RN-071). Resolve a pendência de uso do período deixada em aberto pela
+RN-069/RN-070.
+
+**Contexto:** Usuário pediu para editar o período direto no card do
+Sincronizador (RN-069 alterada); ficou pendente o que esse período
+efetivamente filtra/mostra até esta regra.
+
+**Critérios:**
+- Sem planilha ativa, ou com planilha ativa mas sem Data inicial/Data
+  final ainda definidas, o card não aparece — não há o que comparar.
+- Item do Lado 3 sem Data Emissão ACS preenchida não conta "no
+  período" (CLAUDE.md §9: nunca assume uma data ausente).
+- Card mostra o total mesmo com outro filtro (busca, Estado/Município,
+  divergência) já ativo — mesmo padrão do card "Com divergência".
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.views.mip_inep_view` (contagem
+`escolas_no_periodo_ids`, filtro `?periodo=1`); template
+`escolas/mip_inep.html`.
+
+**Features relacionadas:** FEAT-034, FEAT-035, RN-069, RN-070, RN-071.
+
+**Status:** Ativa.
+
+### RN-074 — MIP: grid mostra só os INEPs com RI em "Aguardando validação EACE"
+
+**Descrição:** O grid `/mip/` deixou de listar todas as Escolas
+cadastradas (RN-066) e passou a mostrar só os INEPs cujo **RI atual**
+está no status "Aguardando validação EACE" — esse status é do RI
+(`Ri.status`), não da Escola. "RI atual" é o mesmo critério já usado
+pelas RN-068/RN-072 (o mais recente por `criado_em`). Sem RI ainda, ou
+com RI em qualquer outro status, o INEP não aparece nesse grid — mas
+continua acessível direto por `/mip/<inep>/` (tela de detalhe,
+RN-067/RN-068), que não tem esse filtro.
+
+**Contexto:** Usuário pediu diretamente ao Dev para o grid deixar de
+mostrar todos os INEPs e focar só na etapa de "Validação EACE".
+
+**Critérios:**
+- Filtro aplicado no banco (não em memória) pelo status do RI mais
+  recente por Escola — evita carregar/paginar em memória as milhares de
+  Escolas que nunca apareceriam na lista.
+- Card antes "Total de INEPs" passa a se chamar "Em Validação EACE" e
+  conta só esse subconjunto.
+- Card e filtro "Com divergência" (RN-071) e "No período" (RN-073)
+  continuam funcionando, agora sobre esse subconjunto.
+- Tela de detalhe (`/mip/<inep>/`) não tem esse filtro — qualquer INEP
+  cadastrado continua acessível direto pela URL.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.views.mip_inep_view` (Subquery pelo
+status do RI mais recente); template `escolas/mip_inep.html`.
+
+**Features relacionadas:** FEAT-034, RN-066 (substituída por esta).
+
+**Status:** Ativa.
+
+### RN-075 — Filtro por data de entrada em "Aguardando validação EACE"
+
+**Descrição:** Grid do MIP ganha 2 filtros, Data inicial e Data final
+(campo de texto com máscara "dd/mm/aaaa", RN-078 ampliada abaixo),
+pela data em que o RI atual **entrou** no status "Aguardando validação
+EACE" (RN-074) — não a data de criação do RI nem qualquer outra. Essa
+data vem do log automático de mudança de status (`RiHistorico`, tipo
+`log_status`, gravado por `apps.ri.services.trocar_status_com_log`
+toda vez que o status muda, manual ou automaticamente); usa sempre a
+entrada mais recente cujo `valor_novo` é o rótulo desse status.
+
+**Contexto:** Usuário pediu os dois filtros de data na sequência do
+pedido que resultou na RN-074.
+
+**Critérios:**
+- Se o RI saiu e voltou a entrar em "Aguardando validação EACE" mais de
+  uma vez, as entradas antigas são ignoradas — só a mais recente conta
+  (pedido explícito do usuário).
+- RI sem essa entrada registrada (não deveria acontecer em uso normal,
+  já que toda transição passa por `trocar_status_com_log`) não casa com
+  nenhuma data — o INEP some da lista assim que um dos dois filtros é
+  preenchido, para não arriscar mostrar/esconder por falta de dado
+  (CLAUDE.md §9).
+- Data inicial informada depois da final: filtro de data é ignorado por
+  inteiro, com aviso — não inverte nem adivinha qual data é a certa.
+- Formato de data inválido no campo: filtro ignorado silenciosamente.
+- Não confundir com o filtro/card "No período" (RN-073) — são períodos
+  de coisas diferentes (Data Emissão ACS da planilha × data de entrada
+  em "Aguardando validação EACE").
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.views.mip_inep_view` (Subquery
+correlacionada ao RI atual, sem N+1); template `escolas/mip_inep.html`.
+
+**Features relacionadas:** FEAT-034, RN-074, RN-008 (RI, histórico de
+mudança de status).
+
+**Status:** Ativa.
+
+### RN-076 — Coluna "Valor Total (IXC)" no grid do MIP
+
+**Descrição:** A coluna Lote saiu do grid do MIP; no lugar dela entrou
+"Valor Total (IXC)" — soma quantidade × Valor de serviço de cada item
+do Lado IXC (2º) daquele INEP. Mesma conta de subtotal já usada na
+planilha de faturamento do RI (`gerar_planilha_faturamento`):
+quantidade × valor unitário de cada item, somado. Separador de milhar
+com ponto (ex.: "R$ 76.552,13"), decimal com vírgula — filtro
+`intcomma` (`django.contrib.humanize`), mesmo já usado nos totais em
+R$ do Dashboard.
+
+**Contexto:** Usuário pediu para tirar a coluna Lote e colocar o valor
+total do INEP, considerando só o Lado IXC.
+
+**Critérios:**
+- Item sem Valor de serviço (sem correspondência no catálogo, RN-067)
+  não entra na soma — nunca inventa valor (CLAUDE.md §9) — mas marca o
+  total com um "*" avisando que ele está incompleto.
+- Sem nenhum item lançado no Lado IXC, mostra "—", não R$ 0,00 (zero
+  sugeriria um total conferido, não a ausência de dado).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.views._valor_total_itens` (função
+genérica, reaproveitada também pela RN-077); template
+`escolas/mip_inep.html`.
+
+**Features relacionadas:** FEAT-034, RN-067, RN-013 (RI, mesma conta de
+subtotal da planilha de faturamento).
+
+**Status:** Ativa.
+
+### RN-077 — Coluna "Valor Total (EACE)" e destaque de divergência entre os dois totais
+
+**Descrição:** Na sequência da RN-076, nova coluna "Valor Total
+(EACE)" — mesma soma (`_valor_total_itens`), agora sobre o Lado 3
+(Relatório EACE, `EscolaItemRelatorioEaceMip`, RN-070). Quando os dois
+totais (IXC e EACE) são conhecidos e diferem, o valor do Lado EACE
+aparece em amarelo — sinal visual de atenção, no mesmo espírito do
+destaque item a item já usado pela RN-071 (mas comparando os totais,
+não os itens individuais).
+
+**Contexto:** Usuário pediu explicitamente esse destaque quando os
+dois totais são diferentes, na sequência da RN-076.
+
+**Critérios:**
+- Sem um dos dois lados ter total ainda (nenhum item lançado), não há o
+  que comparar — não destaca (mesmo critério da RN-003/RN-071).
+- Item sem Valor de serviço preenchido no Lado 3 não entra na soma —
+  mesmo critério de "nunca inventa valor" da RN-076 — e marca o total
+  com "*".
+- Linha de total geral (RN-080) usa essa mesma coluna.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.views.mip_inep_view` (cálculo
+`valor_total_diverge`); template `escolas/mip_inep.html`.
+
+**Features relacionadas:** FEAT-034, FEAT-035, RN-070, RN-071, RN-076.
+
+**Status:** Ativa.
+
+### RN-078 — Colunas Estado e Município substituem Endereço e Município/UF
+
+**Descrição:** A coluna Endereço saiu do grid do MIP; no lugar dela
+entraram duas colunas separadas, Estado e Município — os mesmos campos
+que antes apareciam juntos na coluna "Município/UF", removida também
+para não duplicar o dado. Mudança só de apresentação (template), sem
+nenhum cálculo novo — usa `Escola.estado`/`Escola.municipio` direto.
+
+**Contexto:** Usuário pediu para tirar a coluna Endereço e colocar
+Estado e Município como colunas próprias.
+
+**Critérios:**
+- Estado e Município são colunas independentes, cada uma com seu
+  próprio filtro (RN-079).
+- Busca (`q`) continua pesquisando por Estado e Município, como já
+  fazia (RN-066).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** template `escolas/mip_inep.html` (colunas da
+tabela). Sem mudança em `apps.escolas.views`.
+
+**Features relacionadas:** FEAT-034, RN-066, RN-079.
+
+**Status:** Ativa.
+
+### RN-079 — Filtros Estado e Município (tipo lista) no grid do MIP
+
+**Descrição:** Dois filtros do tipo lista (`<select>`) no grid do MIP:
+Estado e Município. Estado só lista as UFs que já têm pelo menos 1
+INEP na base do grid ("Validação EACE", RN-074) — um valor fora dessa
+lista (URL montada à mão) é ignorado, sem erro. Município só é
+filtrável depois de um Estado escolhido — sem Estado selecionado, o
+filtro de Município é sempre ignorado, mesmo vindo na URL — e lista só
+os municípios daquele Estado, dentro da mesma base. Mesmo padrão de
+filtro por `<select>` + botão "Filtrar" já usado no Grid de
+Equipamentos ("Status de conexão"/"Status do RI") — sem auto-envio ao
+trocar a opção.
+
+**Contexto:** Usuário pediu os dois filtros, explicitando que o de
+Município só deve funcionar depois de escolher o Estado, e que o de
+Estado só deve oferecer os Estados que já têm INEP no grid.
+
+**Critérios:**
+- Opções de Estado calculadas sobre a base "Validação EACE" (RN-074),
+  antes de qualquer outro filtro (busca, data, o próprio Estado) — a
+  lista de Estados não encolhe enquanto o usuário ainda está
+  escolhendo.
+- Um Município preso na URL que não pertence ao Estado escolhido (ex.:
+  troca de Estado sem limpar o Município) é ignorado, sem esvaziar o
+  resultado.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.views.mip_inep_view`
+(`estados_disponiveis`, `municipios_disponiveis`); template
+`escolas/mip_inep.html`.
+
+**Features relacionadas:** FEAT-034, RN-074, RN-078.
+
+**Status:** Ativa.
+
+### RN-080 — Linha de total geral (Valor Total IXC/EACE) abaixo do grid
+
+**Descrição:** Linha de total geral abaixo do grid do MIP, somando
+"Valor Total (IXC)" e "Valor Total (EACE)" (RN-076/RN-077) de **todos**
+os INEPs que passaram pelos filtros já aplicados (busca, data,
+Estado/Município, divergência, período) — não só da página atual
+(o grid pagina 25 por página).
+
+**Contexto:** Usuário pediu explicitamente que os totais "reflitam os
+filtros".
+
+**Critérios:**
+- Somado sobre a lista já filtrada, antes da paginação — muda junto
+  com qualquer filtro aplicado.
+- Item sem Valor de serviço em algum INEP do resultado marca o total
+  geral com "*" (mesmo critério de "incompleto" da RN-076/RN-077).
+- Sem nenhum resultado (grid vazio), a linha de total não aparece.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.views.mip_inep_view`
+(`total_geral_lado2`, `total_geral_lado3`, somados sobre `linhas` antes
+do `Paginator`); template `escolas/mip_inep.html`.
+
+**Features relacionadas:** FEAT-034, RN-076, RN-077.
+
+**Status:** Ativa.
+
+### RN-081 — Bolinha verde/vermelha da sincronização do Relatório EACE (MIP)
+
+**Descrição:** Bolinha ao lado do INEP no grid do MIP, sobre o
+resultado da última vez que "Sincronizar todos os INEPs" (RN-070)
+rodou — nunca recalculada ao vivo só por abrir a tela. Grava, em toda
+Escola, se o INEP apareceu ou não na planilha daquela rodada
+(`Escola.encontrado_relatorio_eace_mip`, `True`/`False`/`None`).
+**Verde:** o INEP apareceu na planilha da última sincronização e está
+normalmente na lista (RN-074). **Vermelho:** duas situações — (a) o
+INEP está na lista (RI em "Aguardando validação EACE") mas NÃO
+apareceu na última sincronização; (b) o INEP apareceu na última
+sincronização, mas a Escola NÃO está em "Aguardando validação EACE" —
+esse 2º caso ganha uma lista própria, "Fora da Validação EACE", abaixo
+do grid principal, já que não é uma linha normal do grid (RN-074) e
+mesmo assim precisa aparecer, sinalizada. Sem nenhuma sincronização
+ainda (`encontrado_relatorio_eace_mip is None`), não mostra bolinha
+nenhuma.
+
+**Contexto:** Usuário pediu a bolinha com essas 3 combinações
+(planilha×sistema). Duas perguntas de escopo (CLAUDE.md §9, por afetar
+critério de aceite e comportamento percebido) foram respondidas antes
+de implementar: (1) o INEP "na planilha mas fora da Validação EACE"
+vira uma linha nova, vermelha, na lista à parte — confirmado; (2) a cor
+só é recalculada depois de "Sincronizar todos os INEPs" rodar, não a
+cada abertura da tela — confirmado.
+
+**Critérios:**
+- Campo gravado para **toda** Escola do sistema a cada sincronização
+  (não só as que aparecem no grid) — reflete sempre a rodada mais
+  recente, nunca uma anterior.
+- Lista "Fora da Validação EACE" filtra pela busca (`q`); não usa os
+  filtros de Estado/Município/data/divergência/período, específicos da
+  base "Validação EACE" — uma Escola dessa lista pode nem ter RI
+  nenhum.
+- Sem nenhuma sincronização ainda, nenhuma bolinha aparece em lugar
+  nenhum — nunca assume um resultado que não existe (CLAUDE.md §9).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps.escolas.models.Escola.
+encontrado_relatorio_eace_mip` (campo novo, migration
+`0006_escola_encontrado_relatorio_eace_mip`);
+`apps.escolas.services.sincronizar_relatorio_eace_mip_de_todas_as_escolas`
+(grava o campo a cada rodada); `apps.escolas.views.mip_inep_view`
+(`escolas_fora_da_validacao_eace`); template `escolas/mip_inep.html`.
+
+**Features relacionadas:** FEAT-034, FEAT-035, RN-070, RN-074.
+
+**Status:** Ativa.
+
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-08 | RN-081 criada (bolinha verde/vermelha no grid do MIP sobre o resultado da última sincronização do Relatório EACE (MIP) — `Escola.encontrado_relatorio_eace_mip`, campo novo; INEP encontrado na planilha mas fora da "Validação EACE" ganha lista própria, "Fora da Validação EACE") | Usuário pediu a bolinha com as combinações planilha×sistema; Orquestrador perguntou (CLAUDE.md §9) e usuário confirmou 2 pontos antes da implementação: o caso "fora da Validação EACE" vira linha nova na lista à parte, e a cor só atualiza depois de "Sincronizar todos os INEPs" rodar, não ao vivo; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (530 testes, sem regressão, validado com dado real de produção) |
+| 2026-09-08 | RN-080 criada (linha de total geral, somando Valor Total IXC/EACE de todos os INEPs filtrados, não só da página); RN-078 criada (colunas Estado/Município substituem Endereço/Município-UF); RN-079 criada (filtros Estado/Município do tipo lista — Município só depois de escolher Estado) | Três pedidos do usuário em sequência, todos só de template/consulta; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (suíte completa, 520 testes, sem regressão) |
+| 2026-09-08 | RN-076 criada (coluna "Valor Total (IXC)" no lugar da coluna Lote, soma quantidade × Valor de serviço); RN-077 criada (coluna "Valor Total (EACE)", destaque em amarelo quando os dois totais divergem) | Usuário pediu para tirar a coluna Lote e colocar o valor total do INEP (Lado IXC) e, na sequência, o mesmo valor do Lado EACE com destaque quando diferente; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (515 testes, sem regressão) |
+| 2026-09-08 | RN-075 criada (filtro Data inicial/Data final do grid do MIP pela data de entrada em "Aguardando validação EACE", lida do log de mudança de status do RI — RN-008) | Usuário pediu os 2 filtros de data na sequência do pedido que resultou na RN-074; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (9 testes novos, sem regressão) |
+| 2026-09-08 | RN-074 criada (grid do MIP deixa de listar todas as Escolas e passa a mostrar só INEPs com RI em "Aguardando validação EACE"); RN-066 marcada como substituída por esta; RN-067 revisada (lado 3 deixa de ser descrito como pendente — já resolvido pela RN-070); RN-069/RN-070 revisadas (nota de período pendente removida, resolvida pela RN-073, criada nesta mesma rodada); RN-073 criada (card/filtro "No período" pela Data Emissão ACS do Relatório EACE) | Usuário pediu diretamente ao Dev, fora do fluxo normal (Orquestrador → Dev), para o grid focar só em "Validação EACE"; Orquestrador formaliza a documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão e aproveita a revisão para corrigir 3 notas de pendência já desatualizadas em RN-069/070 (Sincronizador e uso do período já resolvidos há mais tempo, mas a documentação não tinha sido atualizada) |
+| 2026-09-07 | RN-072 criada (Lado 2/IXC do MIP passa a mostrar a data de recebimento da Nota Fiscal mais recente do financeiro, mesmo dado já usado pela RN-056 do RI; com mais de 1 Nota Fiscal, mostra só a mais recente; só na tela de detalhe, não no grid) | Usuário pediu para mostrar a data do recebimento do e-mail do financeiro com XML/PDF no Lado 2 do MIP; confirmou, questionado, que quer só a mais recente e só na tela de detalhe; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (68 testes de `apps.escolas`, suíte completa de 605 testes, sem regressão) |
+| 2026-09-07 | RN-070 criada (Sincronizador do Lado 3 do MIP, "as mesmas regras de sincronização do RI" — RN-022, mas grava Valor de serviço em `EscolaItemRelatorioEaceMip`, por Escola); RN-071 criada (confronto de divergência de Valor de serviço entre Lado IXC e Lado Relatório EACE do MIP, mesmo card/filtro/destaque do RN-003, calculado ao vivo, sem tabela própria) | Usuário pediu o Sincronizador com as mesmas regras do RI e, na sequência, "o mesmo card de divergente que tem na RI", validando só Valor de serviço; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (404 testes de `apps.ri` + 64 de `apps.escolas`, sem regressão) |
+| 2026-09-07 | RN-069 criada (upload da planilha de origem do Lado 3 do MIP — tela "Administrador > Relatório EACE (MIP)" —, exige `.xlsx` com 7 colunas fixas e período Data inicial/Data final; nova `FEAT-035`) | Usuário pediu a tela de upload (mesmo padrão da Planilha EACE do RI, com as duas datas a mais) e, na sequência, indicou a fonte real (`doc/Base MIP.xlsx`) e as colunas a ler; resolve parte da pendência da RN-067, mas o Sincronizador (uso do período, o que alimenta no Lado 3) segue em aberto |
+| 2026-09-07 | RN-066 criada (MIP: visão cadastral de todos os INEPs, novo item de menu "Projeto > MIP"); RN-067 criada (itens dos lados 1/2 do MIP espelham o RI, com Valor de serviço em vez de Valor de equipamento; lado 3 pendente até a planilha de origem ser definida); RN-068 criada (histórico de comunicação compartilhado entre RI e MIP — mesmo `RiHistorico`, não um separado) | Usuário pediu o submenu MIP com "a visão de todos os INEPs" e, depois, os mesmos 3 lados/cards e a mesma tela de histórico do RI, "complementando" num histórico só para os dois; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (574 testes, sem regressão) |
 | 2026-09-04 | RN-061 criada (barra de progresso por etapa da execução do RPA EACE, 16 etapas fixas, percentual = posição/total, zerada a cada nova tentativa); RN-058 ganha referência cruzada | Usuário pediu para acompanhar cada etapa da RPA (login, usuário, senha, navegação, upload...) como uma porcentagem numa barra de progresso, "até pra que o usuário possa ver se não está travado" |
 | 2026-09-03 | RN-059 criada (cada tentativa de execução do RPA EACE gera 1 entrada na linha do tempo do RI — RN-008 — e 1 registro em Auditoria — RN-006 —, mesmo em reprocessamento); RN-060 criada (log "Sucesso" não aceita novo disparo nem troca de PDF/XML, validado também no backend); RN-006/RN-008 ganham referência cruzada e FEAT-033 | Usuário pediu que toda rodada de processamento fique registrada "nos logs do sistema" e que, após "Sucesso", os inputs não possam mais ser editados; 1ª implementação gravou só em Auditoria (sem tela própria) — usuário corrigiu que o lugar certo é a mesma linha do tempo onde já aparecem as trocas de status e descrições do RI (RN-008), mantendo Auditoria como trilha técnica adicional |
 | 2026-09-03 | RN-056 ganha critério de visibilidade (seção de logs só aparece com o RI em "Resposta Financeiro") e referência cruzada a RN-060; RN-058 ganha critério de posição na fila, nota de correção de 3 bugs reais (estado "Processando" não aparecia, posição na fila ausente, tela não atualizava sozinha — conflito real de `hx-swap-oob` com o próprio polling HTMX) e registra a entrega do DevOps (serviço `rpa_eace_worker` no `docker-compose.yml`, processo consumidor rodando de verdade) | Usuário pediu, testando ao vivo (INEP 90000002, 2 Notas Fiscais na fila), que a opção de disparar a RPA só apareça com o RI em "Resposta Financeiro", e reportou os 3 bugs; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev/DevOps em turnos anteriores desta mesma sessão |

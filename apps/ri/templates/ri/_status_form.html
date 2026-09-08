@@ -6,6 +6,12 @@ página; id + hx-swap-oob permitem que a resposta de
 inclusive quando a troca é rejeitada) onde quer que ele esteja na
 página. Sem HTMX carregado, o POST tradicional (action + next) continua
 funcionando normalmente.
+
+RN-051/RN-066: lista de opções filtrada por RI (`status_ri_opcoes_
+disponiveis`, view) - mesma usada na tela de detalhe
+(`_status_pill_detail.html`): "Envio de Email para Faturamento" só entra
+quando pronto pra envio hoje, e a partir de "Implantação EACE" a única
+opção é "Em Andamento" (backend também recusa qualquer outra).
 {% endcomment %}
 <form method="POST" action="{% url 'ri_status_update' pk=ri.pk %}"
       hx-post="{% url 'ri_status_update' pk=ri.pk %}" hx-swap="none"
@@ -32,7 +38,7 @@ funcionando normalmente.
         {% if ri.status not in status_ri_manuais %}
         <option value="{{ ri.status }}" selected>{{ ri.get_status_display }} (automático)</option>
         {% endif %}
-        {% for valor, rotulo in status_ri_editaveis %}
+        {% for valor, rotulo in status_ri_opcoes_disponiveis %}
         <option value="{{ valor }}" {% if ri.status == valor %}selected{% endif %}>{{ rotulo }}</option>
         {% endfor %}
     </select>

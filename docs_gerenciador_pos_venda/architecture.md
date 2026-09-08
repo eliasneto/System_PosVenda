@@ -179,6 +179,45 @@ INEP é considerado concluído (Faturado).
   principal** — decisão revista em 2026-08-25: fica só dentro do drill-down
   do grid e da tela de detalhe do RI (FEAT-004), como campo editável
   (`<select>` com os usuários do sistema), não mais como texto fixo.
+- **MIP (Projeto > MIP, 2026-09-07; ampliado 2026-09-08)** — visão
+  paralela ao Grid de INEPs, dentro do app `apps.escolas` (a `Escola`
+  já vivia lá; ganhou aqui a 1ª camada web do app). Duas telas: grid
+  `/mip/`, mostrando só os INEPs cujo RI atual está em "Aguardando
+  validação EACE" (RN-074, substitui a visão cadastral de todos os
+  INEPs original) — colunas INEP (com bolinha verde/vermelha de
+  sincronização, RN-081), Nome, Estado, Município (RN-078), Valor Total
+  (IXC) e Valor Total (EACE) (RN-076/RN-077, soma quantidade × Valor de
+  serviço dos itens de cada lado, com destaque quando os dois totais
+  divergem); filtros de busca, Estado/Município do tipo lista (RN-079)
+  e data de entrada em "Aguardando validação EACE" (RN-075); cards "Com
+  divergência" (RN-071) e "No período" (RN-073); linha de total geral
+  refletindo os filtros aplicados (RN-080); lista à parte "Fora da
+  Validação EACE" para INEPs encontrados na última sincronização mas
+  fora desse status (RN-081). Ao clicar em qualquer INEP (sem esse
+  filtro de status), tela `/mip/<inep>/` com os mesmos 3 lados do RI
+  juntos (Kit declarado, IXC, Relatório EACE), só leitura, mostrando o
+  **Valor de serviço** (`KitPadrao.valor_servico`) em vez do Valor de
+  equipamento usado no RI (RN-067). Lado Relatório EACE alimentado pelo
+  Sincronizador próprio do MIP (`FEAT-035`/RN-070) — botão "Sincronizar
+  todos os INEPs" na tela "Administrador > Relatório EACE (MIP)"
+  (upload `.xlsx` com 7 colunas fixas; período Data inicial/Data final
+  editado à parte, direto no card do Sincronizador, RN-069 alterada),
+  mesma regra de casamento Descrição×catálogo do Sincronizador do RI
+  (RN-022), gravando Valor de serviço numa tabela própria
+  (`EscolaItemRelatorioEaceMip`), independente do Lado 3 do RI, e
+  marcando em toda Escola se o INEP apareceu ou não na planilha daquela
+  rodada (`Escola.encontrado_relatorio_eace_mip`, RN-081). Grid e
+  detalhe do MIP também comparam o Valor de serviço entre o Lado IXC e
+  o Lado Relatório EACE (RN-071) — mesmo card/filtro/destaque de
+  divergência do Grid de Equipamentos (RN-003), calculado ao vivo, sem
+  tabela própria de divergência (diferente do `RiDivergencia` do RI,
+  que é atualizado por gatilhos de edição). A tela de detalhe do MIP
+  reaproveita o painel de
+  Histórico de comunicação do RI (`RiHistorico`) — RI e MIP leem e
+  escrevem o mesmo histórico, por INEP, do RI atual/mais recente
+  (RN-068); `KitPadrao.resolver_por_item` (novo) centraliza o
+  cruzamento item→catálogo usado tanto pelo RI (valor de equipamento)
+  quanto pelo MIP (valor de serviço).
 - **Documentos** — armazena a Nota Fiscal (PDF) e o XML recebidos do
   financeiro por INEP; substitui uma NF anterior quando chega uma nova.
 - **Fluxo de e-mail com o financeiro** — caixa própria do sistema
@@ -220,15 +259,17 @@ INEP é considerado concluído (Faturado).
 
 ### Estrutura de navegação (menu lateral)
 
-- Menu lateral organizado em nível hierárquico: aba **"Projeto"** agrupando,
-  por enquanto, só o subitem **"EACE"**; dentro de "EACE" fica o grid
-  existente da FEAT-007 (hoje item de menu plano "Grid de INEPs" em
-  `core/base.html`).
-- Reorganização só de navegação/UI — não altera view, URL, template ou
-  lógica do grid da FEAT-007 (`apps/ri/views.py`, `grid_inep.html`), que
-  segue `🔍 Aguardando QA`.
-- Outros itens dentro de "Projeto" ficam em aberto para quando existirem
-  (usuário confirmou que, por ora, é só o agrupamento para EACE).
+- Menu lateral organizado em nível hierárquico: aba **"Projeto"**
+  agrupando 2 subitens — **"Equipamentos"** (grid da FEAT-007,
+  `grid_inep`; nome atualizado nesta revisão — a versão anterior desta
+  seção registrava "EACE", desatualizado em relação ao código) e
+  **"MIP"** (FEAT-034, 2026-09-07 — grid de INEPs em Validação EACE
+  mais a tela com os 3 lados do RI, `apps.escolas`, ver "Novos nesta
+  versão").
+- Reorganização original (FEAT-007) foi só de navegação/UI — não alterou
+  view, URL, template ou lógica do grid da FEAT-007
+  (`apps/ri/views.py`, `grid_inep.html`).
+- Outros itens dentro de "Projeto" ficam em aberto para quando existirem.
 
 ### Fora do escopo da v1 (gap — Hub de Integrações, dividido em v2 e v3)
 
@@ -317,6 +358,10 @@ Regras do padrão, quando usado:
   mostram a sequência de 7 status — desatualizados após o 8º status
   "Correção MEGA" (RN-001, 2026-08-21). Regenerar quando solicitado
   (MODO 5 — não é automático).
+Resolvida em 2026-09-08: uso do período informado no Relatório EACE
+(MIP) — Data inicial/Data final (RN-069) — definido pela RN-073 (card
+"No período" do grid do MIP, conta/filtra INEPs com item do Lado 3
+cuja Data Emissão ACS cai dentro do período do arquivo ativo).
 
 Resolvidas nesta rodada (2026-08-20): migração inicial de dados de Escola
 (obrigatória, ver ITEM 11/bloco 0); estrutura do grid de detalhe (grid único
@@ -341,6 +386,10 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-09-08 | Módulo "MIP" reescrito — grid deixa de mostrar todos os INEPs e passa a mostrar só os em "Aguardando validação EACE" (RN-074); ganha colunas Valor Total (IXC)/Valor Total (EACE) com destaque de divergência (RN-076/RN-077), Estado/Município no lugar de Endereço (RN-078), filtros de Estado/Município e data de entrada no status (RN-075/RN-079), linha de total geral (RN-080) e bolinha de sincronização com lista "Fora da Validação EACE" (RN-081); "Estrutura de navegação" e "Decisões Pendentes" atualizadas (uso do período do Relatório EACE (MIP), RN-073, resolvido) | Usuário pediu, ao longo do dia, uma sequência de ajustes no grid do MIP diretamente ao Dev; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (530 testes, sem regressão, validado inclusive contra dado real de produção) |
+| 2026-09-07 | Módulo "MIP" atualizado — Sincronizador do Lado 3 (RN-070) e confronto de divergência de Valor de serviço (RN-071) documentados; "Decisões Pendentes" restrito ao uso do período (Data inicial/Data final) do upload, já que o Sincronizador e o confronto não dependem dele | Usuário pediu o Sincronizador "com as mesmas regras do RI" e, na sequência, o mesmo card de divergência do RI, validando só Valor de serviço; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (404 testes de `apps.ri` + 64 de `apps.escolas`, sem regressão) |
+| 2026-09-07 | Módulo "MIP" ganha nota sobre a tela de upload do Lado 3 (`Administrador > Relatório EACE (MIP)`, FEAT-035/RN-069); "Decisões Pendentes" ganha item sobre o Sincronizador dessa planilha ainda não definido | Usuário pediu a tela de upload (mesmo padrão da Planilha EACE do RI, com Data inicial/Data final a mais) e depois indicou a fonte real (`doc/Base MIP.xlsx`) e as colunas a ler; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (404 testes de `apps.ri` + 45 de `apps.escolas`, sem regressão) |
+| 2026-09-07 | Novo módulo "MIP" em "Novos nesta versão (v1)" (RN-066/067/068, `FEAT-034`); "Estrutura de navegação (menu lateral)" atualizada — "Projeto" ganha o item "MIP" e o nome do item existente é corrigido de "EACE" (desatualizado) para "Equipamentos" (nome real em `core/base.html`) | Usuário pediu o submenu MIP com a visão de todos os INEPs e, na sequência, os mesmos 3 lados/histórico do RI; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão; divergência de nome ("EACE" x "Equipamentos") encontrada e corrigida ao revisar esta seção |
 | 2026-09-03 | Fase 3 do RPA de anexo no portal EACE (fila serializada, RN-058) marcada como implementada pelo Dev — falta só o serviço no `docker-compose.yml` chamando o comando (DevOps); `ADR-005` atualizada (polling HTMX resolve a lacuna de UI que estava em aberto) | Dev entregou a lógica de fila/reprocessamento e a tela no mesmo dia do pedido; Orquestrador só formaliza a documentação |
 | 2026-09-03 | Fase 2 do RPA de anexo no portal EACE marcada como entregue; Fase 3 (fila de execução serializada, RN-058) registrada, com `ADR-005` — execução deixa de ser síncrona, erro não mapeado reprocessa 1 vez sozinho, erro de regra de negócio nunca reprocessa | Usuário pediu a fila logo após ver a Fase 2 (log/tela) ao vivo — várias pessoas podem disparar a RPA ao mesmo tempo; implementação (Dev) e infraestrutura do processo consumidor (DevOps) ainda não feitas |
 | 2026-09-03 | Regra de avanço automático de status da RPA de anexo no portal EACE fechada: RI avança de "Resposta Financeiro" para "Aguardando validação EACE" só se todos os logs do RI derem "Sucesso"; 1 "Erro" mantém o status | Usuário respondeu à pendência aberta na definição do gatilho; agregação "todos os logs" é interpretação do Orquestrador (CLAUDE.md §9), sujeita a confirmação |
