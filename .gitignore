@@ -22,6 +22,20 @@ CONSOLIDADO EACE.xlsx
 doc/EACE.csv
 doc/FATURAMENTO MATERIAS EACE.xlsx
 
+# Planilhas-modelo/fonte real do MIP (FEAT-034/035, mesmo padrao das
+# acima) - "Base MIP.xlsx" e so referencia local (upload real e feito
+# pela tela, RN-069); "FATURAMENTO IMPLANTACAO.xlsx" e modelo fixo lido
+# por CAMINHO_PLANILHA_FATURAMENTO_IMPLANTACAO_MODELO (apps/escolas/
+# services.py) - precisa estar no servidor via volume doc_hml (mesmo
+# esquema ja usado para FATURAMENTO MATERIAS EACE.xlsx, ver
+# docs_gerenciador_pos_venda/devops/TROUBLESHOOTING.md), nunca no git.
+doc/Base MIP.xlsx
+doc/FATURAMENTO IMPLANTAÇÃO.xlsx
+
+# Arquivos de trava temporaria do Excel (criados so enquanto o arquivo
+# esta aberto) - nunca versionar.
+~$*.xlsx
+
 # Credenciais reais de servidor em texto puro (achado de seguranca em
 # 2026-08-28) - nunca versionar. Mover para um cofre de senhas.
 ServidorEACE
