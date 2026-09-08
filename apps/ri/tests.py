@@ -10,6 +10,7 @@ from unittest.mock import patch
 import openpyxl
 from django.contrib.auth import get_user_model
 from django.core import mail
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError, transaction
@@ -51,6 +52,7 @@ from .services import (
     montar_faturamento_por_estado,
     montar_faturamento_por_municipio,
     nome_arquivo_planilha_faturamento,
+    recuperar_documentos_perdidos,
     sincronizar_divergencia_kit_relatorio,
     sincronizar_relatorio_eace_da_planilha,
     sincronizar_relatorio_eace_de_todas_as_ri,
@@ -2968,6 +2970,184 @@ class SincronizarEmailFinanceiroCommandTests(TestCase):
         self.assertIn("RIs com status alterado: 1", saida.getvalue())
         self.assertIn("documentos anexados: 0", saida.getvalue())
         self.assertIn("fora do padrão: 1", saida.getvalue())
+
+
+_MEDIA_ROOT_TESTE_RECUPERAR_DOCUMENTOS = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_RECUPERAR_DOCUMENTOS, **_CONFIG_GRAPH_FINANCEIRO_TESTE)
+class RecuperarDocumentosPerdidosTests(TestCase):
+    """Achado em produção (2026-09-08): `email_scheduler` rodou um tempo
+    sem o volume nomeado do `media/` (`docker-compose.hml.yml`) — o
+    `Documento` continuava existindo no banco, intacto, mas o arquivo em
+    si nunca chegava a existir no storage que o resto do sistema
+    enxerga. Recupera buscando de novo o e-mail original no Microsoft
+    Graph (mesmo `mensagem_id_externo` já salvo em `EmailFinanceiroLog`,
+    RN-009) e regravando os mesmos bytes no mesmo registro — nunca cria
+    Documento novo. Credenciais e chamadas de rede são todas dublês,
+    mesmo padrão de `SincronizarEmailFinanceiroTests`."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_RECUPERAR_DOCUMENTOS, ignore_errors=True)
+
+    def setUp(self):
+        self.escola = Escola.objects.create(inep="50000010", nome="Escola Recuperação")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.pdf = Documento.objects.create(ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF, versao=1)
+        self.pdf.arquivo.save("nota.pdf", ContentFile(b"conteudo perdido pdf"), save=True)
+        self.xml = Documento.objects.create(ri=self.ri, tipo=Documento.XML, versao=1)
+        self.xml.arquivo.save("nota.xml", ContentFile(b"conteudo perdido xml"), save=True)
+        # Simula o arquivo sumido do storage (o registro do banco segue
+        # intacto) — mesmo cenário real, apaga só o arquivo em disco.
+        self.pdf.arquivo.storage.delete(self.pdf.arquivo.name)
+        self.xml.arquivo.storage.delete(self.xml.arquivo.name)
+
+        self.log_email = EmailFinanceiroLog.objects.create(
+            ri=self.ri, direcao=EmailFinanceiroLog.RECEBIDO, status_leitura=EmailFinanceiroLog.OK,
+            mensagem_id_externo="<msg-perdido@financeiro>",
+        )
+
+    def _mocks_graph(self, bruto):
+        resposta_busca = _RespostaGraphFake({"value": [{"id": "graph-id-recuperado"}]})
+        return (
+            patch("apps.ri.services._obter_token", return_value="token-de-teste"),
+            patch("apps.ri.services._graph_get", return_value=resposta_busca),
+            patch("apps.ri.services._buscar_mime", return_value=bruto),
+        )
+
+    def _bruto_com_os_2_anexos_originais(self):
+        return _montar_email_bytes(
+            "assunto qualquer",
+            anexos=[
+                ("nota.pdf", "application", "pdf", b"conteudo perdido pdf"),
+                ("nota.xml", "text", "xml", b"conteudo perdido xml"),
+            ],
+        )
+
+    def test_recupera_documento_com_aplicar(self):
+        p1, p2, p3 = self._mocks_graph(self._bruto_com_os_2_anexos_originais())
+        with p1, p2, p3:
+            resultado = recuperar_documentos_perdidos(aplicar=True)
+
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0]["ri_id"], self.ri.pk)
+        self.assertEqual(resultado[0]["status"], "recuperado")
+        self.assertEqual(set(resultado[0]["documentos_recuperados"]), {self.pdf.pk, self.xml.pk})
+        self.pdf.refresh_from_db()
+        self.xml.refresh_from_db()
+        self.assertTrue(self.pdf.arquivo.storage.exists(self.pdf.arquivo.name))
+        self.assertEqual(self.pdf.arquivo.read(), b"conteudo perdido pdf")
+        self.assertEqual(self.xml.arquivo.read(), b"conteudo perdido xml")
+
+    def test_simula_sem_aplicar_nao_grava_nada(self):
+        p1, p2, p3 = self._mocks_graph(self._bruto_com_os_2_anexos_originais())
+        with p1, p2, p3:
+            resultado = recuperar_documentos_perdidos(aplicar=False)
+
+        self.assertEqual(resultado[0]["status"], "simulado")
+        self.assertFalse(self.pdf.arquivo.storage.exists(self.pdf.arquivo.name))
+
+    def test_sem_log_de_email_e_pulado_para_revisao_manual(self):
+        self.log_email.delete()
+        resultado = recuperar_documentos_perdidos(aplicar=True)
+        self.assertEqual(resultado[0]["status"], "pulado")
+        self.assertIn("0 e-mail", resultado[0]["motivo"])
+
+    def test_mais_de_1_log_de_email_e_pulado_para_revisao_manual(self):
+        EmailFinanceiroLog.objects.create(
+            ri=self.ri, direcao=EmailFinanceiroLog.RECEBIDO, status_leitura=EmailFinanceiroLog.OK,
+            mensagem_id_externo="<msg-2@financeiro>",
+        )
+        resultado = recuperar_documentos_perdidos(aplicar=True)
+        self.assertEqual(resultado[0]["status"], "pulado")
+        self.assertIn("2 e-mail", resultado[0]["motivo"])
+
+    def test_quantidade_de_anexo_diferente_e_pulado_sem_gravar_nada(self):
+        """Nunca resolve com suposição (CLAUDE.md §9) — se o e-mail
+        encontrado não bate exatamente com o que falta, não grava nada."""
+        bruto = _montar_email_bytes(
+            "assunto qualquer", anexos=[("nota.pdf", "application", "pdf", b"conteudo perdido pdf")],
+        )
+        p1, p2, p3 = self._mocks_graph(bruto)
+        with p1, p2, p3:
+            resultado = recuperar_documentos_perdidos(aplicar=True)
+        self.assertEqual(resultado[0]["status"], "pulado")
+        self.assertIn("não bate", resultado[0]["motivo"])
+        self.assertFalse(self.pdf.arquivo.storage.exists(self.pdf.arquivo.name))
+
+    def test_mensagem_nao_encontrada_na_caixa_e_pulado(self):
+        resposta_vazia = _RespostaGraphFake({"value": []})
+        with patch("apps.ri.services._obter_token", return_value="token-de-teste"), patch(
+            "apps.ri.services._graph_get", return_value=resposta_vazia
+        ):
+            resultado = recuperar_documentos_perdidos(aplicar=True)
+        self.assertEqual(resultado[0]["status"], "pulado")
+        self.assertIn("não encontrada", resultado[0]["motivo"])
+
+    def test_sem_nenhum_documento_perdido_devolve_lista_vazia(self):
+        self.pdf.arquivo.storage.save(self.pdf.arquivo.name, ContentFile(b"ok"))
+        self.xml.arquivo.storage.save(self.xml.arquivo.name, ContentFile(b"ok"))
+        resultado = recuperar_documentos_perdidos(aplicar=True)
+        self.assertEqual(resultado, [])
+
+    def test_filtra_por_ri_id_nao_mexe_em_outro_ri(self):
+        outra_escola = Escola.objects.create(inep="50000011", nome="Outra Escola")
+        outro_ri = Ri.objects.create(escola=outra_escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        outro_doc = Documento.objects.create(ri=outro_ri, tipo=Documento.NOTA_FISCAL_PDF, versao=1)
+        outro_doc.arquivo.save("nota-outra.pdf", ContentFile(b"nunca existiu"), save=True)
+        outro_doc.arquivo.storage.delete(outro_doc.arquivo.name)
+
+        resultado = recuperar_documentos_perdidos(ri_id=outro_ri.pk, aplicar=True)
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0]["ri_id"], outro_ri.pk)
+
+    @override_settings(GRAPH_FINANCEIRO_ENABLED=False)
+    def test_desabilitado_por_padrao_sem_credenciais(self):
+        with self.assertRaises(EmailFinanceiroSyncError):
+            recuperar_documentos_perdidos(aplicar=True)
+
+
+class RecuperarDocumentosPerdidosCommandTests(TestCase):
+    """`manage.py recuperar_documentos_perdidos` — comando que um
+    operador roda na mão (não é agendado), por isso o padrão é simular
+    (mesmo padrão --aplicar de `importar_escolas_planilha`)."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_RECUPERAR_DOCUMENTOS, ignore_errors=True)
+
+    @override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_RECUPERAR_DOCUMENTOS, **_CONFIG_GRAPH_FINANCEIRO_TESTE)
+    def test_sem_aplicar_so_simula(self):
+        escola = Escola.objects.create(inep="50000012", nome="Escola Comando")
+        ri = Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        documento = Documento.objects.create(ri=ri, tipo=Documento.NOTA_FISCAL_PDF, versao=1)
+        documento.arquivo.save("nota.pdf", ContentFile(b"perdido"), save=True)
+        documento.arquivo.storage.delete(documento.arquivo.name)
+        EmailFinanceiroLog.objects.create(
+            ri=ri, direcao=EmailFinanceiroLog.RECEBIDO, status_leitura=EmailFinanceiroLog.OK,
+            mensagem_id_externo="<msg-comando@financeiro>",
+        )
+
+        saida = StringIO()
+        resposta_busca = _RespostaGraphFake({"value": [{"id": "graph-id-x"}]})
+        bruto = _montar_email_bytes(
+            "assunto", anexos=[("nota.pdf", "application", "pdf", b"perdido")],
+        )
+        with patch("apps.ri.services._obter_token", return_value="token-de-teste"), patch(
+            "apps.ri.services._graph_get", return_value=resposta_busca
+        ), patch("apps.ri.services._buscar_mime", return_value=bruto):
+            call_command("recuperar_documentos_perdidos", stdout=saida)
+
+        self.assertIn("Simulação (nada foi gravado)", saida.getvalue())
+        self.assertFalse(documento.arquivo.storage.exists(documento.arquivo.name))
+
+    @override_settings(GRAPH_FINANCEIRO_ENABLED=False)
+    def test_erro_de_configuracao_vira_command_error(self):
+        with self.assertRaises(CommandError):
+            call_command("recuperar_documentos_perdidos")
 
 
 class RiDetailViewTests(TestCase):

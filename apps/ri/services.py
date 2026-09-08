@@ -1702,6 +1702,190 @@ def sincronizar_respostas_financeiro():
     return resultado
 
 
+def _buscar_id_mensagem_por_internet_message_id(caixa, internet_message_id, token):
+    """Resolve o ID interno do Graph (exigido por `_buscar_mime`, na URL
+    `/messages/{id}/$value`) a partir do `internetMessageId` (cabeçalho
+    Message-ID do e-mail) — são IDs diferentes: `EmailFinanceiroLog.
+    mensagem_id_externo` guarda o `internetMessageId` (preferido em
+    `sincronizar_respostas_financeiro`, só cai pro ID do Graph quando o
+    cabeçalho vem vazio), mas o download de 1 mensagem específica exige o
+    ID opaco do Graph. `None` quando a mensagem não é encontrada na caixa
+    (ex.: apagada) — quem chamar decide o que fazer."""
+    valor_escapado = internet_message_id.replace("'", "''")
+    url = f"{GRAPH_BASE_URL}/users/{quote(caixa, safe='')}/messages"
+    resposta = _graph_get(
+        url, token,
+        params={"$filter": f"internetMessageId eq '{valor_escapado}'", "$select": "id", "$top": "1"},
+    )
+    itens = resposta.json().get("value", [])
+    return itens[0]["id"] if itens else None
+
+
+def _documentos_com_arquivo_ausente():
+    """Documento cujo arquivo sumiu do storage — achado em produção
+    (2026-09-08, RN a formalizar pelo Orquestrador): o serviço
+    `email_scheduler` rodou um tempo sem o volume nomeado do `media/`
+    (`docker-compose.hml.yml`), então o arquivo era gravado no
+    filesystem efêmero do próprio container, nunca no volume que
+    `web`/`rpa_eace_worker` enxergam — o registro no banco continua
+    existindo, intacto, só o arquivo em si desaparece na próxima
+    recriação do container. Não há flag pra isso no modelo (o dado nunca
+    devia sumir sozinho), por isso a checagem é sempre contra o storage
+    de verdade, não contra um campo salvo."""
+    faltando = []
+    for documento in Documento.objects.select_related("ri", "ri__escola").order_by("ri_id", "tipo", "versao"):
+        try:
+            existe = documento.arquivo.name and documento.arquivo.storage.exists(documento.arquivo.name)
+        except Exception:
+            existe = False
+        if not existe:
+            faltando.append(documento)
+    return faltando
+
+
+def recuperar_documentos_perdidos(ri_id=None, aplicar=False):
+    """Recupera `Documento` cujo arquivo sumiu do storage (
+    `_documentos_com_arquivo_ausente`) buscando de novo o e-mail
+    original na caixa do financeiro, pelo `mensagem_id_externo` já salvo
+    em `EmailFinanceiroLog` (RN-009/FEAT-009), e regravando os MESMOS
+    bytes no MESMO `Documento` (mesma PK, mesmo nome de arquivo já
+    salvo) — nunca cria registro novo, nunca duplica, nunca move/apaga
+    nada na caixa de e-mail (só lê).
+
+    Só recupera automaticamente o caso inequívoco: exatamente 1
+    `EmailFinanceiroLog` (RECEBIDO, status OK, com `mensagem_id_externo`
+    preenchido) para o RI, com a mesma quantidade de PDF/XML da resposta
+    batendo exatamente com a quantidade de `Documento` do mesmo tipo já
+    existente pra esse RI. Qualquer ambiguidade (0 ou mais de 1 e-mail
+    encontrado, contagem diferente, mensagem não existe mais na caixa,
+    RI sem e-mail de financeiro registrado) é reportada para revisão
+    manual — nunca resolvida com uma suposição (CLAUDE.md §9).
+
+    `aplicar=False` (padrão) só simula e relata o que faria, sem gravar
+    nada — mesmo padrão de `--aplicar` já usado em
+    `importar_escolas_planilha` (`apps.escolas`). Devolve uma lista de
+    dicts, 1 por RI afetado: `{"ri_id", "inep", "status" ("recuperado"/
+    "simulado"/"pulado"), "motivo", "documentos_recuperados" (pks)}`."""
+    if not _graph_habilitado():
+        raise EmailFinanceiroSyncError(
+            "Sincronização do Microsoft Graph desabilitada — defina "
+            "GRAPH_FINANCEIRO_ENABLED/CLIENT_ID/CLIENT_SECRET/TENANT_ID no .env."
+        )
+    caixa = _resolver_caixa()
+
+    documentos_faltando = _documentos_com_arquivo_ausente()
+    if ri_id is not None:
+        documentos_faltando = [d for d in documentos_faltando if d.ri_id == ri_id]
+
+    por_ri = OrderedDict()
+    for documento in documentos_faltando:
+        por_ri.setdefault(documento.ri_id, []).append(documento)
+
+    resultado = []
+    token = None
+    for ri_id_atual, docs_faltando in por_ri.items():
+        ri = docs_faltando[0].ri
+        inep = ri.escola.inep if (ri and ri.escola) else "?"
+        linha = {"ri_id": ri_id_atual, "inep": inep, "documentos_recuperados": []}
+
+        logs_email = list(
+            EmailFinanceiroLog.objects.filter(
+                ri_id=ri_id_atual, direcao=EmailFinanceiroLog.RECEBIDO, status_leitura=EmailFinanceiroLog.OK,
+            ).exclude(mensagem_id_externo="")
+        )
+        if len(logs_email) != 1:
+            linha["status"] = "pulado"
+            linha["motivo"] = (
+                f"{len(logs_email)} e-mail(s) de resposta do financeiro encontrado(s) para este RI "
+                "(esperado exatamente 1) — recuperação automática não é segura, revisar manualmente."
+            )
+            resultado.append(linha)
+            continue
+
+        if token is None:
+            try:
+                token = _obter_token()
+            except EmailFinanceiroSyncError as erro:
+                linha["status"] = "pulado"
+                linha["motivo"] = f"Falha ao autenticar no Microsoft Graph: {erro}"
+                resultado.append(linha)
+                continue
+
+        log_email = logs_email[0]
+        try:
+            id_mensagem = _buscar_id_mensagem_por_internet_message_id(caixa, log_email.mensagem_id_externo, token)
+            if not id_mensagem:
+                linha["status"] = "pulado"
+                linha["motivo"] = "Mensagem não encontrada mais na caixa do financeiro (pode ter sido apagada)."
+                resultado.append(linha)
+                continue
+            bruto = _buscar_mime(caixa, id_mensagem, token)
+        except EmailFinanceiroSyncError as erro:
+            linha["status"] = "pulado"
+            linha["motivo"] = f"Falha ao buscar a mensagem no Microsoft Graph: {erro}"
+            resultado.append(linha)
+            continue
+
+        mensagem = message_from_bytes(bruto, policy=policy.default)
+        pdfs, xmls = _classificar_anexos(mensagem)
+
+        existentes_pdf = list(
+            Documento.objects.filter(ri_id=ri_id_atual, tipo=Documento.NOTA_FISCAL_PDF).order_by("versao")
+        )
+        existentes_xml = list(
+            Documento.objects.filter(ri_id=ri_id_atual, tipo=Documento.XML).order_by("versao")
+        )
+        if len(pdfs) != len(existentes_pdf) or len(xmls) != len(existentes_xml):
+            linha["status"] = "pulado"
+            linha["motivo"] = (
+                f"Quantidade de anexo não bate: e-mail tem {len(pdfs)} PDF/{len(xmls)} XML, "
+                f"banco tem {len(existentes_pdf)} PDF/{len(existentes_xml)} XML — revisar manualmente."
+            )
+            resultado.append(linha)
+            continue
+
+        docs_faltando_pks = {d.pk for d in docs_faltando}
+        pendente_gravar = [
+            (documento, payload)
+            for documento, (_, payload) in zip(existentes_pdf, pdfs)
+            if documento.pk in docs_faltando_pks
+        ] + [
+            (documento, payload)
+            for documento, (_, payload) in zip(existentes_xml, xmls)
+            if documento.pk in docs_faltando_pks
+        ]
+
+        if not aplicar:
+            linha["status"] = "simulado"
+            linha["motivo"] = f"{len(pendente_gravar)} documento(s) seriam regravados (rode com --aplicar)."
+            linha["documentos_recuperados"] = [d.pk for d, _ in pendente_gravar]
+            resultado.append(linha)
+            continue
+
+        erro_gravacao = None
+        for documento, payload in pendente_gravar:
+            nome_gravado = documento.arquivo.storage.save(documento.arquivo.name, ContentFile(payload))
+            if nome_gravado != documento.arquivo.name:
+                # Nunca deveria acontecer (o nome antigo não existe mais no
+                # storage, então não há colisão a evitar) — mas se
+                # acontecer, não finge que deu certo: registra e para.
+                erro_gravacao = (
+                    f"Storage gravou com nome diferente do esperado ({nome_gravado!r} em vez de "
+                    f"{documento.arquivo.name!r}) — abortado, revisar manualmente."
+                )
+                break
+        if erro_gravacao:
+            linha["status"] = "pulado"
+            linha["motivo"] = erro_gravacao
+        else:
+            linha["status"] = "recuperado"
+            linha["motivo"] = f"{len(pendente_gravar)} documento(s) regravado(s) com sucesso."
+            linha["documentos_recuperados"] = [d.pk for d, _ in pendente_gravar]
+        resultado.append(linha)
+
+    return resultado
+
+
 def _registrar_execucao_rpa_eace(log):
     """FEAT-033 (RN-058): pedido do usuário (2026-09-03) - cada tentativa
     de execução do RPA de anexo no portal EACE fica registrada na mesma
