@@ -201,6 +201,20 @@ def anexar_nota_fiscal(
     dados_pdf = extrair_dados_nota_fiscal(caminho_pdf)
     progresso.avancar()  # "Lendo os dados da Nota Fiscal"
 
+    # Correcao (2026-09-08, INEP 35230571 em producao): arquivo ausente/
+    # corrompido no storage (ex.: `Documento.arquivo` referenciando um
+    # caminho que nao existe mais no volume de media, 404 tambem no
+    # download pelo navegador) fazia `extrair_texto_pdf` devolver "" e
+    # cair no mesmo `pdf_sem_inep` de um PDF lido com sucesso mas sem
+    # INEP no texto - escondia um problema de arquivo/ambiente atras de
+    # uma mensagem que sugeria dado errado na Nota Fiscal (e nunca
+    # reprocessava sozinho, RN-058, por `pdf_sem_inep` ser mapeado como
+    # regra de negocio). `pdf_ilegivel` ja existia nos motivos possiveis
+    # e ja estava fora de `MOTIVOS_REGRA_DE_NEGOCIO` (tecnico/ambiente,
+    # ganha 1 reprocessamento automatico) - so nunca tinha sido de fato
+    # levantado por este codigo.
+    if dados_pdf["ilegivel"]:
+        return ResultadoRpaEace(sucesso=False, motivo="pdf_ilegivel", dados_pdf=dados_pdf)
     if not dados_pdf["inep"]:
         return ResultadoRpaEace(sucesso=False, motivo="pdf_sem_inep", dados_pdf=dados_pdf)
     if not dados_pdf["valor"]:

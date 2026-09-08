@@ -95,17 +95,33 @@ class ExtrairDadosNotaFiscalPdfRealTests(SimpleTestCase):
         _gerar_pdf_nota_fiscal(self.pdf, com_inep=False)
         dados = extrair_dados_pdf.extrair_dados_nota_fiscal(str(self.pdf))
         self.assertEqual(dados["inep"], "")
+        # Texto foi lido normalmente (só falta o INEP nele) - "ilegivel"
+        # tem que ficar False, senão o motivo em rpa.py vira "pdf_ilegivel"
+        # (arquivo/ambiente) em vez de "pdf_sem_inep" (dado da Nota Fiscal).
+        self.assertFalse(dados["ilegivel"])
 
     def test_pdf_sem_valor(self):
         _gerar_pdf_nota_fiscal(self.pdf, com_valor=False)
         dados = extrair_dados_pdf.extrair_dados_nota_fiscal(str(self.pdf))
         self.assertEqual(dados["valor"], "")
+        self.assertFalse(dados["ilegivel"])
 
     def test_pdf_ilegivel_nao_estoura_excecao(self):
         arquivo_invalido = Path(self._tmp.name) / "nao-e-pdf.pdf"
         arquivo_invalido.write_bytes(b"isto nao e um PDF de verdade")
         dados = extrair_dados_pdf.extrair_dados_nota_fiscal(str(arquivo_invalido))
-        self.assertEqual(dados, {"inep": "", "produto": "", "valor": ""})
+        self.assertEqual(dados, {"inep": "", "produto": "", "valor": "", "ilegivel": True})
+
+    def test_pdf_ausente_no_disco_e_ilegivel(self):
+        """Caso real de produção (INEP 35230571, 2026-09-08): arquivo do
+        `Documento` sumiu do storage (404 também no download pelo
+        navegador) - `pdfplumber.open` levanta erro de arquivo não
+        encontrado, `extrair_texto_pdf` engole a exceção e devolve "" -
+        tem que virar "ilegivel", não silenciosamente parecer um PDF lido
+        com sucesso mas sem INEP."""
+        caminho_inexistente = str(Path(self._tmp.name) / "nao-existe.pdf")
+        dados = extrair_dados_pdf.extrair_dados_nota_fiscal(caminho_inexistente)
+        self.assertEqual(dados, {"inep": "", "produto": "", "valor": "", "ilegivel": True})
 
 
 class AnexarNotaFiscalValidacaoAntecipadaTests(SimpleTestCase):
@@ -130,6 +146,21 @@ class AnexarNotaFiscalValidacaoAntecipadaTests(SimpleTestCase):
         resultado = self._rodar()
         self.assertFalse(resultado.sucesso)
         self.assertEqual(resultado.motivo, "pdf_sem_inep")
+
+    def test_pdf_ausente_no_disco_aborta_com_motivo_pdf_ilegivel(self):
+        """Caso real de produção (INEP 35230571, 2026-09-08): arquivo do
+        `Documento` sumiu do storage - antes desta correção, isso caía no
+        mesmo "pdf_sem_inep" de uma Nota Fiscal com dado ausente (motivo
+        mapeado como regra de negócio, RN-058, nunca reprocessa sozinho).
+        Agora vira "pdf_ilegivel" - motivo técnico/de ambiente, fora de
+        `MOTIVOS_REGRA_DE_NEGOCIO`, ganha 1 reprocessamento automático."""
+        from apps.integracoes.eace.rpa import MOTIVOS_REGRA_DE_NEGOCIO
+        # self.pdf nunca foi criado neste teste (sem chamar
+        # `_gerar_pdf_nota_fiscal`) - mesmo cenário do arquivo ausente.
+        resultado = self._rodar()
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "pdf_ilegivel")
+        self.assertNotIn("pdf_ilegivel", MOTIVOS_REGRA_DE_NEGOCIO)
 
     def test_pdf_sem_valor_aborta_antes_do_navegador(self):
         _gerar_pdf_nota_fiscal(self.pdf, com_valor=False)

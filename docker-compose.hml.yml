@@ -87,6 +87,14 @@ services:
       - DB_ENGINE=mysql
       - DB_HOST=db
       - DB_PORT=3306
+    volumes:
+      # Correcao 2026-09-08 (INEP 35230571 em producao): faltava este
+      # volume - o Documento (PDF/XML da Nota Fiscal recebida por e-mail,
+      # RF-08/RF-19) era salvo no filesystem isolado/efemero deste
+      # container, invisivel para web/rpa_eace_worker/nginx (que usam o
+      # volume nomeado media_hml) - 404 no download e falso pdf_sem_inep
+      # no RPA (arquivo nunca existia onde os outros containers procuram).
+      - media_hml:/app/media
     depends_on:
       db:
         condition: service_healthy

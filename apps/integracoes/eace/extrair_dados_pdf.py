@@ -81,17 +81,30 @@ def valores_iguais(v1: str, v2: str) -> bool:
 
 
 def extrair_dados_nota_fiscal(caminho_pdf: str) -> dict:
-    """Extrai {"inep", "produto", "valor"} do PDF (RN-057). Campo vazio
-    quando o padrao correspondente nao foi encontrado no texto - o
-    chamador decide se isso e um erro bloqueante."""
+    """Extrai {"inep", "produto", "valor", "ilegivel"} do PDF (RN-057).
+    Campo vazio quando o padrao correspondente nao foi encontrado no texto
+    - o chamador decide se isso e um erro bloqueante.
+
+    "ilegivel" (`True`) distingue "nao foi possivel ler texto NENHUM do
+    arquivo" (arquivo ausente/corrompido/scaneado sem OCR - falha tecnica/
+    de ambiente, `motivo="pdf_ilegivel"` em `rpa.py`) de "o texto foi lido,
+    mas o INEP/valor nao aparece nele" (`motivo="pdf_sem_inep"`/
+    "pdf_sem_valor" - dado da Nota Fiscal, regra de negocio). Antes desta
+    distincao, `extrair_texto_pdf` engolia qualquer excecao (arquivo nao
+    encontrado incluso, `Path.open`/`pdfplumber.open` levantam `OSError`)
+    e devolvia "" do mesmo jeito que um PDF ilegivel de verdade - os dois
+    casos viravam "pdf_sem_inep", escondendo um problema de arquivo
+    ausente atras de uma mensagem que sugeria dado errado na Nota Fiscal."""
     texto = extrair_texto_pdf(caminho_pdf)
     dados = {
         "inep": extrair_inep(texto),
         "produto": extrair_produto(texto),
         "valor": extrair_valor(texto),
+        "ilegivel": not texto.strip(),
     }
     logger.info(
-        "Dados extraidos da NF (%s): INEP=%s | Produto=%s | Valor=%s",
+        "Dados extraidos da NF (%s): INEP=%s | Produto=%s | Valor=%s | Ilegivel=%s",
         Path(caminho_pdf).name, dados["inep"] or "?", dados["produto"] or "?", dados["valor"] or "?",
+        dados["ilegivel"],
     )
     return dados
