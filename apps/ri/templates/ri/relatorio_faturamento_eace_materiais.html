@@ -75,9 +75,13 @@
     </div>
 </div>
 {% else %}
-<div class="mb-4">
+<div class="flex flex-wrap items-center gap-3 mb-4">
     <span class="text-xs font-black uppercase tracking-widest text-gray-500 dark:text-gray-400">
         {{ linhas|length }} INEP{{ linhas|length|pluralize }} no período
+    </span>
+    <span class="inline-flex items-center gap-2 px-4 py-1.5 bg-pv-black text-pv-yellow rounded-full text-xs font-black uppercase tracking-wider">
+        <i data-lucide="wallet" class="w-3.5 h-3.5"></i>
+        Total Equipamentos: R$ {{ total_equipamentos|intcomma }}
     </span>
 </div>
 

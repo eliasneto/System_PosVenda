@@ -1828,14 +1828,22 @@ def relatorio_faturamento_eace_materiais_view(request):
 
     form = RelatorioFaturamentoEaceMateriaisForm(request.GET or None)
     linhas = None
+    total_equipamentos = None
     if form.is_bound and form.is_valid():
         linhas = montar_relatorio_faturamento_eace_materiais(
             form.cleaned_data["data_inicio"], form.cleaned_data["data_fim"]
+        )
+        # Pedido do usuário (2026-09-08): soma de "Equipamentos R$" de
+        # acordo com o período filtrado — mesma base de linhas já
+        # calculada para a tabela, sem consulta extra.
+        total_equipamentos = sum(
+            (linha["equipamentos_valor"] for linha in linhas), Decimal("0")
         )
 
     return render(request, "ri/relatorio_faturamento_eace_materiais.html", {
         "form": form,
         "linhas": linhas,
+        "total_equipamentos": total_equipamentos,
     })
 
 

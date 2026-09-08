@@ -3222,6 +3222,7 @@ def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
 
     coluna_data_ativacao = chaves.index("data_ativacao") + 1
     coluna_valor = chaves.index("equipamentos_valor") + 1
+    coluna_unidade_escolar = chaves.index("unidade_escolar") + 1
     for linha in linhas:
         aba.append([linha.get(chave) for chave in chaves])
         numero_linha = aba.max_row
@@ -3234,6 +3235,25 @@ def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
             )
         aba.cell(row=numero_linha, column=coluna_data_ativacao).number_format = "DD/MM/YYYY"
         aba.cell(row=numero_linha, column=coluna_valor).number_format = _FORMATO_MOEDA_PLANILHA
+
+    # RN-086 (nova, a formalizar pelo Orquestrador; pedido do usuário
+    # 2026-09-08): linha de total de "Equipamentos R$" somando só as
+    # linhas do período filtrado — mesma soma mostrada na tela. Sem
+    # linha nenhuma no período, não faz sentido mostrar total.
+    if linhas:
+        total_equipamentos = sum((linha["equipamentos_valor"] for linha in linhas), Decimal("0"))
+        aba.append([None] * total_colunas)
+        linha_total = aba.max_row
+        aba.cell(row=linha_total, column=coluna_unidade_escolar, value="TOTAL DO PERÍODO")
+        aba.cell(row=linha_total, column=coluna_valor, value=float(total_equipamentos))
+        for numero_coluna in (coluna_unidade_escolar, coluna_valor):
+            celula = aba.cell(row=linha_total, column=numero_coluna)
+            celula.font = Font(name=_FONTE_PLANILHA, size=11, bold=True)
+            celula.border = Border(top=_BORDA_MEDIA)
+            celula.alignment = Alignment(
+                horizontal="left" if numero_coluna == coluna_unidade_escolar else "center"
+            )
+        aba.cell(row=linha_total, column=coluna_valor).number_format = _FORMATO_MOEDA_PLANILHA
 
     for letra, largura in _LARGURA_COLUNAS_PLANILHA.items():
         aba.column_dimensions[letra].width = largura

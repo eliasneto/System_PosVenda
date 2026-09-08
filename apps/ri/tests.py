@@ -7278,22 +7278,25 @@ class MontarRelatorioFaturamentoEaceMateriaisTests(TestCase):
         self.assertEqual(len(linhas), 1)
 
 
+_LINHA_BASE_TESTE_PLANILHA = {
+    "lote": 9, "uf": "PE", "municipio": "Recife", "inep": "60000020",
+    "unidade_escolar": "Escola Teste", "endereco": "Rua X", "velocidade": "50",
+    "kit_wifi_estimado": 4, "kit_wifi_instalado": 4, "ap_adicional_estimado": 3,
+    "nobreak": 1, "conversor": None, "rack": 2, "switch": 1,
+    "equipamentos_valor": Decimal("6600.00"), "status": "ATIVO",
+    "data_ativacao": date(2026, 8, 20), "nota_fiscal_kit": "1001",
+    "nota_fiscal_nobreak": "1002", "nota_fiscal_access_point": "",
+    "nota_fiscal_conversor": "", "nota_fiscal_rack": "1003", "nota_fiscal_switch": "",
+    "numero_osps": "4001/4002", "observacao": "",
+}
+
+
 class GerarPlanilhaRelatorioFaturamentoEaceMateriaisTests(TestCase):
     """FEAT-037: versão `.xlsx` do relatório — mesmas colunas mostradas na
     tela, na mesma ordem."""
 
     def test_planilha_gerada_tem_cabecalho_e_linhas(self):
-        linhas = [{
-            "lote": 9, "uf": "PE", "municipio": "Recife", "inep": "60000020",
-            "unidade_escolar": "Escola Teste", "endereco": "Rua X", "velocidade": "50",
-            "kit_wifi_estimado": 4, "kit_wifi_instalado": 4, "ap_adicional_estimado": 3,
-            "nobreak": 1, "conversor": None, "rack": 2, "switch": 1,
-            "equipamentos_valor": Decimal("6600.00"), "status": "ATIVO",
-            "data_ativacao": date(2026, 8, 20), "nota_fiscal_kit": "1001",
-            "nota_fiscal_nobreak": "1002", "nota_fiscal_access_point": "",
-            "nota_fiscal_conversor": "", "nota_fiscal_rack": "1003", "nota_fiscal_switch": "",
-            "numero_osps": "4001/4002", "observacao": "",
-        }]
+        linhas = [dict(_LINHA_BASE_TESTE_PLANILHA)]
         conteudo = gerar_planilha_relatorio_faturamento_eace_materiais(linhas)
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba = workbook["CONSOLIDADO"]
@@ -7307,6 +7310,26 @@ class GerarPlanilhaRelatorioFaturamentoEaceMateriaisTests(TestCase):
         self.assertEqual(aba["D3"].value, "60000020")
         self.assertEqual(aba["O3"].value, 6600.0)
         self.assertEqual(aba["Q3"].value.date(), date(2026, 8, 20))
+
+    def test_planilha_com_linhas_tem_total_de_equipamentos_no_final(self):
+        """Pedido do usuário (2026-09-08): linha de total de
+        "Equipamentos R$" somando só as linhas do período filtrado."""
+        linhas = [
+            {**_LINHA_BASE_TESTE_PLANILHA, "inep": "60000020", "equipamentos_valor": Decimal("6600.00")},
+            {**_LINHA_BASE_TESTE_PLANILHA, "inep": "60000021", "equipamentos_valor": Decimal("400.00")},
+        ]
+        conteudo = gerar_planilha_relatorio_faturamento_eace_materiais(linhas)
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba = workbook["CONSOLIDADO"]
+        # 2 linhas de dado (3 e 4) + 1 linha de total (5).
+        self.assertEqual(aba["E5"].value, "TOTAL DO PERÍODO")
+        self.assertEqual(aba["O5"].value, 7000.0)
+
+    def test_planilha_sem_linhas_nao_tem_linha_de_total(self):
+        conteudo = gerar_planilha_relatorio_faturamento_eace_materiais([])
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba = workbook["CONSOLIDADO"]
+        self.assertEqual(aba.max_row, 2)  # só título + cabeçalho
 
 
 class RelatorioAdministradorViewTests(TestCase):
@@ -7350,6 +7373,8 @@ class RelatorioFaturamentoEaceMateriaisViewTests(TestCase):
         )
         self.escola = Escola.objects.create(inep="60000030", nome="Escola View Teste", estado="PE")
         self.ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        KitPadrao.objects.create(descricao="Nobreak", unidade="Unidade", valor_equipamento="500.00")
+        RiItemIxc.objects.create(ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="0")
         _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 15))
 
     def test_sem_periodo_mostra_apenas_o_formulario(self):
@@ -7367,6 +7392,23 @@ class RelatorioFaturamentoEaceMateriaisViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "60000030")
         self.assertContains(resp, "Exportar Excel")
+
+    def test_periodo_valido_mostra_total_de_equipamentos_do_periodo(self):
+        """Pedido do usuário (2026-09-08): soma de "Equipamentos R$" das
+        linhas do período filtrado, mostrada na tela."""
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Total Equipamentos")
+        self.assertContains(resp, "500,00")
+
+    def test_sem_periodo_nao_mostra_total(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "Total Equipamentos")
 
     def test_periodo_invalido_mostra_erro(self):
         self.client.force_login(self.admin)
