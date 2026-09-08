@@ -2897,6 +2897,42 @@ class SincronizarEmailFinanceiroTests(TestCase):
         self.assertEqual(resultado["sem_ri_aguardando"], 1)
         self.assertFalse(EmailFinanceiroLog.objects.exists())
 
+    def test_resposta_apos_ri_sair_de_aguardando_financeiro_fica_visivel_na_linha_do_tempo(self):
+        """Correção 2026-09-08 (bug real, INEP 35455477: usuário reportou
+        "a resposta do e-mail não entrou no sistema"): o RI avançou pra
+        "Aguardando financeiro", o e-mail foi enviado, mas o usuário
+        mudou o status de volta manualmente ANTES da resposta chegar -
+        a busca por RI "Aguardando financeiro" não achava mais nada e a
+        resposta sumia sem deixar rastro (só um `logger.warning`, que
+        ninguém vê). Nunca reabre o status sozinho - só passa a avisar
+        na linha do tempo do RI mais recente desse INEP, pra não
+        desaparecer de vez."""
+        self.ri.status = Ri.ANDAMENTO
+        self.ri.save()
+
+        resultado = self._rodar_sync([("<msg-tarde@financeiro>", _montar_email_bytes(self.assunto_padrao))])
+
+        self.assertEqual(resultado["sem_ri_aguardando"], 1)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO, "nunca reabre o status sozinho")
+        self.assertFalse(EmailFinanceiroLog.objects.exists(), "continua sem duplicar o fluxo normal de resposta")
+        aviso = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.EMAIL)
+        self.assertIn("NÃO processada automaticamente", aviso.mensagem)
+        self.assertIn("Em Andamento", aviso.mensagem)
+
+    def test_resposta_tardia_de_remetente_fora_do_financeiro_nao_gera_aviso(self):
+        """RN-016: sem confirmar que é mesmo o financeiro respondendo,
+        nem esse aviso mais brando deve aparecer - senão um e-mail
+        qualquer com o código no assunto (encaminhamento, teste manual)
+        também criaria ruído na linha do tempo."""
+        self.ri.status = Ri.ANDAMENTO
+        self.ri.save()
+
+        bruto = _montar_email_bytes(self.assunto_padrao, remetente="Alguem <alguem@outrodominio.com.br>")
+        self._rodar_sync([("<msg-tarde-2@financeiro>", bruto)])
+
+        self.assertFalse(RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.EMAIL).exists())
+
     def test_resposta_de_remetente_fora_do_dominio_do_financeiro_nao_altera_nada(self):
         """RN-016 (correção 2026-09-02): código de rastreio no assunto (RN-009)
         não basta — usuário reportou falso positivo (INEP 35271561) em que um

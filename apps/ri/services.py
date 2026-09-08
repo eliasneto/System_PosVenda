@@ -1519,6 +1519,35 @@ def _processar_mensagem(bruto, mensagem_id_externo):
             "aguardando financeiro para esse INEP.",
             inep,
         )
+        # Correção 2026-09-08 (bug real, INEP 35455477: usuário reportou
+        # "a resposta do e-mail não entrou no sistema"): o RI tinha
+        # avançado o status na hora certa e o e-mail foi enviado, mas o
+        # usuário mudou o status do RI de volta manualmente ("Aguardando
+        # financeiro" -> "Em Andamento") antes de a resposta do
+        # financeiro chegar/ser processada - quando o e-mail veio, a
+        # busca acima (só olha "Aguardando financeiro") não achou mais
+        # nenhum RI, e a resposta sumia sem deixar rastro nenhum (só um
+        # `logger.warning`, que ninguém vê). Nunca reabre o status
+        # sozinho (continua sendo decisão do usuário) - só garante que
+        # a resposta fica visível na linha do tempo do RI mais recente
+        # desse INEP, pra não desaparecer de vez. Só registra quando o
+        # remetente é mesmo do financeiro (RN-016) - sem isso, qualquer
+        # e-mail com um código parecido (spam, encaminhamento) também
+        # criaria ruído aqui.
+        if _remetente_e_do_financeiro(remetente):
+            ri_mais_recente = Ri.objects.filter(escola__inep=inep).order_by("-criado_em").first()
+            if ri_mais_recente:
+                RiHistorico.objects.create(
+                    ri=ri_mais_recente,
+                    tipo=RiHistorico.EMAIL,
+                    autor=None,
+                    mensagem=(
+                        "E-mail do financeiro recebido com o código de rastreio deste RI, mas "
+                        f'o RI não estava mais "Aguardando financeiro" (status atual: '
+                        f'"{ri_mais_recente.get_status_display()}") - resposta NÃO processada '
+                        f"automaticamente, revise manualmente. Assunto: {assunto}"
+                    ),
+                )
         return "sem_ri_aguardando"
 
     if not _remetente_e_do_financeiro(remetente):
