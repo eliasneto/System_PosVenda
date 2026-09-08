@@ -1,0 +1,43 @@
+{% extends "core/base.html" %}
+
+{% block title %}Gerenciador Pós Venda | Relatório{% endblock %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li>Administrador</li>
+                <li>/</li>
+                <li class="text-gray-900 dark:text-gray-100">Relatório</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            Relatório
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+            Relatórios administrativos disponíveis para exportação
+        </p>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+    <a href="{% url 'relatorio_faturamento_eace_materiais' %}"
+       class="group bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-lg hover:border-pv-yellow/60 transition-all">
+        <div class="w-11 h-11 rounded-2xl bg-pv-black flex items-center justify-center shrink-0 mb-4">
+            <i data-lucide="file-spreadsheet" class="w-5 h-5 text-pv-yellow"></i>
+        </div>
+        <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100 mb-1">
+            Faturamento EACE Materiais
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+            Planilha de materiais faturados por período, a partir dos INEPs que entraram em
+            "Aguardando validação EACE".
+        </p>
+        <span class="inline-flex items-center gap-1.5 mt-4 text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-gray-500 group-hover:text-pv-yellow transition-colors">
+            Abrir relatório
+            <i data-lucide="arrow-right" class="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform"></i>
+        </span>
+    </a>
+</div>
+{% endblock %}

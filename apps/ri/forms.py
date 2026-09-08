@@ -603,3 +603,30 @@ class PlanilhaEaceUploadForm(forms.Form):
                 f"Colunas obrigatórias ausentes: {', '.join(PlanilhaEace.COLUNAS_OBRIGATORIAS)}."
             )
         return arquivo
+
+
+class RelatorioFaturamentoEaceMateriaisForm(forms.Form):
+    """FEAT-037: filtro de período (Data início/Data fim) do relatório
+    "Administrador > Relatório > Faturamento EACE Materiais" — vai por
+    querystring (GET), não POST, pra a mesma URL poder ser reaberta ou
+    reaproveitada direto pelo botão "Exportar Excel" (RN-082). Formato ISO
+    (`%Y-%m-%d`) explícito no widget: é o formato que o input HTML
+    `type="date"` exige para pré-preencher o valor (mesmo padrão de
+    `PlanilhaRelatorioEaceMipPeriodoForm`, `apps.escolas.forms`)."""
+
+    data_inicio = forms.DateField(
+        label="Data início",
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"class": CAMPO_TEXTO, "type": "date"}),
+    )
+    data_fim = forms.DateField(
+        label="Data fim",
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"class": CAMPO_TEXTO, "type": "date"}),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        data_inicio = cleaned.get("data_inicio")
+        data_fim = cleaned.get("data_fim")
+        if data_inicio and data_fim and data_inicio > data_fim:
+            raise forms.ValidationError("A Data início não pode ser depois da Data fim.")
+        return cleaned

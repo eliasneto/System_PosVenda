@@ -47,16 +47,19 @@ from .services import (
     consultar_pendencias_portal_eace,
     detectar_delimitador_planilha_eace,
     gerar_planilha_faturamento,
+    gerar_planilha_relatorio_faturamento_eace_materiais,
     montar_corpo_email_financeiro,
     montar_dashboard_financeiro,
     montar_faturamento_por_estado,
     montar_faturamento_por_municipio,
+    montar_relatorio_faturamento_eace_materiais,
     nome_arquivo_planilha_faturamento,
     recuperar_documentos_perdidos,
     sincronizar_divergencia_kit_relatorio,
     sincronizar_relatorio_eace_da_planilha,
     sincronizar_relatorio_eace_de_todas_as_ri,
     sincronizar_respostas_financeiro,
+    trocar_status_com_log,
 )
 
 User = get_user_model()
@@ -7124,3 +7127,283 @@ class AcessoLiberadoBloqueiaTelasDoRiTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Aguardando liberação do Administrador")
         self.assertNotContains(resp, "Escola Teste")
+
+
+def _marcar_transicao_aguardando_validacao_eace(ri, quando, usuario=None):
+    """Grava a transição de status usada pelo relatório "Faturamento EACE
+    Materiais" (RN-082) com `criado_em` controlado — `RiHistorico.
+    criado_em` é `auto_now_add`, então o valor real só pode ser fixado
+    depois, via `.update()` (não dispara `auto_now_add`, ao contrário de
+    `.save()`). `quando` é `date`; vira meia-noite (fuso do projeto) para
+    caber num `DateTimeField` sem aviso de datetime "naive"."""
+    trocar_status_com_log(ri, Ri.AGUARDANDO_VALIDACAO_EACE, usuario)
+    historico = RiHistorico.objects.filter(
+        ri=ri, tipo=RiHistorico.LOG_STATUS, campo="Status do RI",
+        valor_novo="Aguardando validação EACE",
+    ).latest("id")
+    momento = timezone.make_aware(timezone.datetime.combine(quando, timezone.datetime.min.time()))
+    RiHistorico.objects.filter(pk=historico.pk).update(criado_em=momento)
+
+
+class MontarRelatorioFaturamentoEaceMateriaisTests(TestCase):
+    """FEAT-037/RN-082/RN-083: relatório "Faturamento EACE Materiais" —
+    período pega a transição de status para "Aguardando validação EACE"
+    (não o status atual do RI); quantidade de equipamento vem do Lado IXC
+    (2º lado), classificada por palavra-chave; Nota Fiscal/Num OSP vêm do
+    Lado Relatório EACE (3º lado, único que guarda esses 2 dados)."""
+
+    def setUp(self):
+        self.escola = Escola.objects.create(
+            inep="60000020", nome="Escola Faturamento Materiais", endereco="Rua das Escolas, 10",
+            municipio="Recife", estado="PE", lote=9, kit_inicial="4",
+            velocidade_dl_minima="50",
+        )
+        self.ri = Ri.objects.create(
+            escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO,
+            municipio_ixc="Boa Viagem", estado_ixc="pe", data_ativacao=date(2026, 8, 20),
+        )
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 4 Access Points (serviços, materiais e equipamentos)",
+            lote=9, unidade="Escola", valor_equipamento="3000.00", valor_servico="500.00",
+        )
+        KitPadrao.objects.create(
+            descricao="Nobreak", lote=9, unidade="Unidade", valor_equipamento="200.00",
+        )
+        KitPadrao.objects.create(
+            descricao="Rack 5U", lote=9, unidade="Unidade", valor_equipamento="500.00",
+        )
+        KitPadrao.objects.create(
+            descricao="Switch 8 portas", lote=9, unidade="Unidade", valor_equipamento="300.00",
+        )
+        KitPadrao.objects.create(
+            descricao="Access Point Adicional Indoor", lote=9, unidade="Unidade", valor_equipamento="700.00",
+        )
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="0",
+        )
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Rack 5U", quantidade=2, valor_unitario="0",
+        )
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Switch 8 portas", quantidade=1, valor_unitario="0",
+        )
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Access Point Adicional Indoor", quantidade=3, valor_unitario="0",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario="3000.00", eh_kit=True, nota_fiscal="1001", num_osp="4001",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="200.00",
+            nota_fiscal="1002", num_osp="4001",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Rack 5U", quantidade=2, valor_unitario="500.00",
+            nota_fiscal="1003", num_osp="4002",
+        )
+        _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 15))
+
+    def test_ri_fora_do_periodo_nao_aparece(self):
+        linhas = montar_relatorio_faturamento_eace_materiais(date(2026, 9, 1), date(2026, 9, 30))
+        self.assertEqual(linhas, [])
+
+    def test_ri_dentro_do_periodo_aparece_uma_vez(self):
+        linhas = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["inep"], "60000020")
+
+    def test_cadastro_e_lado_ixc_para_uf_municipio(self):
+        """Lado IXC (`municipio_ixc`/`estado_ixc`) prevalece sobre o
+        cadastro da Escola quando preenchido — mesma fonte da planilha de
+        faturamento real (RN-013)."""
+        linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["municipio"], "Boa Viagem")
+        self.assertEqual(linha["uf"], "PE")
+        self.assertEqual(linha["lote"], 9)
+        self.assertEqual(linha["unidade_escolar"], "Escola Faturamento Materiais")
+        self.assertEqual(linha["endereco"], "Rua das Escolas, 10")
+        self.assertEqual(linha["velocidade"], "50")
+
+    def test_uf_municipio_caem_para_cadastro_da_escola_sem_lado_ixc(self):
+        self.ri.municipio_ixc = ""
+        self.ri.estado_ixc = ""
+        self.ri.save(update_fields=["municipio_ixc", "estado_ixc"])
+        linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["municipio"], "Recife")
+        self.assertEqual(linha["uf"], "PE")
+
+    def test_quantidades_de_equipamento_vem_do_lado_ixc_por_palavra_chave(self):
+        linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["nobreak"], 1)
+        self.assertEqual(linha["rack"], 2)
+        self.assertEqual(linha["switch"], 1)
+        self.assertEqual(linha["ap_adicional_estimado"], 3)
+        self.assertIsNone(linha["conversor"])  # nenhum item lançado
+
+    def test_kit_wifi_estimado_e_instalado(self):
+        linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["kit_wifi_estimado"], 4)  # Escola.kit_inicial="4"
+        self.assertEqual(linha["kit_wifi_instalado"], 4)  # Lado IXC: "... 4 Access Points"
+
+    def test_equipamentos_valor_soma_lado_ixc_pelo_catalogo(self):
+        # KIT (3000 x 1) + Nobreak (200 x 1) + Rack (500 x 2) + Switch (300 x 1)
+        # + Access Point Adicional (700 x 3) = 3000+200+1000+300+2100 = 6600
+        linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["equipamentos_valor"], Decimal("6600.00"))
+
+    def test_nota_fiscal_e_num_osp_vem_do_lado_relatorio_eace(self):
+        linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["nota_fiscal_kit"], "1001")
+        self.assertEqual(linha["nota_fiscal_nobreak"], "1002")
+        self.assertEqual(linha["nota_fiscal_rack"], "1003")
+        self.assertEqual(linha["nota_fiscal_switch"], "")  # sem item lançado no Lado 3
+        self.assertEqual(linha["numero_osps"], "4001/4002")
+
+    def test_status_sempre_ativo_e_observacao_sempre_vazia(self):
+        linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["status"], "ATIVO")
+        self.assertEqual(linha["observacao"], "")
+
+    def test_ri_com_2_transicoes_no_periodo_aparece_1_vez(self):
+        """Voltou de "Correção MEGA" e entrou de novo em "Aguardando
+        validação EACE" dentro do mesmo período — RN-082 usa a transição
+        mais recente, não duplica a linha."""
+        _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 25))
+        linhas = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))
+        self.assertEqual(len(linhas), 1)
+
+
+class GerarPlanilhaRelatorioFaturamentoEaceMateriaisTests(TestCase):
+    """FEAT-037: versão `.xlsx` do relatório — mesmas colunas mostradas na
+    tela, na mesma ordem."""
+
+    def test_planilha_gerada_tem_cabecalho_e_linhas(self):
+        linhas = [{
+            "lote": 9, "uf": "PE", "municipio": "Recife", "inep": "60000020",
+            "unidade_escolar": "Escola Teste", "endereco": "Rua X", "velocidade": "50",
+            "kit_wifi_estimado": 4, "kit_wifi_instalado": 4, "ap_adicional_estimado": 3,
+            "nobreak": 1, "conversor": None, "rack": 2, "switch": 1,
+            "equipamentos_valor": Decimal("6600.00"), "status": "ATIVO",
+            "data_ativacao": date(2026, 8, 20), "nota_fiscal_kit": "1001",
+            "nota_fiscal_nobreak": "1002", "nota_fiscal_access_point": "",
+            "nota_fiscal_conversor": "", "nota_fiscal_rack": "1003", "nota_fiscal_switch": "",
+            "numero_osps": "4001/4002", "observacao": "",
+        }]
+        conteudo = gerar_planilha_relatorio_faturamento_eace_materiais(linhas)
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba = workbook["CONSOLIDADO"]
+        # RN-085: linha 1 é a faixa de título (mesmo padrão visual do
+        # arquivo original), linha 2 é o cabeçalho das colunas, dados a
+        # partir da linha 3.
+        self.assertEqual(aba["A1"].value, "EACE - APRENDER CONECTADO")
+        self.assertEqual(aba["A2"].value, "LOTE")
+        self.assertEqual(aba["D2"].value, "INEP")
+        self.assertEqual(aba["Y2"].value, "OBSERVAÇÃO")
+        self.assertEqual(aba["D3"].value, "60000020")
+        self.assertEqual(aba["O3"].value, 6600.0)
+        self.assertEqual(aba["Q3"].value.date(), date(2026, 8, 20))
+
+
+class RelatorioAdministradorViewTests(TestCase):
+    """FEAT-037: tela "Administrador > Relatório" — hub com os cards de
+    relatório disponíveis, restrita a Administrador (RN-004)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-relatorio", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-relatorio", password="senha-teste-123",
+            perfil=User.PERFIL_ANALISTA,
+        )
+
+    def test_admin_ve_o_card_faturamento_eace_materiais(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_administrador"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Faturamento EACE Materiais")
+
+    def test_analista_nao_acessa(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("relatorio_administrador"))
+        self.assertEqual(resp.status_code, 403)
+
+
+class RelatorioFaturamentoEaceMateriaisViewTests(TestCase):
+    """FEAT-037: tela do relatório (filtro de período + tabela) e o
+    download `.xlsx` — restritos a Administrador (RN-004)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-faturamento-materiais", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-faturamento-materiais", password="senha-teste-123",
+            perfil=User.PERFIL_ANALISTA,
+        )
+        self.escola = Escola.objects.create(inep="60000030", nome="Escola View Teste", estado="PE")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 15))
+
+    def test_sem_periodo_mostra_apenas_o_formulario(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Gerar relatório")
+        self.assertNotContains(resp, "Escola View Teste")
+
+    def test_periodo_valido_mostra_a_tabela_com_o_ri(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "60000030")
+        self.assertContains(resp, "Exportar Excel")
+
+    def test_periodo_invalido_mostra_erro(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais"), {
+            "data_inicio": "2026-08-31", "data_fim": "2026-08-01",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "não pode ser depois")
+
+    def test_analista_nao_acessa(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_exportar_gera_xlsx_com_o_ri_do_periodo(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_exportar"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn("FATURAMENTO EACE MATERIAIS", resp["Content-Disposition"])
+        workbook = openpyxl.load_workbook(BytesIO(resp.content))
+        aba = workbook["CONSOLIDADO"]
+        self.assertEqual(aba["D3"].value, "60000030")  # linha 1 = título, linha 2 = cabeçalho
+
+    def test_exportar_sem_periodo_retorna_400(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_exportar"))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_analista_nao_exporta(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_exportar"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 403)

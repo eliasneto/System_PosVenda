@@ -23,8 +23,10 @@ import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Count, DecimalField, F, Prefetch, Sum
+from django.db.models import Count, DecimalField, F, Max, Prefetch, Sum
 from django.utils import timezone
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
@@ -2927,3 +2929,315 @@ def montar_produtos_complementares_por_estado(produto):
         }
         for linha in linhas
     ]
+
+
+# ==========================================
+# FEAT-037 (submenu "Relatório" do Administrador, pedido do usuário,
+# 2026-09-08): relatório "Faturamento EACE Materiais" — mesmas colunas de
+# `doc/FATURAMENTO EACE VALIDAÇÃO FINANCEIRA.xlsx` (planilha hoje montada
+# à mão pelo financeiro), geradas a partir dos dados que o sistema já tem,
+# por um período de datas.
+# ==========================================
+
+# RN-082 (nova, a formalizar pelo Orquestrador em business_rules.md):
+# entram no relatório os RI cujo status foi alterado para "Aguardando
+# validação EACE" (RN-008/`trocar_status_com_log`, log automático em
+# `RiHistorico`) dentro do período informado — não o status atual do RI
+# (que pode já ter avançado para "Faturamento Concluído" depois). Usa a
+# transição mais recente dentro do período quando o RI passou por esse
+# status mais de uma vez no mesmo período (ex.: voltou de "Correção
+# MEGA").
+_LABEL_AGUARDANDO_VALIDACAO_EACE = dict(Ri.STATUS_CHOICES)[Ri.AGUARDANDO_VALIDACAO_EACE]
+
+# RN-083 (nova, a formalizar pelo Orquestrador): classificação dos itens
+# avulsos (fora do KIT) nas 5 colunas fixas de equipamento — por palavra-
+# chave no texto da Descrição, não pelo campo `KitPadrao.
+# aba_planilha_financeiro` (nasce em branco na importação da LPU e só é
+# preenchido manualmente pelo admin, RN-013 — não dá pra confiar que está
+# preenchido para todo item). Confirmado pelo usuário (2026-09-08).
+_CATEGORIAS_EQUIPAMENTO_RELATORIO_FATURAMENTO = (
+    ("nobreak", "NOBREAK"),
+    ("conversor", "CONVERSOR"),
+    ("rack", "RACK"),
+    ("switch", "SWITCH"),
+    ("access point", "ACCESS POINT"),
+)
+
+
+def _categoria_equipamento_relatorio_faturamento(descricao):
+    texto = (descricao or "").strip().lower()
+    for palavra_chave, categoria in _CATEGORIAS_EQUIPAMENTO_RELATORIO_FATURAMENTO:
+        if palavra_chave in texto:
+            return categoria
+    return None
+
+
+def _juntar_valores_unicos(valores):
+    """Junta valores não vazios, sem repetir, na ordem em que apareceram
+    (ex.: mais de 1 Nota Fiscal/Num OSP do mesmo tipo no mesmo RI) — mesmo
+    separador "/" já usado à mão na planilha original."""
+    vistos = []
+    for valor in valores:
+        valor = (valor or "").strip()
+        if valor and valor not in vistos:
+            vistos.append(valor)
+    return "/".join(vistos)
+
+
+def _kit_wifi_estimado_relatorio_faturamento(escola, catalogo):
+    """RN-010 ampliada: número de Access Points do Kit declarado pela EACE
+    antes do projeto (`Escola.kit_inicial`, 1º lado) — mesma resolução já
+    usada no resto do sistema (catálogo primeiro; texto só com o número,
+    direto; senão extrai da Descrição). `None` sem correspondência
+    nenhuma, sem inventar valor (CLAUDE.md §9)."""
+    kit_inicial = (escola.kit_inicial or "").strip()
+    if not kit_inicial:
+        return None
+    resolvido = KitPadrao.resolver_kit_declarado(kit_inicial, lote=escola.lote, catalogo=catalogo)
+    if resolvido and resolvido.numero_access_points:
+        return resolvido.numero_access_points
+    if kit_inicial.isdigit():
+        return int(kit_inicial)
+    return _derivar_numero_access_points(kit_inicial)
+
+
+def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
+    """FEAT-037: linhas do relatório "Faturamento EACE Materiais" para o
+    período [`data_inicio`, `data_fim`] (ambos `date`, inclusive) — 1 linha
+    por RI que entrou em "Aguardando validação EACE" nesse período
+    (RN-082). Fonte de cada bloco de coluna, confirmada pelo usuário
+    (2026-09-08):
+
+    - Kit declarado/UF/Município/Endereço/Velocidade: cadastro da Escola,
+      com Município/UF preferindo o Lado IXC (`Ri.municipio_ixc`/
+      `estado_ixc`) quando preenchido — mesmo dado usado na planilha de
+      faturamento real (RN-013/`gerar_planilha_faturamento`), caindo para
+      o cadastro da Escola quando o Lado IXC ainda não foi preenchido.
+    - Quantidade de cada equipamento (KIT Instalado, AP Adicional,
+      Nobreak, Conversor, Rack, Switch) e "Equipamentos R$": Lado IXC (2º
+      lado, `RiItemIxc`) — mesma fonte da planilha de faturamento real
+      (RN-013), Valor resolvido pelo catálogo (`KitPadrao.
+      valor_faturavel`), nunca `RiItemIxc.valor_unitario` (nasce 0,00,
+      RN-011).
+    - Nota Fiscal (por tipo de equipamento) e Número de OSP: Lado
+      Relatório EACE (3º lado, `RiItemRelatorioEace`) — único lado que
+      guarda esses 2 dados (RN-018/RN-022).
+    - Status: sempre "ATIVO" — Observação: sempre em branco, o sistema não
+      guarda um dado equivalente (RN-084)."""
+    transicoes_no_periodo = (
+        RiHistorico.objects.filter(
+            tipo=RiHistorico.LOG_STATUS,
+            campo="Status do RI",
+            valor_novo=_LABEL_AGUARDANDO_VALIDACAO_EACE,
+            criado_em__date__gte=data_inicio,
+            criado_em__date__lte=data_fim,
+        )
+        .values("ri_id")
+        .annotate(data_transicao=Max("criado_em"))
+    )
+    data_transicao_por_ri = {
+        linha["ri_id"]: linha["data_transicao"] for linha in transicoes_no_periodo
+    }
+    if not data_transicao_por_ri:
+        return []
+
+    ris = (
+        Ri.objects.filter(pk__in=data_transicao_por_ri.keys())
+        .select_related("escola")
+        .prefetch_related("itens_ixc", "itens_relatorio_eace")
+    )
+    catalogo = list(KitPadrao.objects.all())
+
+    linhas = []
+    for ri in ris:
+        escola = ri.escola
+
+        kit_wifi_instalado = None
+        ap_adicional_estimado = 0
+        quantidade_por_categoria = {"NOBREAK": 0, "CONVERSOR": 0, "RACK": 0, "SWITCH": 0}
+        valor_equipamentos = Decimal("0")
+        for item in ri.itens_ixc.all():
+            if item.eh_kit:
+                kit_wifi_instalado = _derivar_numero_access_points(item.descricao_item)
+                resolvido = KitPadrao.resolver_por_item(
+                    item.descricao_item, eh_kit=True, lote=escola.lote, catalogo=catalogo
+                )
+            else:
+                categoria = _categoria_equipamento_relatorio_faturamento(item.descricao_item)
+                if categoria == "ACCESS POINT":
+                    ap_adicional_estimado += item.quantidade
+                elif categoria in quantidade_por_categoria:
+                    quantidade_por_categoria[categoria] += item.quantidade
+                resolvido = KitPadrao.resolver_por_item(
+                    item.descricao_item, eh_kit=False, lote=escola.lote, catalogo=catalogo
+                )
+            if resolvido:
+                valor_equipamentos += Decimal(item.quantidade) * resolvido.valor_faturavel
+
+        nota_fiscal_kit = []
+        num_osps = []
+        nota_fiscal_por_categoria = {
+            "NOBREAK": [], "CONVERSOR": [], "RACK": [], "SWITCH": [], "ACCESS POINT": [],
+        }
+        for item in ri.itens_relatorio_eace.all():
+            if item.num_osp:
+                num_osps.append(item.num_osp)
+            if item.eh_kit:
+                if item.nota_fiscal:
+                    nota_fiscal_kit.append(item.nota_fiscal)
+                continue
+            categoria = _categoria_equipamento_relatorio_faturamento(item.descricao_item)
+            if categoria and item.nota_fiscal:
+                nota_fiscal_por_categoria[categoria].append(item.nota_fiscal)
+
+        linhas.append({
+            "lote": escola.lote,
+            "uf": (ri.estado_ixc or escola.estado or "").upper(),
+            "municipio": ri.municipio_ixc or escola.municipio,
+            "inep": escola.inep,
+            "unidade_escolar": escola.nome,
+            "endereco": escola.endereco,
+            "velocidade": escola.velocidade_dl_minima,
+            "kit_wifi_estimado": _kit_wifi_estimado_relatorio_faturamento(escola, catalogo),
+            "kit_wifi_instalado": kit_wifi_instalado,
+            "ap_adicional_estimado": ap_adicional_estimado or None,
+            "nobreak": quantidade_por_categoria["NOBREAK"] or None,
+            "conversor": quantidade_por_categoria["CONVERSOR"] or None,
+            "rack": quantidade_por_categoria["RACK"] or None,
+            "switch": quantidade_por_categoria["SWITCH"] or None,
+            "equipamentos_valor": valor_equipamentos,
+            "status": "ATIVO",
+            "data_ativacao": ri.data_ativacao,
+            "nota_fiscal_kit": _juntar_valores_unicos(nota_fiscal_kit),
+            "nota_fiscal_nobreak": _juntar_valores_unicos(nota_fiscal_por_categoria["NOBREAK"]),
+            "nota_fiscal_access_point": _juntar_valores_unicos(nota_fiscal_por_categoria["ACCESS POINT"]),
+            "nota_fiscal_conversor": _juntar_valores_unicos(nota_fiscal_por_categoria["CONVERSOR"]),
+            "nota_fiscal_rack": _juntar_valores_unicos(nota_fiscal_por_categoria["RACK"]),
+            "nota_fiscal_switch": _juntar_valores_unicos(nota_fiscal_por_categoria["SWITCH"]),
+            "numero_osps": _juntar_valores_unicos(num_osps),
+            "observacao": "",
+            "ri_id": ri.pk,
+            "data_transicao": data_transicao_por_ri[ri.pk],
+        })
+
+    linhas.sort(key=lambda linha: (linha["data_transicao"], linha["inep"]))
+    return linhas
+
+
+# Mesma lista de colunas usada pela tela (`ri/relatorio_faturamento_eace_
+# materiais.html`) e pelo export `.xlsx` — 1 fonte só, ordem garantida
+# igual nos 2 lugares.
+COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS = (
+    ("lote", "LOTE"),
+    ("uf", "UF"),
+    ("municipio", "MUNICÍPIO"),
+    ("inep", "INEP"),
+    ("unidade_escolar", "UNIDADE ESCOLAR"),
+    ("endereco", "ENDEREÇO UNIDADE ESCOLAR"),
+    ("velocidade", "VELOCIDADE"),
+    ("kit_wifi_estimado", "KIT WIFI ESTIMADO"),
+    ("kit_wifi_instalado", "KIT WIFI INSTALADO"),
+    ("ap_adicional_estimado", "AP ADICIONAL ESTIMADO"),
+    ("nobreak", "NOBREAK"),
+    ("conversor", "CONVERSOR"),
+    ("rack", "RACK"),
+    ("switch", "SWITCH"),
+    ("equipamentos_valor", "EQUIPAMENTOS R$"),
+    ("status", "STATUS"),
+    ("data_ativacao", "DATA DE ATIVAÇÃO"),
+    ("nota_fiscal_kit", "NOTA FISCAL KIT"),
+    ("nota_fiscal_nobreak", "NOTA FISCAL NOBREAK"),
+    ("nota_fiscal_access_point", "NOTA FISCAL ACCESS POINT"),
+    ("nota_fiscal_conversor", "NOTA FISCAL CONVERSOR"),
+    ("nota_fiscal_rack", "NOTA FISCAL RACK"),
+    ("nota_fiscal_switch", "NOTA FISCAL SWITCH"),
+    ("numero_osps", "NUMERO OSPs"),
+    ("observacao", "OBSERVAÇÃO"),
+)
+
+
+# RN-085 (nova, a formalizar pelo Orquestrador): o `.xlsx` exportado copia
+# o padrão visual de `doc/FATURAMENTO EACE VALIDAÇÃO FINANCEIRA.xlsx`
+# (fonte, cores, bordas e largura de coluna) — pedido do usuário
+# (2026-09-08), lido direto do arquivo em `openpyxl` (fonte "Aptos
+# Narrow", faixa de título azul FF153D64 com texto branco em negrito,
+# borda fina nas linhas de dado, borda média no cabeçalho, gridlines
+# ocultas). Data de Ativação em DD/MM/AAAA (padrão brasileiro já usado no
+# resto do sistema) — o arquivo original usa "mm-dd-yy" (mês/dia/ano,
+# formato americano), o que é uma inconsistência da planilha modelo, não
+# reproduzida aqui.
+_FONTE_PLANILHA = "Aptos Narrow"
+_COR_FAIXA_TITULO = "FF153D64"
+_COR_TEXTO_TITULO = "FFFFFFFF"
+_FORMATO_MOEDA_PLANILHA = r'_-"R$"\ * #,##0.00_-;\-"R$"\ * #,##0.00_-;_-"R$"\ * "-"??_-;_-@_-'
+_LARGURA_COLUNAS_PLANILHA = {
+    "A": 5.11, "B": 3.55, "C": 19.66, "D": 14.0, "E": 95.33, "F": 101.11,
+    "G": 12.44, "H": 10.11, "I": 11.0, "J": 14.0, "K": 10.66, "L": 12.55,
+    "M": 10.66, "O": 19.22, "P": 17.33, "S": 11.89, "T": 13.44, "U": 13.44,
+    "V": 11.89, "X": 14.44, "Y": 39.66,
+}
+# Unidade Escolar/Endereço/Observação são texto longo — alinhados à
+# esquerda na planilha original; as demais colunas (código, quantidade,
+# data...) são centralizadas.
+_COLUNAS_ALINHADAS_A_ESQUERDA = {"unidade_escolar", "endereco", "observacao"}
+
+_BORDA_FINA = Side(style="hair")
+_BORDA_MEDIA = Side(style="medium")
+_BORDA_LINHA_DADO = Border(left=_BORDA_FINA, right=_BORDA_FINA, top=_BORDA_FINA, bottom=_BORDA_FINA)
+_BORDA_CABECALHO = Border(left=_BORDA_MEDIA, right=_BORDA_MEDIA, top=_BORDA_MEDIA, bottom=_BORDA_MEDIA)
+
+
+def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
+    """FEAT-037: cópia em `.xlsx` do relatório mostrado na tela — mesmas
+    colunas e o mesmo padrão visual de `doc/FATURAMENTO EACE VALIDAÇÃO
+    FINANCEIRA.xlsx` (RN-085). Conteúdo gerado do zero (não clona o
+    arquivo modelo — ele só tinha valores digitados à mão, sem nenhuma
+    fórmula para reaproveitar)."""
+    chaves = [chave for chave, _ in COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS]
+    total_colunas = len(chaves)
+    ultima_coluna = get_column_letter(total_colunas)
+
+    workbook = openpyxl.Workbook()
+    aba = workbook.active
+    aba.title = "CONSOLIDADO"
+    aba.sheet_view.showGridLines = False
+
+    # Linha 1: faixa de título, mesclada por toda a largura da tabela —
+    # mesmo texto/marca do arquivo original.
+    aba.append(["EACE - APRENDER CONECTADO"] + [None] * (total_colunas - 1))
+    aba.merge_cells(f"A1:{ultima_coluna}1")
+    aba.row_dimensions[1].height = 15
+
+    # Linha 2: cabeçalho das colunas.
+    aba.append([titulo for _, titulo in COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS])
+    aba.row_dimensions[2].height = 29.4
+
+    for numero_coluna in range(1, total_colunas + 1):
+        for numero_linha in (1, 2):
+            celula = aba.cell(row=numero_linha, column=numero_coluna)
+            celula.font = Font(name=_FONTE_PLANILHA, size=11, bold=True, color=_COR_TEXTO_TITULO)
+            celula.fill = PatternFill(fill_type="solid", fgColor=_COR_FAIXA_TITULO)
+            celula.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        aba.cell(row=2, column=numero_coluna).border = _BORDA_CABECALHO
+
+    coluna_data_ativacao = chaves.index("data_ativacao") + 1
+    coluna_valor = chaves.index("equipamentos_valor") + 1
+    for linha in linhas:
+        aba.append([linha.get(chave) for chave in chaves])
+        numero_linha = aba.max_row
+        for numero_coluna, chave in enumerate(chaves, start=1):
+            celula = aba.cell(row=numero_linha, column=numero_coluna)
+            celula.font = Font(name=_FONTE_PLANILHA, size=11)
+            celula.border = _BORDA_LINHA_DADO
+            celula.alignment = Alignment(
+                horizontal="left" if chave in _COLUNAS_ALINHADAS_A_ESQUERDA else "center"
+            )
+        aba.cell(row=numero_linha, column=coluna_data_ativacao).number_format = "DD/MM/YYYY"
+        aba.cell(row=numero_linha, column=coluna_valor).number_format = _FORMATO_MOEDA_PLANILHA
+
+    for letra, largura in _LARGURA_COLUNAS_PLANILHA.items():
+        aba.column_dimensions[letra].width = largura
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()

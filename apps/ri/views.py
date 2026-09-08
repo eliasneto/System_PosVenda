@@ -11,7 +11,7 @@ from django.core.files.base import ContentFile
 from django.core.mail import EmailMessage
 from django.core.paginator import Paginator
 from django.db.models import Prefetch, Q
-from django.http import HttpResponse, HttpResponseForbidden
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -25,6 +25,7 @@ from apps.escolas.models import Escola
 
 from .forms import (
     PlanilhaEaceUploadForm,
+    RelatorioFaturamentoEaceMateriaisForm,
     RiDataAtivacaoForm,
     RiEmailFinanceiroForm,
     RiHistoricoForm,
@@ -56,6 +57,10 @@ from .services import (
     consultar_pendencias_portal_eace,
     marcar_log_rpa_eace_concluido_manualmente,
     gerar_planilha_faturamento,
+    # FEAT-037: relatório "Administrador > Relatório > Faturamento EACE
+    # Materiais" — monta as linhas (RN-082/RN-083) e a versão .xlsx delas.
+    gerar_planilha_relatorio_faturamento_eace_materiais,
+    montar_relatorio_faturamento_eace_materiais,
     montar_corpo_email_financeiro,
     nome_arquivo_planilha_faturamento,
     sincronizar_divergencia_kit_relatorio,
@@ -1797,6 +1802,69 @@ def planilha_eace_sincronizar_todas_view(request):
     # sem novidade abre o RI dele.
     messages.success(request, f"Sincronização em lote: {total_atualizados} INEP(s) atualizado(s).")
     return redirect("planilha_eace")
+
+
+@login_required
+def relatorio_administrador_view(request):
+    """FEAT-037: tela "Administrador > Relatório" — página com os cards de
+    relatório disponíveis (só "Faturamento EACE Materiais" por enquanto),
+    mesmo padrão de submenu com cards já usado em "Dashboard > Relatórios"
+    (`core/dashboard_relatorios.html`). Ação restrita a Administrador,
+    mesmo critério das demais telas administrativas (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+    return render(request, "ri/relatorio_administrador.html")
+
+
+@login_required
+def relatorio_faturamento_eace_materiais_view(request):
+    """FEAT-037: card "Faturamento EACE Materiais" — formulário de período
+    (Data início/Data fim, GET) e tabela do relatório (RN-082/RN-083),
+    reaproveitada pelo botão "Exportar Excel" da própria tela. Ação
+    restrita a Administrador, mesmo critério das demais telas
+    administrativas (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+
+    form = RelatorioFaturamentoEaceMateriaisForm(request.GET or None)
+    linhas = None
+    if form.is_bound and form.is_valid():
+        linhas = montar_relatorio_faturamento_eace_materiais(
+            form.cleaned_data["data_inicio"], form.cleaned_data["data_fim"]
+        )
+
+    return render(request, "ri/relatorio_faturamento_eace_materiais.html", {
+        "form": form,
+        "linhas": linhas,
+    })
+
+
+@login_required
+def relatorio_faturamento_eace_materiais_exportar_view(request):
+    """FEAT-037: botão "Exportar Excel" da tela acima — mesmo filtro
+    (querystring), gera o `.xlsx` na hora, sem guardar arquivo (mesmo
+    padrão de download direto já usado em `ri_baixar_planilha_
+    financeiro_view`). Ação restrita a Administrador, mesmo critério da
+    tela (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+
+    form = RelatorioFaturamentoEaceMateriaisForm(request.GET or None)
+    if not form.is_valid():
+        return HttpResponseBadRequest("Informe Data início e Data fim válidas.")
+
+    data_inicio = form.cleaned_data["data_inicio"]
+    data_fim = form.cleaned_data["data_fim"]
+    linhas = montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim)
+    conteudo = gerar_planilha_relatorio_faturamento_eace_materiais(linhas)
+
+    resposta = HttpResponse(
+        conteudo,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    nome_arquivo = f"FATURAMENTO EACE MATERIAIS - {data_inicio:%d-%m-%Y} a {data_fim:%d-%m-%Y}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
 
 
 @login_required

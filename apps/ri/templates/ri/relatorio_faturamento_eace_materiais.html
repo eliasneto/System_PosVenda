@@ -1,0 +1,156 @@
+{% extends "core/base.html" %}
+{% load humanize %}
+
+{% block title %}Gerenciador Pós Venda | Faturamento EACE Materiais{% endblock %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li>Administrador</li>
+                <li>/</li>
+                <li><a href="{% url 'relatorio_administrador' %}" class="hover:text-gray-700 dark:hover:text-gray-300">Relatório</a></li>
+                <li>/</li>
+                <li class="text-gray-900 dark:text-gray-100">Faturamento EACE Materiais</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            Faturamento EACE Materiais
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+            INEPs que entraram em "Aguardando validação EACE" no período informado
+        </p>
+    </div>
+</div>
+
+<form method="GET" class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-8 flex flex-col lg:flex-row lg:items-end gap-4">
+    <div class="w-full lg:w-56">
+        <label for="{{ form.data_inicio.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
+            {{ form.data_inicio.label }}
+        </label>
+        {{ form.data_inicio }}
+    </div>
+    <div class="w-full lg:w-56">
+        <label for="{{ form.data_fim.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
+            {{ form.data_fim.label }}
+        </label>
+        {{ form.data_fim }}
+    </div>
+    <div class="flex gap-2 w-full lg:w-auto">
+        <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
+            <i data-lucide="search" class="w-4 h-4"></i>
+            Gerar relatório
+        </button>
+        {% if linhas is not None %}
+        <a href="{% url 'relatorio_faturamento_eace_materiais_exportar' %}?data_inicio={{ form.cleaned_data.data_inicio|date:'Y-m-d' }}&data_fim={{ form.cleaned_data.data_fim|date:'Y-m-d' }}"
+           class="px-6 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-black uppercase italic text-xs rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-700 transition flex items-center gap-2 w-full lg:w-auto justify-center">
+            <i data-lucide="download" class="w-4 h-4"></i>
+            Exportar Excel
+        </a>
+        {% endif %}
+    </div>
+    {% if form.non_field_errors %}
+    <p class="text-xs font-bold text-red-500 w-full">{{ form.non_field_errors.0 }}</p>
+    {% endif %}
+    {% for campo in form %}
+        {% for erro in campo.errors %}
+        <p class="text-xs font-bold text-red-500 w-full">{{ campo.label }}: {{ erro }}</p>
+        {% endfor %}
+    {% endfor %}
+</form>
+
+{% if linhas is None %}
+<div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+    <div class="flex items-center gap-3 text-gray-400 dark:text-gray-500">
+        <i data-lucide="calendar-range" class="w-5 h-5"></i>
+        <p class="text-sm font-semibold">Informe a Data início e a Data fim e clique em "Gerar relatório".</p>
+    </div>
+</div>
+{% elif not linhas %}
+<div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+    <div class="flex items-center gap-3 text-gray-400 dark:text-gray-500">
+        <i data-lucide="inbox" class="w-5 h-5"></i>
+        <p class="text-sm font-semibold">Nenhum INEP entrou em "Aguardando validação EACE" nesse período.</p>
+    </div>
+</div>
+{% else %}
+<div class="mb-4">
+    <span class="text-xs font-black uppercase tracking-widest text-gray-500 dark:text-gray-400">
+        {{ linhas|length }} INEP{{ linhas|length|pluralize }} no período
+    </span>
+</div>
+
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700 whitespace-nowrap">
+                    <th class="px-3 py-2">Lote</th>
+                    <th class="px-3 py-2">UF</th>
+                    <th class="px-3 py-2">Município</th>
+                    <th class="px-3 py-2">INEP</th>
+                    <th class="px-3 py-2">Unidade Escolar</th>
+                    <th class="px-3 py-2">Endereço</th>
+                    <th class="px-3 py-2">Velocidade</th>
+                    <th class="px-3 py-2">Kit Wifi Estimado</th>
+                    <th class="px-3 py-2">Kit Wifi Instalado</th>
+                    <th class="px-3 py-2">AP Adicional Estimado</th>
+                    <th class="px-3 py-2">Nobreak</th>
+                    <th class="px-3 py-2">Conversor</th>
+                    <th class="px-3 py-2">Rack</th>
+                    <th class="px-3 py-2">Switch</th>
+                    <th class="px-3 py-2">Equipamentos R$</th>
+                    <th class="px-3 py-2">Status</th>
+                    <th class="px-3 py-2">Data de Ativação</th>
+                    <th class="px-3 py-2">Nota Fiscal Kit</th>
+                    <th class="px-3 py-2">Nota Fiscal Nobreak</th>
+                    <th class="px-3 py-2">Nota Fiscal Access Point</th>
+                    <th class="px-3 py-2">Nota Fiscal Conversor</th>
+                    <th class="px-3 py-2">Nota Fiscal Rack</th>
+                    <th class="px-3 py-2">Nota Fiscal Switch</th>
+                    <th class="px-3 py-2">Número OSPs</th>
+                    <th class="px-3 py-2">Observação</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
+                {% for linha in linhas %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all divide-x divide-gray-300 dark:divide-gray-700 whitespace-nowrap">
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.uf|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.municipio|default:"—" }}</td>
+                    <td class="px-3 py-2"><span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[11px]">{{ linha.inep }}</span></td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.unidade_escolar }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.endereco|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.velocidade|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.kit_wifi_estimado|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.kit_wifi_instalado|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.ap_adicional_estimado|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.nobreak|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.conversor|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.rack|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.switch|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] font-black text-gray-900 dark:text-gray-100">R$ {{ linha.equipamentos_valor|intcomma }}</td>
+                    <td class="px-3 py-2">
+                        <span class="inline-flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-green-500 shrink-0"></span>
+                            <span class="text-[11px] font-bold text-gray-800 dark:text-gray-200">{{ linha.status }}</span>
+                        </span>
+                    </td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_ativacao|date:"d/m/Y"|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.nota_fiscal_kit|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.nota_fiscal_nobreak|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.nota_fiscal_access_point|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.nota_fiscal_conversor|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.nota_fiscal_rack|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.nota_fiscal_switch|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.numero_osps|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.observacao|default:"—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -10,6 +10,17 @@ urlpatterns = [
         views.planilha_eace_sincronizar_todas_view,
         name="planilha_eace_sincronizar_todas",
     ),
+    path("administrador/relatorio/", views.relatorio_administrador_view, name="relatorio_administrador"),
+    path(
+        "administrador/relatorio/faturamento-eace-materiais/",
+        views.relatorio_faturamento_eace_materiais_view,
+        name="relatorio_faturamento_eace_materiais",
+    ),
+    path(
+        "administrador/relatorio/faturamento-eace-materiais/exportar/",
+        views.relatorio_faturamento_eace_materiais_exportar_view,
+        name="relatorio_faturamento_eace_materiais_exportar",
+    ),
     path("inep/<str:inep>/", views.ri_detail_view, name="ri_detail"),
     path("inep/<str:inep>/iniciar/", views.ri_iniciar_view, name="ri_iniciar"),
     path("ri/<int:pk>/status/", views.ri_status_update_view, name="ri_status_update"),
