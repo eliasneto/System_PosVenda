@@ -1219,6 +1219,67 @@ class ProcessarFilaRpaEaceTests(TestCase):
         from apps.ri.services import processar_proximo_da_fila_rpa_eace
         self.assertIsNone(processar_proximo_da_fila_rpa_eace())
 
+    def test_log_processando_orfao_e_recuperado_e_a_fila_para_nesta_passada(self):
+        """RN-058 (correção 2026-09-08, bug real reportado pelo usuário —
+        "2 processamentos em paralelo"): o consumidor roda 1 invocação
+        por passada (`while true; do processar_fila_rpa_eace; sleep 5;
+        done`) — achar um log "Processando" no INÍCIO de uma passada só
+        pode ser órfão de uma invocação anterior interrompida (container
+        recriado, crash), nunca uma execução de verdade ainda rodando
+        (essa outra invocação já teria terminado antes desta começar).
+        Sem isso, o log ficava preso "Processando" pra sempre — a tela
+        mostrava a barra de progresso parada, dando a impressão de uma
+        2ª execução "ao vivo"."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        orfao = LogRpaEace.objects.create(
+            ri=self.ri, documento_pdf=self.pdf, documento_xml=self.xml,
+            resultado=LogRpaEace.PROCESSANDO, tentativas=0,
+            etapa_atual="Abrindo o portal EACE", progresso_pct=12,
+        )
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal") as mock_rpa:
+            resultado = processar_proximo_da_fila_rpa_eace()
+
+        mock_rpa.assert_not_called()
+        self.assertEqual(resultado, {"orfaos_recuperados": [orfao.pk]})
+        orfao.refresh_from_db()
+        self.assertEqual(orfao.resultado, LogRpaEace.NA_FILA)
+        self.assertEqual(orfao.motivo_erro, "interrompido")
+        self.assertEqual(orfao.tentativas, 1)
+        self.assertEqual(orfao.etapa_atual, "")
+        self.assertEqual(orfao.progresso_pct, 0)
+
+    def test_log_processando_orfao_na_2a_interrupcao_vira_erro_definitivo(self):
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        orfao = LogRpaEace.objects.create(
+            ri=self.ri, documento_pdf=self.pdf, documento_xml=self.xml,
+            resultado=LogRpaEace.PROCESSANDO, tentativas=1,
+        )
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal") as mock_rpa:
+            processar_proximo_da_fila_rpa_eace()
+
+        mock_rpa.assert_not_called()
+        orfao.refresh_from_db()
+        self.assertEqual(orfao.resultado, LogRpaEace.ERRO)
+        self.assertEqual(orfao.motivo_erro, "interrompido")
+        self.assertEqual(orfao.tentativas, 2)
+
+    def test_sem_log_processando_a_fila_segue_normal(self):
+        """Nenhum órfão pra recuperar - a passada processa a fila
+        normalmente, sem nenhum efeito colateral do novo passo."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        log = self._enfileirar()
+        resultado_rpa = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=resultado_rpa) as mock_rpa:
+            resultado = processar_proximo_da_fila_rpa_eace()
+
+        mock_rpa.assert_called_once()
+        self.assertEqual(resultado["resultado"], LogRpaEace.SUCESSO)
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.SUCESSO)
+
     def test_marca_processando_antes_de_chamar_a_rpa(self):
         """O usuário reportou (2026-09-03) que o status ia direto de "Na
         fila" pra "Erro", sem nunca mostrar "Processando" - a troca
@@ -1835,6 +1896,83 @@ class ContextoLogsRpaEaceTests(TestCase):
             HTTP_HX_REQUEST="true",
         )
         self.assertContains(resp, f'id="logs-rpa-eace-{self.ri.pk}" hx-swap-oob="true"')
+
+    def test_secao_inteira_nao_faz_mais_polling_da_lista_toda(self):
+        """Correção 2026-09-08 (bug real reportado pelo usuário): a seção
+        completa não pode mais carregar `hx-trigger`/`hx-get` própria —
+        só o card individual de cada log (ver testes abaixo). Sem essa
+        correção, qualquer log "Na fila"/"Processando" trocava a
+        `outerHTML` de TODOS os cards a cada 5s, apagando o PDF/XML já
+        escolhido no `<select>` de outra Nota Fiscal ainda pendente."""
+        log = self.ri.logs_rpa_eace.first()
+        log.resultado = LogRpaEace.PROCESSANDO
+        log.save()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        conteudo = resp.content.decode()
+        inicio_secao = conteudo.index(f'id="logs-rpa-eace-{self.ri.pk}"')
+        # O trecho de abertura da div externa (antes do próximo ">") não
+        # pode ter hx-get/hx-trigger — só o card interno pode.
+        trecho_abertura = conteudo[inicio_secao:conteudo.index(">", inicio_secao)]
+        self.assertNotIn("hx-get", trecho_abertura)
+        self.assertNotIn("hx-trigger", trecho_abertura)
+
+    def test_card_processando_tem_polling_proprio_e_card_pendente_nao_tem(self):
+        """Cada card só faz polling de si mesmo quando "Na fila"/
+        "Processando" — um card "Pendente" ao lado (ainda esperando o
+        usuário escolher PDF/XML) nunca é tocado por um polling alheio."""
+        log_processando = self.ri.logs_rpa_eace.first()
+        log_processando.resultado = LogRpaEace.PROCESSANDO
+        log_processando.save()
+        log_pendente = LogRpaEace.objects.create(ri=self.ri)  # default: "pendente"
+
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        conteudo = resp.content.decode()
+
+        url_status_processando = reverse("ri_log_rpa_eace_card_status", kwargs={"pk": log_processando.pk})
+        url_status_pendente = reverse("ri_log_rpa_eace_card_status", kwargs={"pk": log_pendente.pk})
+        self.assertIn(url_status_processando, conteudo)
+        self.assertNotIn(url_status_pendente, conteudo)
+
+    def test_endpoint_de_status_do_card_devolve_so_aquele_log(self):
+        """O fragmento devolvido pelo polling individual não pode incluir
+        os outros cards — senão o mesmo bug volta (o `<select>` da outra
+        Nota Fiscal, dentro do fragmento, seria trocado do mesmo jeito)."""
+        log_processando = self.ri.logs_rpa_eace.first()
+        log_processando.resultado = LogRpaEace.PROCESSANDO
+        log_processando.etapa_atual = "Fazendo login"
+        log_processando.progresso_pct = 25
+        log_processando.save()
+        log_pendente = LogRpaEace.objects.create(ri=self.ri)
+
+        self.client.force_login(self.user)
+        resp = self.client.get(
+            reverse("ri_log_rpa_eace_card_status", kwargs={"pk": log_processando.pk})
+        )
+        conteudo = resp.content.decode()
+        self.assertIn(f'id="log-rpa-eace-{log_processando.pk}"', conteudo)
+        self.assertIn("Fazendo login", conteudo)
+        self.assertNotIn(f'id="log-rpa-eace-{log_pendente.pk}"', conteudo)
+        self.assertNotIn("Nota Fiscal #2", conteudo)
+
+    def test_endpoint_de_status_do_card_exige_login(self):
+        log = self.ri.logs_rpa_eace.first()
+        resp = self.client.get(reverse("ri_log_rpa_eace_card_status", kwargs={"pk": log.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_card_na_fila_atualiza_a_propria_posicao_via_polling(self):
+        """A posição na fila (RN-058) precisa continuar atualizando sozinha
+        — agora via polling do próprio card, não mais da seção inteira."""
+        log = self.ri.logs_rpa_eace.first()
+        log.resultado = LogRpaEace.NA_FILA
+        log.enfileirado_em = timezone.now()
+        log.save()
+
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_log_rpa_eace_card_status", kwargs={"pk": log.pk}))
+        self.assertContains(resp, "É a próxima a ser processada.")
 
 
 class RiResponsavelUpdateViewTests(TestCase):

@@ -755,8 +755,14 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
         }
 
     posicoes = _posicoes_na_fila()
-    for log in logs_rpa_eace:
+    for indice, log in enumerate(logs_rpa_eace, start=1):
         log.posicao_na_fila = posicoes.get(log.pk)
+        # RN-058 (correção 2026-09-08): numeração fixa por log, não mais
+        # `forloop.counter` do template — o polling de cada card agora é
+        # individual (`ri_log_rpa_eace_card_status_view`), então o card
+        # sozinho (fora do `{% for %}` da lista completa) também precisa
+        # saber seu próprio número.
+        log.numero_nf = indice
 
     # Melhoria (pedido do usuário, 2026-09-05): usuário reportou escolher às
     # vezes o PDF errado pra cada "Nota Fiscal #N" e só descobrir depois de
@@ -950,6 +956,40 @@ def ri_logs_rpa_eace_status_view(request, inep):
         return HttpResponse("")
     return _fragmento_logs_rpa_eace_htmx(
         request, ri, request.GET.get("next") or "", incluir_mensagens=False, oob_logs=False,
+    )
+
+
+@login_required
+def ri_log_rpa_eace_card_status_view(request, pk):
+    """Polling POR CARD (correção 2026-09-08 — bug real reportado pelo
+    usuário): antes, o polling de 5s trocava a `outerHTML` da SEÇÃO
+    INTEIRA (`logs-rpa-eace-{{ ri.pk }}`, todos os cards de Nota Fiscal
+    juntos) só para atualizar a barra de progresso de 1 log
+    "Processando" — qualquer PDF/XML já escolhido no `<select>` de
+    OUTRA Nota Fiscal ainda pendente ia embora junto a cada troca,
+    impedindo o usuário de preparar a próxima NF enquanto uma primeira
+    estava rodando. Agora só o card do próprio log que está "Na fila"/
+    "Processando" faz polling de si mesmo (`hx-trigger` no card
+    individual, `ri/_log_rpa_eace_card.html`) — os demais cards nunca são
+    tocados por esse polling, então nenhuma seleção alheia se perde.
+
+    Mesmo raciocínio de `oob=False` já aplicado em
+    `ri_logs_rpa_eace_status_view` (RN-058, correção 2026-09-03): a
+    resposta é o próprio alvo do `hx-get`/`hx-trigger` do card, então não
+    pode also se marcar `hx-swap-oob` (as duas coisas competiriam pelo
+    mesmo elemento)."""
+    log = get_object_or_404(LogRpaEace.objects.select_related("ri", "ri__escola"), pk=pk)
+    contexto = _contexto_logs_rpa_eace(log.ri, request.GET.get("next") or "", oob=False)
+    log_atualizado = next((item for item in contexto["logs_rpa_eace"] if item.pk == log.pk), log)
+    return render(
+        request,
+        "ri/_log_rpa_eace_card.html",
+        {
+            "log": log_atualizado,
+            "next_url": contexto["next_url"],
+            "documentos_pdf": contexto["documentos_pdf"],
+            "documentos_xml": contexto["documentos_xml"],
+        },
     )
 
 

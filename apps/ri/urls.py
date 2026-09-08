@@ -64,6 +64,11 @@ urlpatterns = [
         name="ri_logs_rpa_eace_status",
     ),
     path(
+        "ri/logs-rpa-eace/<int:pk>/status/",
+        views.ri_log_rpa_eace_card_status_view,
+        name="ri_log_rpa_eace_card_status",
+    ),
+    path(
         "ri/<int:pk>/pendencias-portal-eace/consultar/",
         views.ri_consultar_pendencias_eace_view,
         name="ri_consultar_pendencias_eace",

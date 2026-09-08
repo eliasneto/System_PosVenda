@@ -1964,6 +1964,50 @@ def _resolver_osp_da_nota_fiscal(ri, documento_pdf):
     return itens[0].num_osp
 
 
+def _recuperar_logs_processando_orfaos():
+    """RN-058 (correção 2026-09-08 — bug real reportado pelo usuário: "2
+    processamentos em paralelo"): o consumidor é 1 processo por
+    invocação (`while true; do processar_fila_rpa_eace; sleep 5; done`,
+    `docker-compose.hml.yml`/`docker-compose.yml`) - a execução da RPA em
+    si e a atualização final do resultado ("Sucesso"/"Erro"/de volta pra
+    fila) acontecem de forma síncrona, DENTRO da mesma invocação que
+    marcou "Processando"; só depois disso a invocação termina e o `sleep
+    5`/próxima invocação começam. Por isso, achar um log ainda
+    "Processando" bem no INÍCIO de uma passada nova só pode significar
+    que a invocação anterior morreu no meio (container recriado num
+    deploy, OOM, crash do Playwright) antes de terminar de atualizar o
+    resultado - nunca uma execução de verdade ainda em andamento (essa
+    outra invocação já teria seguido até o fim antes desta sequer
+    começar). Um log assim fica "Processando" pra sempre, sem nunca ser
+    escolhido de novo pelo `select_for_update` (que só olha "Na fila") -
+    e a tela mostra a barra de progresso parada indefinidamente, dando a
+    impressão de uma 2ª execução "ao vivo" que na verdade é só esse
+    fantasma.
+
+    Reaproveita a mesma regra de 1 reprocessamento automático já usada
+    pra erro não mapeado (RN-058): volta pra fila numa tentativa nova, ou
+    vira erro definitivo (`motivo_erro="interrompido"`) na 2ª
+    interrupção - nunca fica preso "Processando" de vez."""
+    orfaos = list(LogRpaEace.objects.select_for_update().filter(resultado=LogRpaEace.PROCESSANDO))
+    for log in orfaos:
+        log.tentativas += 1
+        if log.tentativas < 2:
+            log.resultado = LogRpaEace.NA_FILA
+            log.enfileirado_em = timezone.now()
+        else:
+            log.resultado = LogRpaEace.ERRO
+        log.motivo_erro = "interrompido"
+        log.etapa_atual = ""
+        log.progresso_pct = 0
+        log.save(
+            update_fields=[
+                "resultado", "motivo_erro", "tentativas", "enfileirado_em", "etapa_atual", "progresso_pct",
+            ]
+        )
+        _registrar_execucao_rpa_eace(log)
+    return [log.pk for log in orfaos]
+
+
 def processar_proximo_da_fila_rpa_eace():
     """RN-058 (FEAT-033, Fase 3): 1 passada do processo consumidor da fila
     do RPA EACE - pega o log "Na fila" mais antigo (FIFO), marca
@@ -1994,12 +2038,24 @@ def processar_proximo_da_fila_rpa_eace():
     pode levar seguraria também o lock/conexão com o banco à toa.
 
     Retorna um dict descrevendo o que aconteceu, ou `None` se a fila
-    estava vazia (nada a fazer nesta passada)."""
+    estava vazia (nada a fazer nesta passada).
+
+    Antes de tudo, recupera log "Processando" órfão de uma invocação
+    anterior interrompida (`_recuperar_logs_processando_orfaos`,
+    correção 2026-09-08) - e para por aqui nesta passada (mesmo "1
+    passada, 1 coisa acontece por vez" de sempre): a reprocessagem de
+    verdade fica pra próxima invocação do loop, ~5s depois, igual a
+    qualquer outro reprocessamento automático de erro não mapeado."""
     from apps.integracoes.eace.rpa import (
         MOTIVOS_REGRA_DE_NEGOCIO,
         RpaEaceIndisponivel,
         anexar_nota_fiscal,
     )
+
+    with transaction.atomic():
+        orfaos_recuperados = _recuperar_logs_processando_orfaos()
+    if orfaos_recuperados:
+        return {"orfaos_recuperados": orfaos_recuperados}
 
     with transaction.atomic():
         log = (
