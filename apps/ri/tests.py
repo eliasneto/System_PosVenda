@@ -1,5 +1,7 @@
+import os
 import shutil
 import tempfile
+import zipfile
 from datetime import date, timedelta
 from decimal import Decimal
 from email.message import EmailMessage as MensagemEmailMime
@@ -48,6 +50,7 @@ from .services import (
     detectar_delimitador_planilha_eace,
     gerar_planilha_faturamento,
     gerar_planilha_relatorio_faturamento_eace_materiais,
+    gerar_zip_arquivos_relatorio_faturamento_eace_materiais,
     montar_corpo_email_financeiro,
     montar_dashboard_financeiro,
     montar_faturamento_por_estado,
@@ -7330,6 +7333,176 @@ class GerarPlanilhaRelatorioFaturamentoEaceMateriaisTests(TestCase):
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba = workbook["CONSOLIDADO"]
         self.assertEqual(aba.max_row, 2)  # só título + cabeçalho
+
+
+_MEDIA_ROOT_TESTE_ZIP_FATURAMENTO_MATERIAIS = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_ZIP_FATURAMENTO_MATERIAIS)
+class GerarZipArquivosRelatorioFaturamentoEaceMateriaisTests(TestCase):
+    """FEAT-037/RN-087: versão `.zip` do relatório — todo `Documento`
+    (PDF/XML) recebido do financeiro para os RI do relatório, mesmo sem
+    nenhum `LogRpaEace` (bug reportado pelo usuário, 2026-09-09: a maioria
+    dos RI chega em "Aguardando validação EACE" sem nunca ter passado pela
+    RPA — Sincronizador em lote a partir da Planilha EACE, ou avanço
+    manual do Administrador, RN-019 — e a 1ª versão só pegava `Documento`
+    vinculado a um `LogRpaEace` com sucesso, então o .zip saía vazio)."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_ZIP_FATURAMENTO_MATERIAIS, ignore_errors=True)
+
+    def setUp(self):
+        self.escola = Escola.objects.create(inep="60000040", nome="Escola Zip Teste", estado="PE")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+
+    def _criar_documentos(self, ri, nome_pdf, nome_xml):
+        pdf = Documento.objects.create(
+            ri=ri, tipo=Documento.NOTA_FISCAL_PDF, arquivo=SimpleUploadedFile(nome_pdf, b"%PDF-fake"),
+        )
+        xml = Documento.objects.create(
+            ri=ri, tipo=Documento.XML, arquivo=SimpleUploadedFile(nome_xml, b"<nfe/>"),
+        )
+        return pdf, xml
+
+    def test_zip_contem_pdf_e_xml_mesmo_sem_log_rpa_eace(self):
+        """Caso real reportado pelo usuário: `Documento` recebido do
+        financeiro, sem nenhum `LogRpaEace` — antes ficava fora do .zip."""
+        self._criar_documentos(self.ri, "nota1.pdf", "nota1.xml")
+        self.assertFalse(self.ri.logs_rpa_eace.exists())
+        linhas = [{"ri_id": self.ri.pk, "inep": self.escola.inep}]
+        conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas)
+        nomes = zipfile.ZipFile(BytesIO(conteudo)).namelist()
+        self.assertIn("60000040/nota1.pdf", nomes)
+        self.assertIn("60000040/nota1.xml", nomes)
+
+    def test_zip_ignora_ri_fora_das_linhas_do_periodo(self):
+        outra_escola = Escola.objects.create(inep="60000043", nome="Fora do período", estado="PE")
+        outro_ri = Ri.objects.create(escola=outra_escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        self._criar_documentos(outro_ri, "fora.pdf", "fora.xml")
+        # self.ri (dentro das linhas) não tem nenhum Documento — não é o
+        # outro_ri que deve aparecer no .zip.
+        linhas = [{"ri_id": self.ri.pk, "inep": self.escola.inep}]
+        conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas)
+        self.assertEqual(zipfile.ZipFile(BytesIO(conteudo)).namelist(), [])
+
+    def test_zip_junta_varias_notas_fiscais_do_mesmo_inep(self):
+        """Exemplo do pedido do usuário (2026-09-09): 1 INEP com 3 Notas
+        Fiscais — 3 PDF + 3 XML = 6 arquivos, todos na mesma pasta do
+        INEP dentro do .zip."""
+        for indice in range(1, 4):
+            self._criar_documentos(self.ri, f"nota{indice}.pdf", f"nota{indice}.xml")
+        linhas = [{"ri_id": self.ri.pk, "inep": self.escola.inep}]
+        conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas)
+        self.assertEqual(len(zipfile.ZipFile(BytesIO(conteudo)).namelist()), 6)
+
+    def test_zip_junta_varios_ineps(self):
+        """3 INEPs com 3 Notas Fiscais cada = 18 arquivos no total, mesmo
+        exemplo do pedido do usuário (2026-09-09)."""
+        escola2 = Escola.objects.create(inep="60000041", nome="Escola Zip 2", estado="PE")
+        ri2 = Ri.objects.create(escola=escola2, status=Ri.FATURAMENTO_CONCLUIDO)
+        escola3 = Escola.objects.create(inep="60000042", nome="Escola Zip 3", estado="PE")
+        ri3 = Ri.objects.create(escola=escola3, status=Ri.FATURAMENTO_CONCLUIDO)
+        for ri in (self.ri, ri2, ri3):
+            for indice in range(1, 4):
+                self._criar_documentos(ri, f"nota-{ri.pk}-{indice}.pdf", f"nota-{ri.pk}-{indice}.xml")
+        linhas = [
+            {"ri_id": self.ri.pk, "inep": self.escola.inep},
+            {"ri_id": ri2.pk, "inep": escola2.inep},
+            {"ri_id": ri3.pk, "inep": escola3.inep},
+        ]
+        conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas)
+        self.assertEqual(len(zipfile.ZipFile(BytesIO(conteudo)).namelist()), 18)
+
+    def test_zip_vazio_sem_linhas(self):
+        conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais([])
+        self.assertEqual(zipfile.ZipFile(BytesIO(conteudo)).namelist(), [])
+
+    def test_nomes_repetidos_no_mesmo_inep_nao_se_sobrescrevem(self):
+        """2 Notas Fiscais do mesmo INEP com o mesmo nome de arquivo
+        armazenado (simula uploads em meses diferentes, que não colidem no
+        storage) — sem o desempate, a 2ª sobrescreveria a 1ª dentro do
+        .zip."""
+        pdf1, xml1 = self._criar_documentos(self.ri, "nota-a.pdf", "nota-a.xml")
+        pdf2, xml2 = self._criar_documentos(self.ri, "nota-b.pdf", "nota-b.xml")
+        Documento.objects.filter(pk=pdf2.pk).update(arquivo=pdf1.arquivo.name)
+        Documento.objects.filter(pk=xml2.pk).update(arquivo=xml1.arquivo.name)
+        linhas = [{"ri_id": self.ri.pk, "inep": self.escola.inep}]
+        conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas)
+        self.assertEqual(len(zipfile.ZipFile(BytesIO(conteudo)).namelist()), 4)
+
+
+_MEDIA_ROOT_TESTE_EXPORTAR_ARQUIVOS_FATURAMENTO = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_EXPORTAR_ARQUIVOS_FATURAMENTO)
+class RelatorioFaturamentoEaceMateriaisExportarArquivosViewTests(TestCase):
+    """FEAT-037/RN-087: download `.zip` do botão "Exportar Arquivos" —
+    restrito a Administrador (RN-004), mesmo filtro de período da tela."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_EXPORTAR_ARQUIVOS_FATURAMENTO, ignore_errors=True)
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-zip-faturamento", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-zip-faturamento", password="senha-teste-123",
+            perfil=User.PERFIL_ANALISTA,
+        )
+        self.escola = Escola.objects.create(inep="60000050", nome="Escola Zip View", estado="PE")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        # Sem `LogRpaEace` de propósito — caso real reportado pelo usuário
+        # (2026-09-09): RI chega em "Aguardando validação EACE" pelo
+        # Sincronizador em lote/avanço manual do Administrador (RN-019),
+        # sem nunca ter passado pela RPA, mesmo já com Nota Fiscal e XML
+        # recebidos do financeiro salvos em `Documento`.
+        self.pdf = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF, arquivo=SimpleUploadedFile("nota.pdf", b"%PDF-fake"),
+        )
+        self.xml = Documento.objects.create(
+            ri=self.ri, tipo=Documento.XML, arquivo=SimpleUploadedFile("nota.xml", b"<nfe/>"),
+        )
+        _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 15))
+
+    def test_exportar_gera_zip_com_pdf_e_xml_do_periodo(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_exportar_arquivos"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "application/zip")
+        self.assertIn("FATURAMENTO EACE MATERIAIS - ARQUIVOS", resp["Content-Disposition"])
+        nomes = zipfile.ZipFile(BytesIO(resp.content)).namelist()
+        # Nome exato no disco: `SimpleUploadedFile("nota.pdf", ...)` pode
+        # ganhar um sufixo do storage se outro teste da classe já tiver
+        # gravado um arquivo de mesmo nome no mesmo MEDIA_ROOT.
+        self.assertIn(f"60000050/{os.path.basename(self.pdf.arquivo.name)}", nomes)
+        self.assertIn(f"60000050/{os.path.basename(self.xml.arquivo.name)}", nomes)
+
+    def test_exportar_sem_periodo_retorna_400(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_exportar_arquivos"))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_analista_nao_exporta(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_exportar_arquivos"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 403)
+
+    def test_botao_exportar_arquivos_aparece_na_tela(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertContains(resp, "Exportar Arquivos (.zip)")
 
 
 class RelatorioAdministradorViewTests(TestCase):

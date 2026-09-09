@@ -60,6 +60,9 @@ from .services import (
     # FEAT-037: relatório "Administrador > Relatório > Faturamento EACE
     # Materiais" — monta as linhas (RN-082/RN-083) e a versão .xlsx delas.
     gerar_planilha_relatorio_faturamento_eace_materiais,
+    # RN-087: mesmo relatório, versão .zip com o PDF/XML de cada Nota
+    # Fiscal (documentos de verdade, não só o número da coluna).
+    gerar_zip_arquivos_relatorio_faturamento_eace_materiais,
     montar_relatorio_faturamento_eace_materiais,
     montar_corpo_email_financeiro,
     nome_arquivo_planilha_faturamento,
@@ -1871,6 +1874,31 @@ def relatorio_faturamento_eace_materiais_exportar_view(request):
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     nome_arquivo = f"FATURAMENTO EACE MATERIAIS - {data_inicio:%d-%m-%Y} a {data_fim:%d-%m-%Y}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def relatorio_faturamento_eace_materiais_exportar_arquivos_view(request):
+    """FEAT-037/RN-087: botão "Exportar Arquivos (.zip)" da tela acima —
+    mesmo filtro (querystring) do "Exportar Excel", devolve em 1 `.zip` a
+    Nota Fiscal (PDF) e o XML de cada INEP do período, os documentos de
+    verdade já inseridos no portal da EACE. Ação restrita a Administrador,
+    mesmo critério da tela (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+
+    form = RelatorioFaturamentoEaceMateriaisForm(request.GET or None)
+    if not form.is_valid():
+        return HttpResponseBadRequest("Informe Data início e Data fim válidas.")
+
+    data_inicio = form.cleaned_data["data_inicio"]
+    data_fim = form.cleaned_data["data_fim"]
+    linhas = montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim)
+    conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas)
+
+    resposta = HttpResponse(conteudo, content_type="application/zip")
+    nome_arquivo = f"FATURAMENTO EACE MATERIAIS - ARQUIVOS - {data_inicio:%d-%m-%Y} a {data_fim:%d-%m-%Y}.zip"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
     return resposta
 

@@ -48,6 +48,11 @@
             <i data-lucide="download" class="w-4 h-4"></i>
             Exportar Excel
         </a>
+        <a href="{% url 'relatorio_faturamento_eace_materiais_exportar_arquivos' %}?data_inicio={{ form.cleaned_data.data_inicio|date:'Y-m-d' }}&data_fim={{ form.cleaned_data.data_fim|date:'Y-m-d' }}"
+           class="px-6 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-black uppercase italic text-xs rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-700 transition flex items-center gap-2 w-full lg:w-auto justify-center">
+            <i data-lucide="archive" class="w-4 h-4"></i>
+            Exportar Arquivos (.zip)
+        </a>
         {% endif %}
     </div>
     {% if form.non_field_errors %}

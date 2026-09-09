@@ -9,6 +9,7 @@ import io
 import logging
 import os
 import re
+import zipfile
 from collections import OrderedDict
 from datetime import timedelta
 from datetime import timezone as dt_timezone
@@ -3260,4 +3261,54 @@ def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
 
     buffer = io.BytesIO()
     workbook.save(buffer)
+    return buffer.getvalue()
+
+
+# RN-087 (nova, a formalizar pelo Orquestrador em business_rules.md;
+# pedido do usuário, 2026-09-09; corrigido em 2026-09-09 — 1ª versão só
+# pegava `Documento` vinculado a um `LogRpaEace` com resultado "Sucesso",
+# só existe pra quem passou pela RPA; a maioria dos RI chega em
+# "Aguardando validação EACE" sem nunca ter um `LogRpaEace` — pelo
+# Sincronizador em lote a partir da Planilha EACE, ou por avanço manual do
+# Administrador, RN-019 — mesmo tendo Nota Fiscal/XML recebidos do
+# financeiro e salvos em `Documento`. Zip vinha vazio mesmo com PDF/XML já
+# salvos no sistema): botão "Exportar Arquivos (.zip)" da mesma tela —
+# todo `Documento` (PDF e XML) já recebido do financeiro (RF-08) para cada
+# INEP do período filtrado, não só o número digitado nas colunas "Nota
+# Fiscal ..." do `.xlsx`. Um INEP sem nenhum `Documento` salvo (Nota
+# Fiscal só lançada como texto, nunca recebida por e-mail neste sistema)
+# simplesmente não entra no `.zip` — não tem arquivo pra exportar.
+def gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas):
+    """FEAT-037: 1 arquivo `.zip` com o PDF e o XML recebidos do financeiro
+    para os RI do relatório (mesmo `linhas` já montado por `montar_
+    relatorio_faturamento_eace_materiais`, mesmo filtro de período da
+    tela/`.xlsx`, reaproveitado sem consulta extra para achar os RI do
+    período). 1 pasta por INEP dentro do `.zip` — um INEP pode ter mais de
+    1 Nota Fiscal, cada uma com 1 PDF + 1 XML."""
+    ri_ids = [linha["ri_id"] for linha in linhas]
+    documentos = (
+        Documento.objects.filter(ri_id__in=ri_ids)
+        .select_related("ri__escola")
+        .order_by("ri_id", "criado_em")
+    )
+
+    buffer = io.BytesIO()
+    nomes_usados = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
+        for documento in documentos:
+            if not documento.arquivo:
+                continue
+            inep = documento.ri.escola.inep
+            nome_base = os.path.basename(documento.arquivo.name)
+            nome_no_zip = f"{inep}/{nome_base}"
+            if nome_no_zip in nomes_usados:
+                # 2 Notas Fiscais do mesmo INEP com o mesmo nome de
+                # arquivo original (uploads em meses diferentes não
+                # colidem no storage, `upload_to="documentos_ri/%Y/%m/"`)
+                # — desempata pelo id do Documento para não sobrescrever
+                # 1 dos 2 dentro do .zip.
+                raiz, extensao = os.path.splitext(nome_base)
+                nome_no_zip = f"{inep}/{raiz}_{documento.pk}{extensao}"
+            nomes_usados.add(nome_no_zip)
+            arquivo_zip.write(documento.arquivo.path, arcname=nome_no_zip)
     return buffer.getvalue()
