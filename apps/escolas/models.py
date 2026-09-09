@@ -104,12 +104,14 @@ class PlanilhaRelatorioEaceMip(models.Model):
     anterior.
 
     Período (Data inicial/Data final, usado pelo card "No período" do
-    grid do MIP, RN-073): RN-069 alterada — usuário pediu para editar o
-    período direto no card do Sincronizador (`relatorio_eace_mip_view`),
-    sem precisar reimportar o arquivo só para ajustar a data. Por isso
-    não é mais exigido no upload: `substituir()` preserva o período do
-    arquivo anterior (ou deixa em aberto, na 1ª importação) e
-    `definir_periodo()` é quem grava a mudança feita pelo usuário."""
+    grid do MIP, RN-073): RN-090 (2026-09-09) tirou a edição do período
+    da tela "Administrador > Relatório EACE (MIP)" de vez — usuário
+    pediu para tirar essas datas de lá; os dois campos continuam no
+    modelo só porque o card do Grid ainda os lê (mantido como está por
+    pedido do usuário), mas nenhuma tela os preenche mais.
+    `definir_periodo()` sobrevive para quem já usa o dado diretamente
+    (testes, Django admin/shell); `substituir()` continua preservando o
+    período do arquivo anterior a cada novo upload, sem mudança."""
 
     # Colunas exigidas pelo usuário na aba de dados (comparadas
     # normalizadas — maiúsculas, sem quebra de linha/espaço duplicado,
@@ -160,9 +162,8 @@ class PlanilhaRelatorioEaceMip(models.Model):
         arquivo antigo do disco antes de gravar o novo (no máximo 1
         registro ativo por vez, mesma regra do `PlanilhaEace`). O
         período (Data inicial/Data final) do arquivo substituído é
-        preservado no novo registro — não é mais informado no upload
-        (RN-069 alterada); sem arquivo anterior, fica em aberto até o
-        usuário definir pelo card do Sincronizador (`definir_periodo`)."""
+        preservado no novo registro — nenhuma tela informa/edita esse
+        período (RN-090); sem arquivo anterior, fica em aberto."""
         anteriores = list(cls.objects.all())
         data_inicial = anteriores[0].data_inicial if anteriores else None
         data_final = anteriores[0].data_final if anteriores else None
@@ -178,10 +179,11 @@ class PlanilhaRelatorioEaceMip(models.Model):
         )
 
     def definir_periodo(self, data_inicial, data_final):
-        """Usuário edita o período direto no card do Sincronizador (tela
-        "Administrador > Relatório EACE (MIP)"), sem precisar reimportar
-        o arquivo — alimenta o card "No período" do grid do MIP
-        (RN-073)."""
+        """Alimenta o card "No período" do grid do MIP (RN-073). RN-090
+        (2026-09-09) tirou a tela que chamava este método (usuário pediu
+        para tirar as datas da tela de importar/sincronizar) — sobrevive
+        para quem ainda usa o dado diretamente (testes, Django admin/
+        shell)."""
         self.data_inicial = data_inicial
         self.data_final = data_final
         self.save(update_fields=["data_inicial", "data_final"])

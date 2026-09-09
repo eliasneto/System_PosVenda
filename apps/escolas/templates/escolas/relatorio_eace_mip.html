@@ -16,7 +16,7 @@
             Relatório EACE (MIP)
         </h1>
         <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
-            Fonte do Lado 3 (Relatório EACE) do MIP — período próprio, independente da Planilha EACE do RI
+            Fonte do Lado 3 (Relatório EACE) do MIP — arquivo próprio, independente da Planilha EACE do RI
         </p>
     </div>
 </div>
@@ -37,49 +37,14 @@
                 </p>
             </div>
         </div>
-        <!-- RN-073/RN-069 alterada: período (Data inicial/Data final)
-             editado aqui, no card do Sincronizador — usuário pediu para
-             não precisar reimportar o arquivo só pra ajustar a data.
-             Alimenta o card "No período" do grid do MIP. -->
-        <form method="POST" action="{% url 'relatorio_eace_mip' %}" class="mt-5 pt-5 border-t border-gray-100 dark:border-gray-800">
-            {% csrf_token %}
-            <input type="hidden" name="acao" value="definir_periodo">
-            <p class="text-xs font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Período coberto pela planilha</p>
-            <div class="grid grid-cols-2 gap-4">
-                <div>
-                    <label for="{{ periodo_form.data_inicial.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
-                        {{ periodo_form.data_inicial.label }}
-                    </label>
-                    {{ periodo_form.data_inicial }}
-                    {% if periodo_form.data_inicial.errors %}
-                    <p class="text-xs font-bold text-red-500 mt-2">{{ periodo_form.data_inicial.errors.0 }}</p>
-                    {% endif %}
-                </div>
-                <div>
-                    <label for="{{ periodo_form.data_final.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
-                        {{ periodo_form.data_final.label }}
-                    </label>
-                    {{ periodo_form.data_final }}
-                    {% if periodo_form.data_final.errors %}
-                    <p class="text-xs font-bold text-red-500 mt-2">{{ periodo_form.data_final.errors.0 }}</p>
-                    {% endif %}
-                </div>
-            </div>
-            {% if periodo_form.non_field_errors %}
-            <p class="text-xs font-bold text-red-500 mt-2">{{ periodo_form.non_field_errors.0 }}</p>
-            {% endif %}
-            <button type="submit" class="w-full mt-4 px-6 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-black uppercase italic text-xs rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-700 transition inline-flex items-center justify-center gap-2">
-                <i data-lucide="calendar-check" class="w-4 h-4"></i>
-                Salvar período
-            </button>
-        </form>
         <!-- RN-070: mesmas regras de casamento com o catálogo do
              Sincronizador do RI (RN-022), mas grava em
              `EscolaItemRelatorioEaceMip`, por Escola — nunca no Lado 3
-             do RI. Sincronização não depende do período acima — este
-             botão só lança/atualiza/remove itens pela Descrição, igual
-             ao Sincronizador do RI. -->
-        <form method="POST" action="{% url 'relatorio_eace_mip_sincronizar_todas' %}" class="mt-5">
+             do RI. RN-090 (2026-09-09): esta tela deixou de ter período
+             (Data inicial/Data final, RN-069/RN-073 revogadas aqui) —
+             este botão só lança/atualiza/remove itens pela Descrição,
+             igual ao Sincronizador do RI. -->
+        <form method="POST" action="{% url 'relatorio_eace_mip_sincronizar_todas' %}" class="mt-5 pt-5 border-t border-gray-100 dark:border-gray-800">
             {% csrf_token %}
             <button type="submit" class="w-full px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center justify-center gap-2">
                 <i data-lucide="refresh-cw" class="w-4 h-4"></i>
@@ -98,8 +63,7 @@
         <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
             Arquivo <span class="font-bold">.xlsx</span> ("Base MIP.xlsx") com as colunas Projeto
             (INEP), Descrição do Item, Qtde Produto, Valor Unit UR, Data Emissão ACS, UF e
-            CIDADE. Um novo envio substitui o arquivo atual — o período (Data inicial/Data
-            final) é editado à parte, no card ao lado, sem precisar reimportar o arquivo.
+            CIDADE. Um novo envio substitui o arquivo atual.
         </p>
         <form method="POST" enctype="multipart/form-data" class="space-y-4">
             {% csrf_token %}

@@ -16,10 +16,13 @@ class PlanilhaRelatorioEaceMipUploadForm(forms.Form):
     colunas de `PlanilhaRelatorioEaceMip.COLUNAS_OBRIGATORIAS` na 1ª linha
     (não fixa o nome da aba — o arquivo real usa uma aba de nome interno,
     "_Base contrato_taxa_instalação", que pode variar entre exportações).
-    Só o arquivo — o período (Data inicial/Data final) deixou de ser
-    exigido aqui (RN-069 alterada): usuário pediu para editar a data
-    direto no card do Sincronizador, sem precisar reimportar o arquivo só
-    por isso (`PlanilhaRelatorioEaceMipPeriodoForm`, abaixo)."""
+    Só o arquivo — sem período (Data inicial/Data final): a tela deixou
+    de pedir/editar essa data (RN-090, revoga a edição de período trazida
+    pela RN-069/RN-073 — usuário pediu para tirar as datas da tela de
+    importar/sincronizar). O modelo continua com os campos
+    `data_inicial`/`data_final` só porque o card "No período" do Grid do
+    MIP ainda os lê (RN-073, mantido como está por pedido do usuário);
+    eles simplesmente não são mais preenchidos por nenhuma tela."""
 
     arquivo = forms.FileField(
         label="Arquivo (.xlsx)",
@@ -60,40 +63,3 @@ class PlanilhaRelatorioEaceMipUploadForm(forms.Form):
                 + ", ".join(PlanilhaRelatorioEaceMip.COLUNAS_OBRIGATORIAS) + "."
             )
         return arquivo
-
-
-_DATE_INPUT_ATTRS = {
-    "type": "date",
-    "class": (
-        "w-full px-4 py-2.5 rounded-xl border border-gray-200 "
-        "dark:border-gray-700 bg-white dark:bg-gray-800 text-sm "
-        "font-semibold text-gray-800 dark:text-gray-100 "
-        "focus:outline-none focus:ring-2 focus:ring-pv-yellow"
-    ),
-}
-
-
-class PlanilhaRelatorioEaceMipPeriodoForm(forms.Form):
-    """RN-073: período (Data inicial/Data final) do Relatório EACE (MIP)
-    ativo — editado direto no card "Arquivo ativo" (Sincronizador), sem
-    precisar de um novo upload (RN-069 alterada, pedido do usuário).
-    Formato ISO (`%Y-%m-%d`) explícito no widget: é o formato que o
-    input HTML `type="date"` exige para pré-preencher o valor atual —
-    o formato padrão de `pt-br` (`dd/mm/aaaa`) não é reconhecido por ele."""
-
-    data_inicial = forms.DateField(
-        label="Data inicial",
-        widget=forms.DateInput(format="%Y-%m-%d", attrs=_DATE_INPUT_ATTRS),
-    )
-    data_final = forms.DateField(
-        label="Data final",
-        widget=forms.DateInput(format="%Y-%m-%d", attrs=_DATE_INPUT_ATTRS),
-    )
-
-    def clean(self):
-        cleaned = super().clean()
-        data_inicial = cleaned.get("data_inicial")
-        data_final = cleaned.get("data_final")
-        if data_inicial and data_final and data_inicial > data_final:
-            raise forms.ValidationError("A data inicial não pode ser depois da data final.")
-        return cleaned

@@ -4,14 +4,14 @@ from decimal import Decimal
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db.models import DateTimeField, OuterRef, Prefetch, Q, Subquery
+from django.db.models import DateField, OuterRef, Prefetch, Q, Subquery
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 
 from apps.ri.forms import RiHistoricoForm
-from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico
+from apps.ri.models import Documento, KitPadrao, Ri
 
-from .forms import PlanilhaRelatorioEaceMipPeriodoForm, PlanilhaRelatorioEaceMipUploadForm
+from .forms import PlanilhaRelatorioEaceMipUploadForm
 from .models import Escola, EscolaItemRelatorioEaceMip, PlanilhaRelatorioEaceMip
 from .services import (
     RelatorioEaceMipSincronizacaoError,
@@ -130,25 +130,21 @@ def mip_inep_view(request):
     planilha ativa ou sem período definido ainda, não há o que comparar:
     o card não aparece (decidido pelo template) e o filtro `?periodo=1`
     é ignorado. Não confundir com o filtro de data da RN-075 abaixo — são
-    períodos de coisas diferentes (Data Emissão ACS da planilha × data em
-    que o RI entrou em "Aguardando validação EACE").
+    períodos de coisas diferentes (Data Emissão ACS da planilha × Data de
+    Ativação do Lado IXC do RI).
 
-    RN-075 (a criar): filtro por Data inicial/Data final (`?data_inicial=`/
-    `?data_final=`, formato ISO) da data em que o RI atual **entrou** em
-    "Aguardando validação EACE" — não a data de criação do RI nem
-    qualquer outra. Essa data vem do log automático de mudança de status
-    (`RiHistorico`, tipo `LOG_STATUS`, gravado por
-    `apps.ri.services.trocar_status_com_log` toda vez que o status muda,
-    manual ou automaticamente); usa sempre a entrada mais recente cujo
-    `valor_novo` é o rótulo desse status — se o RI saiu e voltou a entrar
-    em "Aguardando validação EACE" mais de uma vez, a(s) entrada(s)
-    antiga(s) são ignoradas (pedido explícito do usuário). RI sem essa
-    entrada registrada (não deveria acontecer em uso normal, já que toda
-    transição passa por `trocar_status_com_log`) não casa com nenhuma
-    data — some da lista assim que um dos dois filtros é preenchido, para
-    não arriscar mostrar (ou esconder) um INEP fora do período por falta
-    de dado (CLAUDE.md §9). Filtro também resolvido no banco (Subquery
-    correlacionada ao RI atual já calculado abaixo), sem novo N+1.
+    RN-075 (revista em 2026-09-09): filtro por Data inicial/Data final
+    (`?data_inicial=`/`?data_final=`, formato ISO) da Data de Ativação
+    (`Ri.data_ativacao`) do RI atual — campo do Lado IXC (2º lado,
+    RN-011), preenchido manualmente pelo usuário. Antes desta revisão o
+    filtro usava a data em que o RI entrou em "Aguardando validação
+    EACE" (log de status, `RiHistorico`); usuário pediu para trocar pela
+    Data de Ativação do Lado 2. RI sem Data de Ativação preenchida não
+    casa com nenhuma data — some da lista assim que um dos dois filtros é
+    preenchido, para não arriscar mostrar (ou esconder) um INEP fora do
+    período por falta de dado (CLAUDE.md §9). Filtro resolvido no banco
+    (Subquery correlacionada ao RI atual já calculado abaixo), sem novo
+    N+1.
     """
     q = (request.GET.get("q") or "").strip()
     divergencia_filtro = (request.GET.get("divergencia") or "").strip() == "1"
@@ -207,24 +203,20 @@ def mip_inep_view(request):
             escolas = escolas.filter(municipio=municipio_filtro)
 
     if data_inicial_validacao or data_final_validacao:
-        # RN-075 (a criar): entrada mais recente do log de status
-        # (`RiHistorico`) que marcou o RI atual como "Aguardando
-        # validação EACE" — ignora entradas antigas de uma eventual
-        # entrada/saída anterior desse mesmo status.
-        rotulo_validacao_eace = dict(Ri.STATUS_CHOICES)[Ri.AGUARDANDO_VALIDACAO_EACE]
-        data_entrada_validacao_eace = Subquery(
-            RiHistorico.objects.filter(
-                ri_id=OuterRef("ri_atual_id"),
-                tipo=RiHistorico.LOG_STATUS,
-                valor_novo=rotulo_validacao_eace,
-            ).order_by("-criado_em").values("criado_em")[:1],
-            output_field=DateTimeField(),
+        # RN-075 (revista em 2026-09-09): Data de Ativação (`Ri.
+        # data_ativacao`) do RI atual — campo do Lado IXC (2º lado),
+        # preenchido manualmente pelo usuário. RI sem essa data
+        # preenchida não casa com o filtro (fica de fora), mesmo padrão
+        # de "sem dado, some da lista" já usado antes desta revisão.
+        data_ativacao_ri_atual = Subquery(
+            ri_atual_qs.values("data_ativacao")[:1],
+            output_field=DateField(),
         )
-        escolas = escolas.annotate(data_entrada_validacao_eace=data_entrada_validacao_eace)
+        escolas = escolas.annotate(data_ativacao_ri_atual=data_ativacao_ri_atual)
         if data_inicial_validacao:
-            escolas = escolas.filter(data_entrada_validacao_eace__date__gte=data_inicial_validacao)
+            escolas = escolas.filter(data_ativacao_ri_atual__gte=data_inicial_validacao)
         if data_final_validacao:
-            escolas = escolas.filter(data_entrada_validacao_eace__date__lte=data_final_validacao)
+            escolas = escolas.filter(data_ativacao_ri_atual__lte=data_final_validacao)
 
     escolas = escolas.order_by("nome")
     if q:
@@ -449,37 +441,19 @@ def relatorio_eace_mip_view(request):
     planilha do RI. Ação restrita a Administrador, mesmo critério das
     demais ações administrativas (RN-004).
 
-    RN-069 alterada (usuário pediu): o período (Data inicial/Data final)
-    deixou de ser exigido no upload — agora é editado à parte, direto no
-    card "Arquivo ativo" (Sincronizador), sem precisar reimportar o
-    arquivo só para ajustar a data. Os dois formulários postam pra esta
-    mesma view/URL, diferenciados pelo campo oculto `acao`."""
+    RN-090 (2026-09-09; revoga a edição de período trazida pela
+    RN-069/RN-073): usuário pediu para tirar as datas (Data inicial/Data
+    final) da tela de importar/sincronizar — a tela volta a ser só o
+    upload do arquivo. `PlanilhaRelatorioEaceMip.data_inicial/data_final`
+    continuam existindo no modelo (o card "No período" do Grid do MIP
+    ainda os lê, mantido como está por pedido do usuário), só que a partir
+    de agora nenhuma tela os preenche."""
     if not request.user.is_administrador:
         return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
 
     planilha_ativa = PlanilhaRelatorioEaceMip.ativa()
-    periodo_inicial = {
-        "data_inicial": planilha_ativa.data_inicial if planilha_ativa else None,
-        "data_final": planilha_ativa.data_final if planilha_ativa else None,
-    }
 
-    if request.method == "POST" and request.POST.get("acao") == "definir_periodo":
-        upload_form = PlanilhaRelatorioEaceMipUploadForm()
-        if not planilha_ativa:
-            messages.error(request, "Nenhum Relatório EACE (MIP) ativo para definir o período.")
-            return redirect("relatorio_eace_mip")
-        periodo_form = PlanilhaRelatorioEaceMipPeriodoForm(request.POST)
-        if periodo_form.is_valid():
-            planilha_ativa.definir_periodo(
-                periodo_form.cleaned_data["data_inicial"],
-                periodo_form.cleaned_data["data_final"],
-            )
-            messages.success(request, "Período do Relatório EACE (MIP) atualizado com sucesso.")
-            return redirect("relatorio_eace_mip")
-        mensagens_erro = [erro for erros in periodo_form.errors.values() for erro in erros]
-        messages.error(request, "Não foi possível salvar o período: " + " ".join(mensagens_erro))
-    elif request.method == "POST":
-        periodo_form = PlanilhaRelatorioEaceMipPeriodoForm(initial=periodo_inicial)
+    if request.method == "POST":
         upload_form = PlanilhaRelatorioEaceMipUploadForm(request.POST, request.FILES)
         if upload_form.is_valid():
             PlanilhaRelatorioEaceMip.substituir(upload_form.cleaned_data["arquivo"], request.user)
@@ -489,11 +463,9 @@ def relatorio_eace_mip_view(request):
         messages.error(request, "Não foi possível importar: " + " ".join(mensagens_erro))
     else:
         upload_form = PlanilhaRelatorioEaceMipUploadForm()
-        periodo_form = PlanilhaRelatorioEaceMipPeriodoForm(initial=periodo_inicial)
 
     return render(request, "escolas/relatorio_eace_mip.html", {
         "form": upload_form,
-        "periodo_form": periodo_form,
         "planilha_ativa": planilha_ativa,
     })
 

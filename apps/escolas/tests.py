@@ -1065,81 +1065,58 @@ class MipFiltroPeriodoTests(TestCase):
         self.assertEqual(resp.context["total_periodo"], 0)
 
 
-class MipFiltroDataValidacaoEaceTests(TestCase):
-    """RN-075 (a criar): filtro por Data inicial/Data final do grid do MIP
-    pela data em que o RI atual entrou em "Aguardando validação EACE" —
-    lida a partir do log automático de mudança de status (`RiHistorico`,
-    `apps.ri.services.trocar_status_com_log`), sempre pela entrada mais
-    recente desse status quando houver mais de uma."""
+class MipFiltroDataAtivacaoTests(TestCase):
+    """RN-075 (revista em 2026-09-09): filtro por Data inicial/Data final
+    do grid do MIP pela Data de Ativação (`Ri.data_ativacao`) do RI atual
+    — campo do Lado IXC (2º lado, RN-011), preenchido manualmente pelo
+    usuário. Antes desta revisão, o filtro usava a data em que o RI
+    entrou em "Aguardando validação EACE" (log de status); usuário pediu
+    a troca."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username="analista-data-validacao", password="senha-teste-123")
+        self.user = User.objects.create_user(username="analista-data-ativacao", password="senha-teste-123")
         self.escola = Escola.objects.create(inep="10000020", nome="Escola Validacao Eace", lote=9)
         self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
 
-    def _registrar_entrada_em_validacao_eace(self, ri, quando):
-        """Mesma entrada gravada por `trocar_status_com_log` (RiHistorico,
-        tipo `log_status`, `valor_novo` = rótulo do status) — `criado_em`
-        é `auto_now_add`, por isso o ajuste de data usa `.update()` (não
-        passa pelo `save()`) só aqui, no teste."""
-        entrada = RiHistorico.objects.create(
-            ri=ri, tipo=RiHistorico.LOG_STATUS,
-            valor_anterior="Resposta Financeiro", valor_novo="Aguardando validação EACE",
-        )
-        RiHistorico.objects.filter(pk=entrada.pk).update(criado_em=quando)
-        return entrada
+    def _definir_data_ativacao(self, data):
+        self.ri.data_ativacao = data
+        self.ri.save(update_fields=["data_ativacao"])
 
     def test_sem_filtro_de_data_mostra_normalmente(self):
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 9, 5, 10, 0)))
+        self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"))
         self.assertContains(resp, self.escola.inep)
 
     def test_data_dentro_do_intervalo_mostra_o_inep(self):
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 9, 5, 10, 0)))
+        self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"), {"data_inicial": "01/09/2026", "data_final": "10/09/2026"})
         self.assertContains(resp, self.escola.inep)
 
     def test_data_fora_do_intervalo_esconde_o_inep(self):
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 8, 20, 10, 0)))
+        self._definir_data_ativacao(datetime.date(2026, 8, 20))
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"), {"data_inicial": "01/09/2026", "data_final": "10/09/2026"})
         self.assertNotContains(resp, self.escola.inep)
 
     def test_so_data_inicial_filtra_a_partir_dela(self):
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 8, 20, 10, 0)))
+        self._definir_data_ativacao(datetime.date(2026, 8, 20))
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"), {"data_inicial": "01/09/2026"})
         self.assertNotContains(resp, self.escola.inep)
 
     def test_so_data_final_filtra_ate_ela(self):
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 9, 15, 10, 0)))
+        self._definir_data_ativacao(datetime.date(2026, 9, 15))
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"), {"data_final": "10/09/2026"})
         self.assertNotContains(resp, self.escola.inep)
 
-    def test_mais_de_uma_entrada_no_status_usa_so_a_mais_recente(self):
-        """RI saiu de "Aguardando validação EACE" e voltou a entrar
-        depois — pedido explícito do usuário: a entrada antiga (fora do
-        intervalo filtrado) é ignorada, só a mais recente (dentro do
-        intervalo) conta."""
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 7, 1, 10, 0)))
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 9, 5, 10, 0)))
-        self.client.force_login(self.user)
-        # Filtro que só bate com a entrada antiga (julho) não deve mais
-        # trazer o INEP, porque a mais recente (setembro) é a que vale.
-        resp_antiga = self.client.get(reverse("mip_inep"), {"data_inicial": "01/07/2026", "data_final": "31/07/2026"})
-        self.assertNotContains(resp_antiga, self.escola.inep)
-        # Filtro que bate com a entrada mais recente (setembro) traz o INEP.
-        resp_recente = self.client.get(reverse("mip_inep"), {"data_inicial": "01/09/2026", "data_final": "10/09/2026"})
-        self.assertContains(resp_recente, self.escola.inep)
-
-    def test_ri_sem_log_de_status_some_ao_filtrar_por_data(self):
+    def test_ri_sem_data_ativacao_some_ao_filtrar_por_data(self):
         """RI já está em "Aguardando validação EACE" (aparece sem filtro
-        de data), mas sem a entrada de log correspondente — não há data
-        pra comparar, então some assim que um filtro de data é aplicado
-        (CLAUDE.md §9: nunca inventa/assume um dado ausente)."""
+        de data), mas sem Data de Ativação preenchida no Lado IXC — não
+        há data pra comparar, então some assim que um filtro de data é
+        aplicado (CLAUDE.md §9: nunca inventa/assume um dado ausente)."""
         self.client.force_login(self.user)
         resp_sem_filtro = self.client.get(reverse("mip_inep"))
         self.assertContains(resp_sem_filtro, self.escola.inep)
@@ -1147,14 +1124,14 @@ class MipFiltroDataValidacaoEaceTests(TestCase):
         self.assertNotContains(resp_com_filtro, self.escola.inep)
 
     def test_data_inicial_depois_da_final_ignora_o_filtro_e_avisa(self):
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 9, 5, 10, 0)))
+        self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"), {"data_inicial": "10/09/2026", "data_final": "01/09/2026"})
         self.assertContains(resp, self.escola.inep)
         self.assertContains(resp, "A data inicial não pode ser depois da data final")
 
     def test_data_em_formato_invalido_e_ignorada_silenciosamente(self):
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 9, 5, 10, 0)))
+        self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"), {"data_inicial": "não-é-uma-data"})
         self.assertEqual(resp.status_code, 200)
@@ -1164,7 +1141,7 @@ class MipFiltroDataValidacaoEaceTests(TestCase):
         """Depois da mudança pro formato dd/mm/aaaa (usuário pediu pra
         tirar o `<input type="date">` nativo), um valor em ISO
         (formato antigo) não é mais reconhecido — ignorado, não quebra."""
-        self._registrar_entrada_em_validacao_eace(self.ri, timezone.make_aware(datetime.datetime(2026, 9, 5, 10, 0)))
+        self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"), {"data_inicial": "2026-09-01"})
         self.assertEqual(resp.status_code, 200)
@@ -1503,15 +1480,21 @@ class RelatorioEaceMipViewTests(TestCase):
         resp = self.client.get(reverse("relatorio_eace_mip"))
         self.assertEqual(resp.status_code, 403)
 
-    def test_pagina_exibe_planilha_ativa_e_periodo_atual_preenchido(self):
-        planilha = PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip(nome="relatorio.xlsx"), self.admin)
-        planilha.definir_periodo(datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
+    def test_pagina_exibe_planilha_ativa(self):
+        PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip(nome="relatorio.xlsx"), self.admin)
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("relatorio_eace_mip"))
         self.assertContains(resp, "relatorio.xlsx")
-        # Formato ISO (`type="date"`), não `d/m/Y` — é o que o input HTML precisa pra pré-preencher.
-        self.assertContains(resp, 'value="2026-09-01"')
-        self.assertContains(resp, 'value="2026-09-30"')
+
+    def test_pagina_nao_tem_mais_campo_de_periodo(self):
+        """RN-090 (2026-09-09): usuário pediu para tirar as datas (Data
+        inicial/Data final) da tela de importar/sincronizar — não há
+        mais formulário de período aqui, só o upload do arquivo."""
+        PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip(nome="relatorio.xlsx"), self.admin)
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertNotContains(resp, "Período coberto pela planilha")
+        self.assertNotContains(resp, "Salvar período")
 
     def test_input_de_arquivo_mostra_rotulo_em_portugues(self):
         self.client.force_login(self.admin)
@@ -1519,75 +1502,6 @@ class RelatorioEaceMipViewTests(TestCase):
         self.assertContains(resp, "Escolher arquivo")
         self.assertContains(resp, "Nenhum arquivo selecionado")
         self.assertNotContains(resp, "Choose File")
-
-
-@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_RELATORIO_EACE_MIP)
-class RelatorioEaceMipDefinirPeriodoViewTests(TestCase):
-    """RN-073/RN-069 alterada: usuário pediu para editar o período (Data
-    inicial/Data final) direto no card "Arquivo ativo" (Sincronizador),
-    sem precisar reimportar o arquivo."""
-
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        shutil.rmtree(_MEDIA_ROOT_TESTE_RELATORIO_EACE_MIP, ignore_errors=True)
-
-    def setUp(self):
-        self.admin = User.objects.create_user(
-            username="admin-periodo-relatorio-eace-mip", password="senha-teste-123",
-            perfil=User.PERFIL_ADMINISTRADOR,
-        )
-        self.analista = User.objects.create_user(
-            username="analista-periodo-relatorio-eace-mip", password="senha-teste-123",
-            perfil=User.PERFIL_ANALISTA,
-        )
-
-    def _post_periodo(self, data_inicial="2026-09-01", data_final="2026-09-30", follow=False):
-        return self.client.post(reverse("relatorio_eace_mip"), {
-            "acao": "definir_periodo",
-            "data_inicial": data_inicial,
-            "data_final": data_final,
-        }, follow=follow)
-
-    def test_analista_nao_acessa(self):
-        PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip(), self.admin)
-        self.client.force_login(self.analista)
-        resp = self._post_periodo()
-        self.assertEqual(resp.status_code, 403)
-
-    def test_sem_planilha_ativa_mostra_erro(self):
-        self.client.force_login(self.admin)
-        resp = self._post_periodo(follow=True)
-        self.assertContains(resp, "Nenhum Relatório EACE (MIP) ativo")
-        self.assertEqual(PlanilhaRelatorioEaceMip.objects.count(), 0)
-
-    def test_define_periodo_da_planilha_ativa(self):
-        PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip(), self.admin)
-        self.client.force_login(self.admin)
-        resp = self._post_periodo()
-        self.assertEqual(resp.status_code, 302)
-        planilha = PlanilhaRelatorioEaceMip.objects.first()
-        self.assertEqual(planilha.data_inicial, datetime.date(2026, 9, 1))
-        self.assertEqual(planilha.data_final, datetime.date(2026, 9, 30))
-
-    def test_altera_periodo_ja_definido_sem_reimportar(self):
-        planilha = PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip(nome="relatorio.xlsx"), self.admin)
-        planilha.definir_periodo(datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
-        self.client.force_login(self.admin)
-        self._post_periodo(data_inicial="2026-10-01", data_final="2026-10-31")
-        planilha.refresh_from_db()
-        self.assertEqual(planilha.data_inicial, datetime.date(2026, 10, 1))
-        self.assertEqual(planilha.data_final, datetime.date(2026, 10, 31))
-        self.assertEqual(planilha.nome_original, "relatorio.xlsx")
-
-    def test_data_inicial_depois_da_final_e_rejeitada(self):
-        PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip(), self.admin)
-        self.client.force_login(self.admin)
-        resp = self._post_periodo(data_inicial="2026-09-30", data_final="2026-09-01")
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "A data inicial não pode ser depois da data final")
-        planilha = PlanilhaRelatorioEaceMip.objects.first()
-        self.assertIsNone(planilha.data_inicial)
 
 
 _CABECALHO_RELATORIO_EACE_MIP = [
