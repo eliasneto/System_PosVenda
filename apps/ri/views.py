@@ -1309,6 +1309,13 @@ def ri_detail_view(request, inep):
 
     kit_form = RiItemIxcKitForm(escola=escola)
     produto_formset = RiItemIxcProdutoFormSet(form_kwargs={"escola": escola})
+    # RN-089 (2026-09-09): segundo bloco "+" do Lado IXC — itens da LPU
+    # sem valor de equipamento (RN-055), lançados do mesmo jeito que um
+    # Produto comum (formset próprio, prefixo "produto_servico" pra não
+    # colidir com o de cima).
+    produto_servico_formset = RiItemIxcProdutoFormSet(
+        form_kwargs={"escola": escola, "somente_servico": True}, prefix="produto_servico"
+    )
     data_ativacao_form = RiDataAtivacaoForm(instance=ri, escola=escola)
     # RN-018: mesmos campos do bloco do Lado IXC acima, com prefixo próprio
     # para não colidir com os ids/nomes do outro formulário na mesma
@@ -1346,8 +1353,18 @@ def ri_detail_view(request, inep):
             produto_formset = RiItemIxcProdutoFormSet(
                 request.POST, form_kwargs={"escola": escola}
             )
+            # RN-089 (2026-09-09): segundo bloco "+" — mesmo mecanismo do
+            # bloco de Produtos acima, catálogo trocado (itens só com
+            # valor de serviço na LPU, RN-055).
+            produto_servico_formset = RiItemIxcProdutoFormSet(
+                request.POST, form_kwargs={"escola": escola, "somente_servico": True},
+                prefix="produto_servico",
+            )
             data_ativacao_form = RiDataAtivacaoForm(request.POST, instance=ri)
-            if kit_form.is_valid() and produto_formset.is_valid() and data_ativacao_form.is_valid():
+            if (
+                kit_form.is_valid() and produto_formset.is_valid()
+                and produto_servico_formset.is_valid() and data_ativacao_form.is_valid()
+            ):
                 if kit_form.kit_selecionado and kit_ja_lancado:
                     messages.error(
                         request,
@@ -1361,8 +1378,18 @@ def ri_detail_view(request, inep):
                     for dados in produto_formset.cleaned_data
                     if dados and dados.get("produto")
                 ]
+                # RN-089: linhas do segundo bloco ("só serviço"), mesma
+                # extração das linhas do bloco de Produtos acima.
+                linhas_preenchidas_servico = [
+                    dados
+                    for dados in produto_servico_formset.cleaned_data
+                    if dados and dados.get("produto")
+                ]
                 data_mudou = data_ativacao_form.has_changed()
-                if kit_form.kit_selecionado or linhas_preenchidas or data_mudou:
+                if (
+                    kit_form.kit_selecionado or linhas_preenchidas
+                    or linhas_preenchidas_servico or data_mudou
+                ):
                     if kit_form.kit_selecionado:
                         item_kit = RiItemIxc.objects.create(
                             ri=ri,
@@ -1386,6 +1413,21 @@ def ri_detail_view(request, inep):
                             # RN-011: Descrição curta (sem o qualificador entre
                             # parênteses do catálogo) — mesmo texto já mostrado
                             # no select do "+".
+                            descricao_item=produto.descricao_curta or produto.descricao,
+                            quantidade=dados["quantidade"],
+                            valor_unitario=Decimal("0"),
+                        )
+                        _registrar_log_campo(
+                            ri, request.user, "Produto (Lado IXC)", "",
+                            _resumo_item_ixc(item_produto.descricao_item, item_produto.quantidade),
+                        )
+                    # RN-089: mesmo lançamento acima, para os itens do
+                    # segundo bloco ("só serviço") — vira `RiItemIxc`
+                    # normal (Valor unitário nasce 0, igual aos demais).
+                    for dados in linhas_preenchidas_servico:
+                        produto = dados["produto"]
+                        item_produto = RiItemIxc.objects.create(
+                            ri=ri,
                             descricao_item=produto.descricao_curta or produto.descricao,
                             quantidade=dados["quantidade"],
                             valor_unitario=Decimal("0"),
@@ -1677,6 +1719,9 @@ def ri_detail_view(request, inep):
         for subform in produto_formset.forms:
             for campo in subform.fields.values():
                 campo.disabled = True
+        for subform in produto_servico_formset.forms:
+            for campo in subform.fields.values():
+                campo.disabled = True
 
     return render(
         request,
@@ -1693,6 +1738,9 @@ def ri_detail_view(request, inep):
             # RN-052: Lado IXC só é editável com o RI em "Em Andamento".
             "lado_ixc_editavel": lado_ixc_editavel,
             "produto_formset": produto_formset,
+            # RN-089: segundo bloco "+" — itens da LPU sem valor de
+            # equipamento, lançados do mesmo jeito que um Produto comum.
+            "produto_servico_formset": produto_servico_formset,
             "data_ativacao_form": data_ativacao_form,
             "divergencia_municipio_ixc": divergencia_municipio_ixc,
             "divergencia_estado_ixc": divergencia_estado_ixc,

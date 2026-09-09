@@ -273,6 +273,69 @@
             <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Verifique os produtos preenchidos.</p>
             {% endif %}
 
+            <!-- RN-089 (2026-09-09; revista no mesmo dia): segundo bloco
+                 "+" — itens da LPU sem "Equipamentos (R$)" (RN-055), fora
+                 do select de Produtos acima. Mesmo mecanismo (formset
+                 próprio, prefixo "produto_servico"): lançado igual a um
+                 Produto comum, vira `RiItemIxc` normal (Valor unitário
+                 nasce 0); o Valor de serviço da LPU não é usado neste RI,
+                 só depois no MIP. -->
+            <div class="flex items-center justify-between mt-2 border-t border-gray-100 dark:border-gray-800 pt-4">
+                <h3 class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                    Itens só com valor de serviço <span class="text-gray-400 dark:text-gray-500">(uso no MIP)</span>
+                </h3>
+                {% if lado_ixc_editavel %}
+                <button type="button" id="btn-add-produto-servico-ixc"
+                    class="w-6 h-6 flex items-center justify-center rounded-full bg-pv-black text-pv-yellow hover:bg-gray-800 transition"
+                    title="Adicionar item" aria-label="Adicionar item">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                </button>
+                {% endif %}
+            </div>
+            <p class="text-[10px] text-gray-400 dark:text-gray-500 font-bold">
+                Sem valor de equipamento na LPU — Valor unitário nasce 0,00, igual aos demais Produtos.
+            </p>
+            {{ produto_servico_formset.management_form }}
+
+            <div id="produto-servico-ixc-linhas" class="flex flex-col gap-3 max-h-72 overflow-y-auto pr-1">
+                {% for produto_form in produto_servico_formset %}
+                <div class="produto-servico-ixc-linha flex flex-col gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 pr-6 relative">
+                    <button type="button" class="btn-remove-produto-servico-ixc absolute top-2 right-2 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Remover item" aria-label="Remover item">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    </button>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Produto
+                        {{ produto_form.produto }}
+                    </label>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Quantidade
+                        {{ produto_form.quantidade }}
+                    </label>
+                </div>
+                {% endfor %}
+            </div>
+
+            <template id="produto-servico-ixc-template">
+                <div class="produto-servico-ixc-linha flex flex-col gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 pr-6 relative">
+                    <button type="button" class="btn-remove-produto-servico-ixc absolute top-2 right-2 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Remover item" aria-label="Remover item">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    </button>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Produto
+                        {{ produto_servico_formset.empty_form.produto }}
+                    </label>
+                    <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                        Quantidade
+                        {{ produto_servico_formset.empty_form.quantidade }}
+                    </label>
+                </div>
+            </template>
+            {% if produto_servico_formset.non_form_errors %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">{{ produto_servico_formset.non_form_errors.0 }}</p>
+            {% elif produto_servico_formset.total_error_count %}
+            <p class="text-[11px] font-bold text-red-500 dark:text-red-400">Verifique os itens preenchidos.</p>
+            {% endif %}
+
             <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 mt-2">
                 Data Ativação
                 {{ data_ativacao_form.data_ativacao }}
@@ -636,6 +699,16 @@ configurarBlocoProdutos({
     idTotalForms: 'id_form-TOTAL_FORMS',
     classeBotaoRemover: '.btn-remove-produto-ixc',
     classeLinha: '.produto-ixc-linha',
+});
+// RN-089: segundo bloco "+" do Lado IXC (itens só com valor de serviço) —
+// mesma mecânica acima, formset com prefixo próprio ("produto_servico").
+configurarBlocoProdutos({
+    idBotaoAdicionar: 'btn-add-produto-servico-ixc',
+    idLinhas: 'produto-servico-ixc-linhas',
+    idTemplate: 'produto-servico-ixc-template',
+    idTotalForms: 'id_produto_servico-TOTAL_FORMS',
+    classeBotaoRemover: '.btn-remove-produto-servico-ixc',
+    classeLinha: '.produto-servico-ixc-linha',
 });
 configurarBlocoProdutos({
     idBotaoAdicionar: 'btn-add-produto-eace',

@@ -2118,6 +2118,17 @@ class RiEnvioFinanceiroTests(TestCase):
             valor_unitario="0",
             eh_kit=True,
         )
+        # RN-088 (2026-09-09): a planilha agora usa o Lado Relatório EACE
+        # (3º lado) como fonte de quantidade/valor/OSP — espelha o Lado
+        # IXC acima (mesmo cenário "copiado do Lado Relatório EACE" já
+        # usado na prática).
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri,
+            descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1,
+            valor_unitario="0",
+            eh_kit=True,
+        )
         self.para_padrao = "hilber.lustosa@speedcsc.com.br, financeiro@speedcsc.com.br"
         self.cc_padrao = (
             "logistica-l@speedcsc.com.br, posvendas@megainfraestrutura.com.br, "
@@ -2206,6 +2217,9 @@ class RiEnvioFinanceiroTests(TestCase):
         aba cadastrada no catálogo NÃO bloqueia mais — ganha uma aba nova,
         criada na hora, e o e-mail sai normalmente."""
         RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Produto fora do catálogo", quantidade=1, valor_unitario="0"
+        )
+        RiItemRelatorioEace.objects.create(
             ri=self.ri, descricao_item="Produto fora do catálogo", quantidade=1, valor_unitario="0"
         )
         resp = self._enviar_email()
@@ -2300,6 +2314,9 @@ class RiEnvioFinanceiroTests(TestCase):
         RiItemIxc.objects.create(
             ri=self.ri, descricao_item="Produto fora do catálogo", quantidade=1, valor_unitario="0"
         )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Produto fora do catálogo", quantidade=1, valor_unitario="0"
+        )
         self.client.force_login(self.user)
         resp = self.client.get(
             reverse("ri_baixar_planilha_financeiro", kwargs={"pk": self.ri.pk})
@@ -2338,9 +2355,13 @@ class RiEnvioFinanceiroTests(TestCase):
 
 
 class GerarPlanilhaFaturamentoTests(TestCase):
-    """FEAT-017/RN-013: geração da planilha de faturamento a partir da
-    planilha-modelo real (`doc/FATURAMENTO MATERIAS EACE.xlsx`) — mapeamento
-    de célula, texto fixo preservado e bloqueio por produto sem aba."""
+    """FEAT-017/RN-013/RN-088: geração da planilha de faturamento a partir
+    da planilha-modelo real (`doc/FATURAMENTO MATERIAS EACE.xlsx`) —
+    mapeamento de célula, texto fixo preservado, bloqueio por produto sem
+    aba, e separação de aba por OSP (RN-088). Fonte de quantidade/valor
+    passa a ser o Lado Relatório EACE (3º lado, único com Num OSP); Lado
+    IXC continua exigido, mas só pela validação (KIT Instalado, Data de
+    Ativação, Município, Estado, CNPJ, CNPJ Fictício)."""
 
     def setUp(self):
         self.escola = Escola.objects.create(
@@ -2370,12 +2391,25 @@ class GerarPlanilhaFaturamentoTests(TestCase):
             lote=9, unidade="Escola",
             valor_equipamento="3000.00", valor_servico="500.00",
         )
+        # Lado IXC: continua exigido pela validação (KIT Instalado, Data de
+        # Ativação etc.) — não é mais a fonte de quantidade/valor/aba da
+        # planilha (RN-088).
         RiItemIxc.objects.create(
             ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
             quantidade=1, valor_unitario="0", eh_kit=True,
         )
         RiItemIxc.objects.create(
             ri=self.ri, descricao_item="Rack 5U", quantidade=3, valor_unitario="0", eh_kit=False,
+        )
+        # Lado Relatório EACE (3º lado, RN-088): fonte real de quantidade/
+        # valor/OSP da planilha — espelha o Lado IXC acima (mesmo cenário
+        # "copiado do Lado Relatório EACE" já usado na prática, RN-013).
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario="3000.00", eh_kit=True,
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Rack 5U", quantidade=3, valor_unitario="500.00", eh_kit=False,
         )
 
     def test_gera_uma_aba_por_produto_com_celulas_mapeadas(self):
@@ -2459,6 +2493,10 @@ class GerarPlanilhaFaturamentoTests(TestCase):
             ri=self.ri, descricao_item="Enlace de Rádio",
             quantidade=1, valor_unitario="0", eh_kit=False,
         )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Enlace de Rádio",
+            quantidade=1, valor_unitario="0", eh_kit=False,
+        )
         conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba_kit = next(ws for ws in workbook.worksheets if ws.title.strip() == "NF KIT")
@@ -2478,6 +2516,9 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         RiItemIxc.objects.create(
             ri=self.ri, descricao_item="Rack 9U", quantidade=1, valor_unitario="0", eh_kit=False,
         )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Rack 9U", quantidade=1, valor_unitario="900.00", eh_kit=False,
+        )
         conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba_rack = next(ws for ws in workbook.worksheets if ws.title.strip() == "RACK")
@@ -2493,6 +2534,11 @@ class GerarPlanilhaFaturamentoTests(TestCase):
             ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 99 Access Points",
             quantidade=1, valor_unitario="0", eh_kit=True,
         )
+        RiItemRelatorioEace.objects.all().delete()
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 99 Access Points",
+            quantidade=1, valor_unitario="0", eh_kit=True,
+        )
         conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba_kit = next(ws for ws in workbook.worksheets if ws.title.strip() == "NF KIT")
@@ -2505,6 +2551,10 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         bloqueia mais — ganha uma aba nova, com o nome dele, clonada do
         layout de uma aba já existente na planilha-modelo."""
         RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Enlace de Rádio",
+            quantidade=2, valor_unitario="0", eh_kit=False,
+        )
+        RiItemRelatorioEace.objects.create(
             ri=self.ri, descricao_item="Enlace de Rádio",
             quantidade=2, valor_unitario="0", eh_kit=False,
         )
@@ -2532,6 +2582,9 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         de acesso em fibra óptica - concreto")."""
         nome_longo = "Implantação de postes para rede de acesso em fibra óptica - concreto"
         RiItemIxc.objects.create(
+            ri=self.ri, descricao_item=nome_longo, quantidade=1, valor_unitario="0", eh_kit=False,
+        )
+        RiItemRelatorioEace.objects.create(
             ri=self.ri, descricao_item=nome_longo, quantidade=1, valor_unitario="0", eh_kit=False,
         )
         conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
@@ -2591,6 +2644,7 @@ class GerarPlanilhaFaturamentoTests(TestCase):
         """Pedido do usuário (2026-08-31): o sufixo "(N)" só aparece com
         mais de 1 equipamento — 1 unidade continua só com o nome."""
         RiItemIxc.objects.filter(descricao_item="Rack 5U").update(quantidade=1)
+        RiItemRelatorioEace.objects.filter(descricao_item="Rack 5U").update(quantidade=1)
         conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba_rack = next(ws for ws in workbook.worksheets if ws.title.strip() == "RACK")
@@ -2608,6 +2662,13 @@ class GerarPlanilhaFaturamentoTests(TestCase):
             valor_unitario="0",
             eh_kit=True,
         )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri,
+            descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=2,
+            valor_unitario="3000.00",
+            eh_kit=True,
+        )
         conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba_kit = next(ws for ws in workbook.worksheets if ws.title.strip() == "NF KIT")
@@ -2620,10 +2681,106 @@ class GerarPlanilhaFaturamentoTests(TestCase):
             ri=self.ri, descricao_item="Enlace de Rádio",
             quantidade=2, valor_unitario="0", eh_kit=False,
         )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Enlace de Rádio",
+            quantidade=2, valor_unitario="0", eh_kit=False,
+        )
         conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
         workbook = openpyxl.load_workbook(BytesIO(conteudo))
         aba_nova = workbook["Enlace de Rádio"]
         self.assertEqual(aba_nova["I16"].value, "Enlace de Rádio (2)")
+
+    def test_ri_sem_itens_no_lado_relatorio_eace_bloqueia(self):
+        """RN-088 (2026-09-09): planilha passa a usar o Lado Relatório EACE
+        (3º lado) como fonte — sem nenhum item lançado lá (Sincronizador
+        ainda não rodou), bloqueia mesmo com o Lado IXC completo."""
+        RiItemRelatorioEace.objects.all().delete()
+        with self.assertRaises(PlanilhaFaturamentoError) as contexto:
+            gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        self.assertIn("Lado Relatório EACE", str(contexto.exception))
+
+    def test_mesmo_equipamento_com_osps_diferentes_ganha_uma_aba_para_cada(self):
+        """RN-088 (pedido do usuário, 2026-09-09): "Rack 5U" com 2 OSPs
+        diferentes no Lado Relatório EACE não soma numa aba só — cada OSP
+        vira 1 aba separada, porque o financeiro emite 1 Nota Fiscal + 1
+        XML por OSP."""
+        RiItemRelatorioEace.objects.filter(descricao_item="Rack 5U").delete()
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Rack 5U", quantidade=2,
+            valor_unitario="500.00", eh_kit=False, num_osp="4137",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Rack 5U", quantidade=1,
+            valor_unitario="500.00", eh_kit=False, num_osp="4718",
+        )
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        titulos_rack = {t.strip() for t in workbook.sheetnames if t.strip().startswith("RACK")}
+        self.assertEqual(titulos_rack, {"RACK - OSP 4137", "RACK - OSP 4718"})
+
+        aba_4137 = workbook["RACK - OSP 4137"]
+        aba_4718 = workbook["RACK - OSP 4718"]
+        # Cada aba só com o subtotal do próprio OSP — nunca a soma dos 2
+        # (500 x 2 = 1000, e 500 x 1 = 500; nunca 1500 juntos).
+        self.assertEqual(aba_4137["H10"].value, 1000.0)
+        self.assertEqual(aba_4718["H10"].value, 500.0)
+        self.assertEqual(aba_4137["I16"].value, "RACK (2)")
+        self.assertEqual(aba_4718["I16"].value, "RACK")
+
+    def test_mesmo_equipamento_com_1_osp_so_nao_leva_sufixo_no_titulo(self):
+        """RN-088: caso comum (1 OSP só, ou nenhum item ainda com OSP
+        preenchido) mantém o título da aba exatamente igual a hoje, sem
+        sufixo — não muda o nome de aba que o financeiro já reconhece."""
+        RiItemRelatorioEace.objects.filter(descricao_item="Rack 5U").update(num_osp="4137")
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        self.assertIn("RACK", {t.strip() for t in workbook.sheetnames})
+        self.assertNotIn("RACK - OSP 4137", {t.strip() for t in workbook.sheetnames})
+
+    def test_osp_em_branco_conta_como_1_grupo_distinto_do_osp_preenchido(self):
+        """RN-088: 1 item ainda sem OSP (Sincronizador não confirmou ainda)
+        e outro já com OSP não podem entrar juntos na mesma aba/Nota
+        Fiscal — contam como grupos diferentes."""
+        RiItemRelatorioEace.objects.filter(descricao_item="Rack 5U").delete()
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Rack 5U", quantidade=1,
+            valor_unitario="500.00", eh_kit=False, num_osp="",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Rack 5U", quantidade=1,
+            valor_unitario="500.00", eh_kit=False, num_osp="4718",
+        )
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        titulos = {t.strip() for t in workbook.sheetnames if t.strip().startswith("RACK")}
+        self.assertEqual(titulos, {"RACK - Sem OSP", "RACK - OSP 4718"})
+        self.assertEqual(workbook["RACK - Sem OSP"]["H10"].value, 500.0)
+        self.assertEqual(workbook["RACK - OSP 4718"]["H10"].value, 500.0)
+
+    def test_titulo_de_aba_longo_com_osp_trunca_a_base_preservando_o_sufixo(self):
+        """Excel limita nome de aba a 31 caracteres — com sufixo de OSP
+        (RN-088), quem é truncado é a base do nome, nunca o sufixo (senão
+        perderia justamente o que distingue os 2 OSPs)."""
+        nome_longo = "Implantação de postes para rede de acesso em fibra óptica - concreto"
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item=nome_longo, quantidade=1, valor_unitario="0", eh_kit=False,
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item=nome_longo, quantidade=1,
+            valor_unitario="0", eh_kit=False, num_osp="1111",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item=nome_longo, quantidade=1,
+            valor_unitario="0", eh_kit=False, num_osp="2222",
+        )
+        conteudo = gerar_planilha_faturamento(self.ri, data_vencimento=date(2026, 9, 21))
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        titulos_novos = {t for t in workbook.sheetnames if t.strip() not in ("NF KIT", "RACK")}
+        self.assertEqual(len(titulos_novos), 2)
+        for titulo in titulos_novos:
+            self.assertLessEqual(len(titulo), 31)
+        self.assertTrue(any(t.endswith("- OSP 1111") for t in titulos_novos))
+        self.assertTrue(any(t.endswith("- OSP 2222") for t in titulos_novos))
 
 
 class NomeArquivoPlanilhaFaturamentoTests(TestCase):
@@ -3353,6 +3510,16 @@ class RiDetailViewTests(TestCase):
         "eace_produto-MAX_NUM_FORMS": "1000",
     }
 
+    # RN-089 (2026-09-09): segundo bloco "+" do Lado IXC ("Itens só com
+    # valor de serviço") — mesma exigência de management form, prefixo
+    # próprio "produto_servico", também faz parte do "salvar_ixc".
+    FORMSET_PRODUTO_SERVICO_VAZIO = {
+        "produto_servico-TOTAL_FORMS": "0",
+        "produto_servico-INITIAL_FORMS": "0",
+        "produto_servico-MIN_NUM_FORMS": "0",
+        "produto_servico-MAX_NUM_FORMS": "1000",
+    }
+
     def setUp(self):
         self.analista = User.objects.create_user(
             username="analista", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
@@ -3714,6 +3881,7 @@ class RiDetailViewTests(TestCase):
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
             },
         )
         self.assertEqual(resp.status_code, 302)
@@ -3741,6 +3909,7 @@ class RiDetailViewTests(TestCase):
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
             },
         )
         item = RiItemIxc.objects.get(ri=ri)
@@ -3765,6 +3934,7 @@ class RiDetailViewTests(TestCase):
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
             },
         )
         self.assertEqual(resp.status_code, 302)
@@ -3793,6 +3963,7 @@ class RiDetailViewTests(TestCase):
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
             },
         )
         self.assertEqual(RiItemIxc.objects.filter(ri=ri, eh_kit=True).count(), 1)
@@ -3819,6 +3990,7 @@ class RiDetailViewTests(TestCase):
                 "form-INITIAL_FORMS": "0",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "form-0-produto": cabo.pk,
                 "form-0-quantidade": 5,
             },
@@ -3854,6 +4026,7 @@ class RiDetailViewTests(TestCase):
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
             },
         )
         self.assertEqual(resp.status_code, 302)
@@ -3869,7 +4042,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": "outro", **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": "outro", **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 0)
@@ -3972,6 +4145,108 @@ class RiDetailViewTests(TestCase):
         ]
         self.assertTrue(any("Injetor PoE" in opcao for opcao in opcoes_produto_eace))
 
+    def test_produto_servico_mostra_quem_sai_do_bloco_principal(self):
+        """RN-089 (2026-09-09): item sem valor de equipamento (excluído do
+        select de "Produto" comum pela RN-055) aparece no select do
+        segundo bloco "+" ("Itens só com valor de serviço")."""
+        KitPadrao.objects.create(
+            descricao="Injetor PoE", unidade="Unidade",
+            valor_equipamento=None, valor_servico="564.04",
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        opcoes = [
+            choice[1]
+            for choice in resp.context["produto_servico_formset"].empty_form.fields["produto"].choices
+        ]
+        self.assertTrue(any("Injetor PoE" in opcao for opcao in opcoes))
+
+    def test_produto_servico_exclui_quem_tem_valor_de_equipamento(self):
+        """RN-089: item com Equipamento preenchido continua faturável no
+        bloco comum de Produtos — não aparece no segundo bloco "+"."""
+        KitPadrao.objects.create(
+            descricao="Cabo de rede", unidade="metro",
+            valor_equipamento="10.00", valor_servico="2.00",
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        opcoes = [
+            choice[1]
+            for choice in resp.context["produto_servico_formset"].empty_form.fields["produto"].choices
+        ]
+        self.assertFalse(any("Cabo de rede" in opcao for opcao in opcoes))
+
+    def test_produto_servico_exclui_kit_unidade_escola(self):
+        """RN-089: mesmo recorte da RN-011/RN-055 — KIT (Unidade "Escola")
+        nunca entra no segundo bloco "+", mesmo sem valor de equipamento."""
+        KitPadrao.objects.create(
+            descricao="Kit Wi-Fi Indoor", unidade="Escola", valor_equipamento=None,
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        opcoes = [
+            choice[1]
+            for choice in resp.context["produto_servico_formset"].empty_form.fields["produto"].choices
+        ]
+        self.assertFalse(any("Kit Wi-Fi Indoor" in opcao for opcao in opcoes))
+
+    def test_produto_servico_filtra_por_lote_da_escola(self):
+        """RN-089: mesmo filtro de Lote do restante do catálogo (RN-011) —
+        item de outro Lote não aparece no segundo bloco "+"."""
+        self.escola.lote = 9
+        self.escola.save()
+        KitPadrao.objects.create(
+            descricao="Injetor PoE", lote=9, unidade="Unidade",
+            valor_equipamento=None, valor_servico="564.04",
+        )
+        KitPadrao.objects.create(
+            descricao="Só do Lote 11", lote=11, unidade="Unidade",
+            valor_equipamento=None, valor_servico="100.00",
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        opcoes = [
+            choice[1]
+            for choice in resp.context["produto_servico_formset"].empty_form.fields["produto"].choices
+        ]
+        self.assertTrue(any("Injetor PoE" in opcao for opcao in opcoes))
+        self.assertFalse(any("Só do Lote 11" in opcao for opcao in opcoes))
+
+    def test_lancar_produto_servico_ixc(self):
+        """RN-089: o segundo bloco "+" lança igual a um Produto comum
+        (RN-011) — mesma submissão "salvar_ixc", management form com
+        prefixo próprio ("produto_servico"); vira `RiItemIxc` normal,
+        Valor unitário nasce 0."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        injetor = KitPadrao.objects.create(
+            descricao="Injetor PoE", unidade="Unidade",
+            valor_equipamento=None, valor_servico="564.04",
+        )
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {
+                "acao": "salvar_ixc",
+                **self.FORMSET_PRODUTO_VAZIO,
+                "produto_servico-TOTAL_FORMS": "1",
+                "produto_servico-INITIAL_FORMS": "0",
+                "produto_servico-MIN_NUM_FORMS": "0",
+                "produto_servico-MAX_NUM_FORMS": "1000",
+                "produto_servico-0-produto": injetor.pk,
+                "produto_servico-0-quantidade": 3,
+                "municipio_ixc": "Fortaleza",
+                "estado_ixc": "CE",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        item = RiItemIxc.objects.get(ri=ri, descricao_item="Injetor PoE")
+        self.assertEqual(item.quantidade, 3)
+        self.assertEqual(item.valor_unitario, Decimal("0"))
+
     def test_catalogo_filtra_por_lote_da_escola(self):
         """RN-011: o catálogo mostra só as entradas do Lote desta escola —
         mesmo kit/produto pode ter preço (e existência) diferente por
@@ -4009,6 +4284,7 @@ class RiDetailViewTests(TestCase):
                 "form-INITIAL_FORMS": "0",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "form-0-produto": roteador.pk,
                 "form-0-quantidade": 1,
                 "form-1-produto": cabo.pk,
@@ -4042,6 +4318,7 @@ class RiDetailViewTests(TestCase):
                 "form-INITIAL_FORMS": "0",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "form-0-produto": cabo.pk,
                 "form-0-quantidade": 5,
             },
@@ -4064,7 +4341,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
         )
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
         self.assertContains(resp, "Cadastrou")
@@ -4089,6 +4366,7 @@ class RiDetailViewTests(TestCase):
                 "form-INITIAL_FORMS": "0",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "form-0-produto": nobreak.pk,
                 "form-0-quantidade": 1,
                 "municipio_ixc": "Fortaleza",
@@ -4119,6 +4397,7 @@ class RiDetailViewTests(TestCase):
                 "form-INITIAL_FORMS": "0",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "form-0-produto": roteador.pk,
                 "form-0-quantidade": 1,
                 # form-1 removida pelo "x" antes de enviar — sem essas chaves.
@@ -4166,6 +4445,7 @@ class RiDetailViewTests(TestCase):
                 "form-INITIAL_FORMS": "0",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "form-0-produto": "",
                 "form-0-quantidade": "",
                 "data_ativacao": "",
@@ -4217,6 +4497,7 @@ class RiDetailViewTests(TestCase):
             {
                 "acao": "salvar_ixc",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "data_ativacao": "2026-08-26",
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
@@ -4241,6 +4522,7 @@ class RiDetailViewTests(TestCase):
                 "form-INITIAL_FORMS": "0",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "form-0-produto": "",
                 "form-0-quantidade": "",
                 "data_ativacao": "2026-08-24",
@@ -4269,6 +4551,7 @@ class RiDetailViewTests(TestCase):
                 "form-INITIAL_FORMS": "0",
                 "form-MIN_NUM_FORMS": "0",
                 "form-MAX_NUM_FORMS": "1000",
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "form-0-produto": cabo.pk,
                 "form-0-quantidade": 5,
                 "data_ativacao": "2026-08-24",
@@ -4292,6 +4575,7 @@ class RiDetailViewTests(TestCase):
             {
                 "acao": "salvar_ixc",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "data_ativacao": "",
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "ce",
@@ -4313,6 +4597,7 @@ class RiDetailViewTests(TestCase):
             {
                 "acao": "salvar_ixc",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "data_ativacao": "2026-08-24",
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
@@ -4337,6 +4622,7 @@ class RiDetailViewTests(TestCase):
             {
                 "acao": "salvar_ixc",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "data_ativacao": "",
                 "municipio_ixc": "",
                 "estado_ixc": "",
@@ -4363,6 +4649,7 @@ class RiDetailViewTests(TestCase):
             {
                 "acao": "salvar_ixc",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "data_ativacao": "2026-08-25",
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
@@ -4383,7 +4670,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
         )
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 1)
@@ -4398,7 +4685,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
         )
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 1)
@@ -4413,6 +4700,7 @@ class RiDetailViewTests(TestCase):
             {
                 "acao": "salvar_ixc",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "data_ativacao": "",
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "C",
@@ -4434,6 +4722,7 @@ class RiDetailViewTests(TestCase):
             {
                 "acao": "salvar_ixc",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "data_ativacao": "",
                 "municipio_ixc": "Recife",
                 "estado_ixc": "PE",
@@ -4519,6 +4808,7 @@ class RiDetailViewTests(TestCase):
             {
                 "acao": "salvar_ixc",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
                 "data_ativacao": "",
                 "municipio_ixc": "",
                 "estado_ixc": "",
@@ -4541,7 +4831,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
         )
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 1)
@@ -4695,7 +4985,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, "municipio_ixc": "Fortaleza", "estado_ixc": "CE", **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": kit.pk, "municipio_ixc": "Fortaleza", "estado_ixc": "CE", **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
         )
         self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
@@ -4722,6 +5012,7 @@ class RiDetailViewTests(TestCase):
                 "municipio_ixc": "Fortaleza", "estado_ixc": "CE",
                 "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "0", "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000",
                 "form-0-produto": cabo.pk, "form-0-quantidade": 10,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
             },
         )
         self.client.post(
@@ -4848,6 +5139,7 @@ class RiDetailViewTests(TestCase):
                 "municipio_ixc": "Fortaleza",
                 "estado_ixc": "CE",
                 **self.FORMSET_PRODUTO_VAZIO,
+                **self.FORMSET_PRODUTO_SERVICO_VAZIO,
             },
         )
         self.assertRedirects(resp, reverse("ri_detail", kwargs={"inep": self.escola.inep}))
@@ -4971,7 +5263,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
             follow=True,
         )
         self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 0)
@@ -4988,7 +5280,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.admin)
         self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
         )
         self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 0)
 
@@ -5019,7 +5311,7 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.post(
             reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO},
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
         )
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 1)
@@ -5059,9 +5351,14 @@ class RiDetailStatusEnvioEmailTests(TestCase):
         )
 
     def _preencher_requisitos_envio(self, ri):
-        """Deixa o RI pronto para "Envio de Email para Faturamento"
-        (mesma checagem de `gerar_planilha_faturamento`, RN-013)."""
+        """Deixa o RI pronto para "Envio de Email para Faturamento" (mesma
+        checagem de `gerar_planilha_faturamento`, RN-013/RN-088) — Lado
+        Relatório EACE espelha o Lado IXC, é de lá que vem a planilha."""
         RiItemIxc.objects.create(
+            ri=ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        RiItemRelatorioEace.objects.create(
             ri=ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
             quantidade=1, valor_unitario="0", eh_kit=True,
         )
@@ -7151,9 +7448,14 @@ def _marcar_transicao_aguardando_validacao_eace(ri, quando, usuario=None):
 class MontarRelatorioFaturamentoEaceMateriaisTests(TestCase):
     """FEAT-037/RN-082/RN-083: relatório "Faturamento EACE Materiais" —
     período pega a transição de status para "Aguardando validação EACE"
-    (não o status atual do RI); quantidade de equipamento vem do Lado IXC
-    (2º lado), classificada por palavra-chave; Nota Fiscal/Num OSP vêm do
-    Lado Relatório EACE (3º lado, único que guarda esses 2 dados)."""
+    vinda de "Resposta Financeiro" (não o status atual do RI) — RN-082
+    revista em 2026-09-09: só essa origem é um envio de verdade ao portal
+    EACE (RPA ou marcação manual "por fora"); reabertura de RI já
+    concluído ("Faturamento Concluído" → "Aguardando validação EACE")
+    não conta (bug reportado pelo usuário — relatório inflado com
+    reaberturas). Quantidade de equipamento vem do Lado IXC (2º lado),
+    classificada por palavra-chave; Nota Fiscal/Num OSP vêm do Lado
+    Relatório EACE (3º lado, único que guarda esses 2 dados)."""
 
     def setUp(self):
         self.escola = Escola.objects.create(
@@ -7162,7 +7464,7 @@ class MontarRelatorioFaturamentoEaceMateriaisTests(TestCase):
             velocidade_dl_minima="50",
         )
         self.ri = Ri.objects.create(
-            escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO,
+            escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE,
             municipio_ixc="Boa Viagem", estado_ixc="pe", data_ativacao=date(2026, 8, 20),
         )
         KitPadrao.objects.create(
@@ -7273,12 +7575,28 @@ class MontarRelatorioFaturamentoEaceMateriaisTests(TestCase):
         self.assertEqual(linha["observacao"], "")
 
     def test_ri_com_2_transicoes_no_periodo_aparece_1_vez(self):
-        """Voltou de "Correção MEGA" e entrou de novo em "Aguardando
-        validação EACE" dentro do mesmo período — RN-082 usa a transição
+        """RI foi reenviado ao EACE 2 vezes dentro do mesmo período (ex.:
+        corrigido e reenviado pelo RPA de novo, "Resposta Financeiro" →
+        "Aguardando validação EACE" outra vez) — RN-082 usa a transição
         mais recente, não duplica a linha."""
+        self.ri.status = Ri.AGUARDANDO_ANEXO_PORTAL_EACE
+        self.ri.save(update_fields=["status"])
         _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 25))
         linhas = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))
         self.assertEqual(len(linhas), 1)
+
+    def test_reabertura_de_ri_concluido_nao_conta_como_envio(self):
+        """RN-082 (revista, 2026-09-09): reabrir um RI já concluído pra
+        correção ("Faturamento Concluído" → "Aguardando validação EACE")
+        não é um envio novo ao EACE — não aparece no relatório na data da
+        reabertura (bug reportado pelo usuário: relatório contava
+        reabertura como envio, inflando a contagem de escolas — 17
+        envios reais viraram 44 no relatório)."""
+        self.ri.status = Ri.FATURAMENTO_CONCLUIDO
+        self.ri.save(update_fields=["status"])
+        _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 25))
+        linhas = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 25), date(2026, 8, 25))
+        self.assertEqual(linhas, [])
 
 
 _LINHA_BASE_TESTE_PLANILHA = {
@@ -7456,7 +7774,10 @@ class RelatorioFaturamentoEaceMateriaisExportarArquivosViewTests(TestCase):
             perfil=User.PERFIL_ANALISTA,
         )
         self.escola = Escola.objects.create(inep="60000050", nome="Escola Zip View", estado="PE")
-        self.ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        # RN-082 (revista, 2026-09-09): status inicial precisa ser
+        # "Resposta Financeiro" — é a origem que o relatório exige agora
+        # (só essa transição é um envio de verdade ao EACE).
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
         # Sem `LogRpaEace` de propósito — caso real reportado pelo usuário
         # (2026-09-09): RI chega em "Aguardando validação EACE" pelo
         # Sincronizador em lote/avanço manual do Administrador (RN-019),
@@ -7545,7 +7866,9 @@ class RelatorioFaturamentoEaceMateriaisViewTests(TestCase):
             perfil=User.PERFIL_ANALISTA,
         )
         self.escola = Escola.objects.create(inep="60000030", nome="Escola View Teste", estado="PE")
-        self.ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        # RN-082 (revista, 2026-09-09): status inicial precisa ser
+        # "Resposta Financeiro" — é a origem que o relatório exige agora.
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
         KitPadrao.objects.create(descricao="Nobreak", unidade="Unidade", valor_equipamento="500.00")
         RiItemIxc.objects.create(ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="0")
         _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 15))

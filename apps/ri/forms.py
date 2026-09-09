@@ -99,6 +99,26 @@ def _catalogo_ixc(escola, kit, exigir_valor_equipamento=False):
     return qs.order_by(F("numero_access_points").asc(nulls_last=True), "descricao")
 
 
+def catalogo_ixc_somente_servico(escola):
+    """RN-089 (nova, a formalizar pelo Orquestrador em business_rules.md):
+    itens da LPU sem "Equipamentos (R$)" (`valor_equipamento` nulo) — o
+    complemento exato do recorte que a RN-055 tira do select "Produtos"
+    do Lado IXC (nunca faturáveis ali, `KitPadrao.valor_faturavel` sempre
+    0 sem valor de equipamento). Catálogo de um segundo bloco "+" próprio
+    no Lado IXC ("Itens só com valor de serviço"), lançado do mesmo jeito
+    que um Produto comum (RN-011) — vira `RiItemIxc` normal, Valor
+    unitário nasce 0 igual aos demais; a diferença é só o catálogo de
+    origem. O Valor de serviço da LPU não é usado neste RI, só depois no
+    MIP (Projeto > MIP). Mesmo filtro de Lote do restante do catálogo
+    (`_catalogo_ixc`)."""
+    qs = KitPadrao.objects.exclude(unidade__istartswith="escola").filter(
+        valor_equipamento__isnull=True
+    )
+    if escola and escola.lote is not None:
+        qs = qs.filter(lote=escola.lote)
+    return qs.order_by(F("numero_access_points").asc(nulls_last=True), "descricao")
+
+
 class _CatalogoIxcChoiceField(forms.ModelChoiceField):
     """RN-011 (2026-08-24): mostra `descricao_curta` no select — a
     Descrição completa da LPU é grande demais para uma lista (ex.:
@@ -206,7 +226,17 @@ class RiItemIxcProdutoForm(forms.Form):
 
     RN-055 (2026-09-03): produto sem "Equipamentos (R$)" na LPU
     (`KitPadrao.valor_equipamento` nulo) não entra nesta lista — ver
-    `_catalogo_ixc`."""
+    `_catalogo_ixc`.
+
+    RN-089 (2026-09-09; revista no mesmo dia): usuário pediu para lançar
+    esse mesmo item "só serviço" pela tela, igual a um Produto comum, em
+    vez de só uma lista de referência — `somente_servico=True` troca o
+    catálogo para `catalogo_ixc_somente_servico` (o complemento exato do
+    filtro da RN-055). Mesmo formulário, mesmo comportamento (Quantidade
+    manual, Valor unitário nasce 0); só o catálogo do select muda. Usado
+    pelo bloco "Itens só com valor de serviço" do Lado IXC, formset
+    separado (`ri_detail.html`) para não misturar as duas listas no
+    select principal de Produtos."""
 
     produto = _CatalogoIxcChoiceField(
         queryset=KitPadrao.objects.none(),
@@ -220,10 +250,12 @@ class RiItemIxcProdutoForm(forms.Form):
         widget=forms.NumberInput(attrs={"class": CAMPO_TEXTO_LINHA, "min": 1}),
     )
 
-    def __init__(self, *args, escola=None, **kwargs):
+    def __init__(self, *args, escola=None, somente_servico=False, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["produto"].queryset = _catalogo_ixc(
-            escola, kit=False, exigir_valor_equipamento=True
+        self.fields["produto"].queryset = (
+            catalogo_ixc_somente_servico(escola)
+            if somente_servico
+            else _catalogo_ixc(escola, kit=False, exigir_valor_equipamento=True)
         )
 
 
@@ -612,7 +644,7 @@ class RelatorioFaturamentoEaceMateriaisForm(forms.Form):
     reaproveitada direto pelo botão "Exportar Excel" (RN-082). Formato ISO
     (`%Y-%m-%d`) explícito no widget: é o formato que o input HTML
     `type="date"` exige para pré-preencher o valor (mesmo padrão de
-    `PlanilhaRelatorioEaceMipPeriodoForm`, `apps.escolas.forms`)."""
+    `RiDataAtivacaoForm.data_ativacao`, acima)."""
 
     data_inicio = forms.DateField(
         label="Data início",

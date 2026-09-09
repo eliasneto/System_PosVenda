@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import zipfile
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from datetime import timedelta
 from datetime import timezone as dt_timezone
 from decimal import Decimal
@@ -114,6 +114,16 @@ def montar_corpo_email_financeiro(ri):
 # continua existindo, agora como atalho opcional para juntar produtos
 # parecidos numa aba só (ex.: Rack 3U/5U/7U → aba "RACK"); sem preenchê-lo,
 # cada produto ganha a própria aba, nomeada com a descrição dele.
+#
+# RN-088 (nova, a formalizar pelo Orquestrador em business_rules.md;
+# pedido do usuário, 2026-09-09): agrupamento passa a usar o Lado
+# Relatório EACE (3º lado, `RiItemRelatorioEace`), não mais o Lado IXC —
+# é o único lado que guarda o Num OSP (RN-022), e o financeiro emite 1
+# Nota Fiscal + 1 XML por OSP. Quando o mesmo tipo de equipamento (mesma
+# aba) tiver mais de 1 OSP diferente lançado no RI, cada OSP ganha a
+# própria aba — nunca soma quantidade/valor de OSPs diferentes numa aba
+# só. Com um único OSP (caso comum), o título da aba continua exatamente
+# igual a hoje, sem sufixo (decisão confirmada pelo usuário, 2026-09-09).
 
 CAMINHO_PLANILHA_FATURAMENTO_MODELO = settings.BASE_DIR / "doc" / "FATURAMENTO MATERIAS EACE.xlsx"
 
@@ -257,18 +267,18 @@ def _item_lpu_e_aba(descricao, eh_kit, catalogo):
 
 
 def itens_faltando_para_planilha_faturamento(ri, itens=None):
-    """RN-013/RN-014/RN-048: lista o que falta preencher no Lado IXC para
-    gerar a planilha de faturamento (KIT Instalado, Data de Ativação,
-    Município, Estado, CNPJ, CNPJ Fictício) — lista vazia quando está
-    tudo pronto. Extraída de `gerar_planilha_faturamento` (RN-051,
-    2026-09-02) para ser reaproveitada pela tela de detalhe do RI, que
-    usa a mesma checagem para decidir se a opção de status "Envio de
-    Email para Faturamento" pode aparecer — sem isso, o RI iria para
-    esse status sem conseguir de fato enviar.
+    """RN-013/RN-014/RN-048/RN-088: lista o que falta preencher para gerar
+    a planilha de faturamento (KIT Instalado, Data de Ativação, Município,
+    Estado, CNPJ, CNPJ Fictício do Lado IXC; itens do Lado Relatório EACE)
+    — lista vazia quando está tudo pronto. Extraída de `gerar_planilha_
+    faturamento` (RN-051, 2026-09-02) para ser reaproveitada pela tela de
+    detalhe do RI, que usa a mesma checagem para decidir se a opção de
+    status "Envio de Email para Faturamento" pode aparecer — sem isso, o
+    RI iria para esse status sem conseguir de fato enviar.
 
     `itens`, quando informado (já carregado pelo chamador), evita 1
     consulta repetida — usado por `gerar_planilha_faturamento`, que
-    precisa da mesma lista logo em seguida para montar as abas."""
+    precisa da mesma lista logo em seguida para validar o KIT Instalado."""
     if itens is None:
         itens = list(ri.itens_ixc.all())
     faltando = []
@@ -286,33 +296,70 @@ def itens_faltando_para_planilha_faturamento(ri, itens=None):
         faltando.append("o CNPJ (Lado IXC)")
     if not (ri.cnpj_ficticio or "").strip():
         faltando.append("o CNPJ Fictício (Lado IXC)")
+    # RN-088 (2026-09-09): a planilha agora monta as abas a partir do Lado
+    # Relatório EACE (3º lado, é de lá que vem o Num OSP usado para separar
+    # por Nota Fiscal) — sem nenhum item lançado lá (Sincronizador ainda
+    # não rodou pra este RI), não tem como montar nem uma aba.
+    if not ri.itens_relatorio_eace.exists():
+        faltando.append("os itens do Lado Relatório EACE (rode o Sincronizador)")
     return faltando
+
+
+def _titulos_abas_por_osp(grupos):
+    """RN-088 (2026-09-09): título de aba por chave `(aba_nome_base, osp)`.
+    Quando o mesmo `aba_nome_base` (ex.: "RACK") tiver mais de 1 OSP entre
+    os itens do Lado Relatório EACE, cada OSP ganha a própria aba, título
+    sufixado com o OSP para diferenciar — nunca soma quantidade/valor de
+    OSPs diferentes numa aba só, porque o financeiro emite 1 Nota Fiscal +
+    1 XML por OSP. Com um único OSP (caso comum, inclusive quando nenhum
+    item ainda tem OSP preenchido), o título continua exatamente o
+    `aba_nome_base`, sem sufixo — não muda o nome de aba que o financeiro
+    já reconhece. Trunca só a base (nunca o sufixo do OSP) pra caber no
+    limite de 31 caracteres do Excel."""
+    osps_por_base = defaultdict(set)
+    for aba_nome_base, osp in grupos:
+        osps_por_base[aba_nome_base].add(osp)
+
+    titulos = {}
+    for chave in grupos:
+        aba_nome_base, osp = chave
+        if len(osps_por_base[aba_nome_base]) == 1:
+            titulos[chave] = aba_nome_base
+            continue
+        sufixo = f" - OSP {osp}" if osp else " - Sem OSP"
+        base = _CARACTERES_INVALIDOS_ABA.sub("", aba_nome_base or "").strip()
+        base = base[: max(31 - len(sufixo), 0)]
+        titulos[chave] = f"{base}{sufixo}" if base else sufixo.strip(" -")
+    return titulos
 
 
 def gerar_planilha_faturamento(ri, data_vencimento):
     """RN-013: cópia preenchida da planilha-modelo do financeiro
     (`doc/FATURAMENTO MATERIAS EACE.xlsx`), uma aba por produto distinto
-    lançado no Lado IXC daquele RI (KIT incluso, RN-011); demais abas do
-    modelo (produtos não lançados neste RI) não entram na cópia final.
-    Produto sem aba já cadastrada ganha uma aba nova, criada na hora
-    clonando o layout de uma aba existente (ajuste 2026-08-26) — nada
-    fica bloqueado por falta de cadastro prévio no catálogo.
+    lançado no Lado Relatório EACE daquele RI (KIT incluso, RN-011);
+    demais abas do modelo (produtos não lançados neste RI) não entram na
+    cópia final. Produto sem aba já cadastrada ganha uma aba nova, criada
+    na hora clonando o layout de uma aba existente (ajuste 2026-08-26) —
+    nada fica bloqueado por falta de cadastro prévio no catálogo.
 
-    RN-013/RN-014 (2026-08-26)/RN-048 (2026-09-01): KIT, Data de Ativação,
-    Município, Estado, CNPJ e CNPJ Fictício do Lado IXC são exigidos só
-    AQUI — na hora de gerar a planilha (envio de e-mail ou download), não
-    a cada "Salvar" do Lado IXC (RN-011). Isso evita travar o lançamento
-    de um Produto novo, ou uma correção de Data de Ativação, por causa de
-    um campo sem relação com aquela ação — o usuário só precisa ter os
-    seis preenchidos até o momento de enviar/baixar. Levanta
-    `PlanilhaFaturamentoError` — sem gerar nada — listando tudo que falta
-    de uma vez.
+    RN-013/RN-014 (2026-08-26)/RN-048 (2026-09-01)/RN-088 (2026-09-09):
+    KIT, Data de Ativação, Município, Estado, CNPJ e CNPJ Fictício do Lado
+    IXC, e os itens do Lado Relatório EACE, são exigidos só AQUI — na hora
+    de gerar a planilha (envio de e-mail ou download), não a cada "Salvar"
+    do Lado IXC (RN-011). Isso evita travar o lançamento de um Produto
+    novo, ou uma correção de Data de Ativação, por causa de um campo sem
+    relação com aquela ação — o usuário só precisa ter tudo preenchido até
+    o momento de enviar/baixar. Levanta `PlanilhaFaturamentoError` — sem
+    gerar nada — listando tudo que falta de uma vez.
 
-    Agrupado pela ABA de destino, não pela descrição exata do item: vários
-    produtos do catálogo (ex.: "Rack 3U", "Rack 5U") podem apontar para a
-    mesma aba (ex.: "RACK", via `KitPadrao.aba_planilha_financeiro`) — o
-    valor da aba soma o subtotal (quantidade × valor do catálogo) de cada
-    um deles, não só a quantidade de um produto só.
+    Agrupado pela ABA de destino + Num OSP (RN-088), não pela descrição
+    exata do item: vários produtos do catálogo (ex.: "Rack 3U", "Rack 5U")
+    podem apontar para a mesma aba (ex.: "RACK", via `KitPadrao.
+    aba_planilha_financeiro`) — o valor da aba soma o subtotal (quantidade
+    × valor do catálogo) de cada um deles, não só a quantidade de um
+    produto só; mas nunca soma itens com OSP diferente entre si (RN-088 —
+    pedido do usuário, 2026-09-09: o financeiro emite 1 Nota Fiscal + 1
+    XML por OSP, então cada OSP precisa da própria aba).
 
     RN-053 (2026-09-03): célula `A20` de cada aba ("OPERAÇÃO COMPRA E
     VENDA  - <MÊS>/<ANO>") passa a ser escrita a cada geração, no lugar do
@@ -332,13 +379,18 @@ def gerar_planilha_faturamento(ri, data_vencimento):
     escola = ri.escola
     data_str = data_vencimento.strftime("%d/%m/%Y")
 
-    grupos = OrderedDict()  # aba_nome -> {"item_lpu": str, "subtotal": Decimal, "quantidade_total": int}
-    for item in sorted(itens, key=lambda item: item.criado_em):
+    # RN-088: fonte agora é o Lado Relatório EACE (3º lado) — único lado
+    # com o Num OSP (RN-022); `itens_faltando_para_planilha_faturamento`
+    # já garantiu que não está vazio.
+    itens_eace = list(ri.itens_relatorio_eace.all())
+    grupos = OrderedDict()  # (aba_nome_base, osp) -> {"item_lpu", "subtotal", "quantidade_total"}
+    for item in sorted(itens_eace, key=lambda item: item.criado_em):
         catalogo = _resolver_catalogo_ixc(item.descricao_item, item.eh_kit, escola.lote)
-        item_lpu, aba_nome = _item_lpu_e_aba(item.descricao_item, item.eh_kit, catalogo)
+        item_lpu, aba_nome_base = _item_lpu_e_aba(item.descricao_item, item.eh_kit, catalogo)
         valor_unitario = catalogo.valor_faturavel if catalogo else Decimal("0")
+        chave = (aba_nome_base, item.num_osp)
         grupo = grupos.setdefault(
-            aba_nome, {"item_lpu": item_lpu, "subtotal": Decimal("0"), "quantidade_total": 0}
+            chave, {"item_lpu": item_lpu, "subtotal": Decimal("0"), "quantidade_total": 0}
         )
         grupo["subtotal"] += valor_unitario * item.quantidade
         grupo["quantidade_total"] += item.quantidade
@@ -347,6 +399,8 @@ def gerar_planilha_faturamento(ri, data_vencimento):
         # correção trocando o tamanho do KIT); a soma do valor continua
         # correta mesmo assim.
         grupo["item_lpu"] = item_lpu
+
+    titulos_por_chave = _titulos_abas_por_osp(grupos)
 
     workbook = openpyxl.load_workbook(CAMINHO_PLANILHA_FATURAMENTO_MODELO)
     if not workbook.worksheets:
@@ -366,8 +420,9 @@ def gerar_planilha_faturamento(ri, data_vencimento):
     texto_operacao = f"OPERAÇÃO COMPRA E VENDA  - {mes_nome.upper()}/{agora.year}"
 
     abas_usadas = set()
-    for aba_nome, dados in grupos.items():
-        aba = _obter_ou_criar_aba(workbook, aba_nome, aba_modelo)
+    for chave, dados in grupos.items():
+        aba_nome_base, _osp = chave
+        aba = _obter_ou_criar_aba(workbook, titulos_por_chave[chave], aba_modelo)
 
         aba["A20"] = texto_operacao
         aba["E10"] = data_vencimento
@@ -392,8 +447,10 @@ def gerar_planilha_faturamento(ri, data_vencimento):
         # de 1 unidade lançada mostra a quantidade entre parênteses ao lado
         # do nome — ex.: "Nobreak (6)". KIT nunca leva esse sufixo (a
         # unidade faturada já é "KIT N", não a contagem de equipamentos).
+        # Compara com `aba_nome_base` (não o título, que pode ter sufixo
+        # de OSP, RN-088) — o critério é "é a aba do KIT", não o texto.
         nome_equipamento = dados["item_lpu"]
-        if aba_nome != ABA_KIT_PLANILHA_FATURAMENTO and dados["quantidade_total"] > 1:
+        if aba_nome_base != ABA_KIT_PLANILHA_FATURAMENTO and dados["quantidade_total"] > 1:
             nome_equipamento = f"{nome_equipamento} ({dados['quantidade_total']})"
         aba["I16"] = nome_equipamento
         abas_usadas.add(aba.title)
@@ -2940,15 +2997,23 @@ def montar_produtos_complementares_por_estado(produto):
 # por um período de datas.
 # ==========================================
 
-# RN-082 (nova, a formalizar pelo Orquestrador em business_rules.md):
-# entram no relatório os RI cujo status foi alterado para "Aguardando
-# validação EACE" (RN-008/`trocar_status_com_log`, log automático em
+# RN-082 (revista em 2026-09-09): entram no relatório os RI cujo status
+# foi alterado para "Aguardando validação EACE" **vindo de "Resposta
+# Financeiro"** (RN-008/`trocar_status_com_log`, log automático em
 # `RiHistorico`) dentro do período informado — não o status atual do RI
-# (que pode já ter avançado para "Faturamento Concluído" depois). Usa a
-# transição mais recente dentro do período quando o RI passou por esse
-# status mais de uma vez no mesmo período (ex.: voltou de "Correção
-# MEGA").
+# (que pode já ter avançado para "Faturamento Concluído" depois). Exige
+# a origem "Resposta Financeiro" porque esse é o único caminho que
+# corresponde a um envio de verdade pro portal EACE (RPA automático,
+# RN-056, ou marcação manual "por fora", RN-065); sem esse filtro, uma
+# reabertura de RI já concluído pra correção ("Faturamento Concluído" →
+# "Aguardando validação EACE", o Administrador pode reabrir) também
+# contava como se fosse um envio novo, inflando o relatório com escolas
+# que não foram enviadas ao EACE naquele período (bug reportado pelo
+# usuário, 2026-09-09: 17 escolas enviadas de verdade, relatório
+# mostrando 44). Usa a transição mais recente dentro do período quando o
+# RI passou por esse status mais de uma vez no mesmo período.
 _LABEL_AGUARDANDO_VALIDACAO_EACE = dict(Ri.STATUS_CHOICES)[Ri.AGUARDANDO_VALIDACAO_EACE]
+_LABEL_RESPOSTA_FINANCEIRO = dict(Ri.STATUS_CHOICES)[Ri.AGUARDANDO_ANEXO_PORTAL_EACE]
 
 # RN-083 (nova, a formalizar pelo Orquestrador): classificação dos itens
 # avulsos (fora do KIT) nas 5 colunas fixas de equipamento — por palavra-
@@ -3030,6 +3095,11 @@ def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
             tipo=RiHistorico.LOG_STATUS,
             campo="Status do RI",
             valor_novo=_LABEL_AGUARDANDO_VALIDACAO_EACE,
+            # RN-082 (revista): só a transição vinda de "Resposta
+            # Financeiro" é um envio de verdade ao portal EACE — exclui
+            # reabertura de RI já concluído ("Faturamento Concluído" →
+            # "Aguardando validação EACE"), que não é um envio novo.
+            valor_anterior=_LABEL_RESPOSTA_FINANCEIRO,
             criado_em__date__gte=data_inicio,
             criado_em__date__lte=data_fim,
         )
