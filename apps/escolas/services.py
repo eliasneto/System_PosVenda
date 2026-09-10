@@ -304,8 +304,11 @@ def _valor_servico(descricao, eh_kit, lote, catalogo):
 
 def _resolver_lado_ixc(ri, lote, catalogo):
     """2º lado (IXC) do grid do MIP — mesmos itens do RI (`RiItemIxc`), sem
-    lançamento próprio nesta tela (RI continua sendo a única fonte de
-    lançamento). `pk` incluído para o template destacar em vermelho os itens
+    lançamento próprio nesta tela: lançar/editar continua exclusivo da
+    tela do RI (Projeto > Equipamentos), inclusive quando o INEP está com
+    `Escola.status_mip == "Em Andamento"` (RN-092) — nesse status o INEP
+    volta a aparecer lá normalmente, com o mesmo formulário de sempre.
+    `pk` incluído para o template destacar em vermelho os itens
     divergentes do confronto com o Lado 3 (`itens_ixc_divergentes_pks`,
     `apps.escolas.views._comparar_valor_servico_ixc_relatorio_mip`)."""
     if not ri:

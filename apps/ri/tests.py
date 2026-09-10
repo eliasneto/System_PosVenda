@@ -22,7 +22,8 @@ from django.utils import timezone
 
 from apps.auditoria.models import Auditoria
 from apps.core.email_tracking import montar_codigo_rastreio
-from apps.escolas.models import Escola
+from apps.escolas.models import Escola, PlanilhaRelatorioEaceMip
+from apps.escolas.tests import _xlsx_relatorio_eace_mip
 from apps.integracoes.eace.rpa import ResultadoConsultaPendencias, ResultadoRpaEace, RpaEaceIndisponivel
 
 from .models import (
@@ -125,16 +126,19 @@ class GridInepViewTests(TestCase):
         resp = self.client.get(reverse("grid_inep"))
         self.assertContains(resp, "Nobreak: Nobreak — 1 un.")
 
-    def test_drilldown_trava_select_de_status_para_analista_em_faturamento_concluido(self):
-        """RN-020: com o RI em "Faturamento Concluído", o <select> de
-        status do drill-down trava no valor atual para o Analista — o
-        backend também recusa (RiStatusUpdateViewTests), aqui é só a UI."""
+    def test_faturamento_concluido_sai_do_grid_de_equipamentos(self):
+        """RN-092 (2026-09-10): assim que o RI chega em "Faturamento
+        Concluído" (`Escola.status_mip` gravado por `Ri.save()`), o INEP
+        "sai" do grid de Equipamentos — passa a ser controlado só pelo
+        MIP. Continua acessível direto por `ri_detail` (RN-020, testada
+        lá — `RiDetailViewTests.
+        test_pill_de_status_trava_para_analista_em_faturamento_concluido`
+        — e no backend, `RiStatusUpdateViewTests`)."""
         self.ri.status = Ri.FATURAMENTO_CONCLUIDO
         self.ri.save(update_fields=["status"])
         self.client.force_login(self.user)
         resp = self.client.get(reverse("grid_inep"))
-        self.assertContains(resp, "Faturamento Concluído (só Administrador)")
-        self.assertContains(resp, "<select name=\"status\" disabled")
+        self.assertNotContains(resp, self.escola_com_ri.inep)
 
     def test_filtro_por_status_do_ri(self):
         """RF-05: coluna e filtro "Status do RI" são o status do RI
@@ -302,6 +306,49 @@ class GridInepViewTests(TestCase):
         self.client.force_login(admin)
         resp = self.client.get(reverse("grid_inep"))
         self.assertNotContains(resp, "Forçar Resposta Financeiro")
+
+
+class GridInepStatusMipExclusionTests(TestCase):
+    """RN-092 (2026-09-10): INEP cujo `Escola.status_mip` já foi
+    preenchido (handoff pro MIP, gravado por `Ri.save()` na 1ª vez que o
+    RI chega em "Aguardando validação EACE"/"Faturamento Concluído")
+    "sai" deste grid — passa a ser controlado só pelo MIP."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="analista-mip-handoff", password="senha-teste-123")
+
+    def test_escola_sem_handoff_aparece_no_grid(self):
+        escola = Escola.objects.create(inep="10000010", nome="Escola Sem Handoff")
+        Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, escola.inep)
+
+    def test_escola_com_handoff_some_do_grid(self):
+        escola = Escola.objects.create(inep="10000011", nome="Escola Com Handoff")
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertNotContains(resp, escola.inep)
+
+    def test_escola_com_handoff_continua_acessivel_direto_pela_url(self):
+        escola = Escola.objects.create(inep="10000012", nome="Escola Com Handoff")
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": escola.inep}))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_escola_com_status_mip_em_andamento_aparece_no_grid(self):
+        """RN-092 (revista): "Em Andamento" no MIP é o mesmo `Ri.status`
+        de sempre — o INEP volta a aparecer neste grid, com todo o
+        acesso normal da tela (RN-052/RN-011)."""
+        escola = Escola.objects.create(
+            inep="10000013", nome="Escola Em Andamento (MIP)", status_mip=Escola.EM_ANDAMENTO,
+        )
+        Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, escola.inep)
 
 
 class RiStatusUpdateViewTests(TestCase):
@@ -651,11 +698,15 @@ class RiStatusUpdateViewTests(TestCase):
 
     def test_select_mostra_faturamento_concluido_a_partir_de_aguardando_validacao_eace(self):
         """RN-067: "Faturamento Concluído" só aparece a partir de
-        "Aguardando validação EACE"."""
-        Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        "Aguardando validação EACE". Testado via `ri_detail` (RN-092,
+        2026-09-10): um RI já em "Aguardando validação EACE" sai do grid
+        de Equipamentos (handoff pro MIP) — sem o filtro de status do
+        grid, só a própria pill de status conta aqui (count=1)."""
+        escola = Escola.objects.create(inep="30000004", nome="Escola RI Status RN-067 (2)")
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("grid_inep"))
-        self.assertContains(resp, '<option value="faturamento_concluido"', count=2)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": escola.inep}))
+        self.assertContains(resp, '<option value="faturamento_concluido"', count=1)
 
     def test_select_da_tela_de_detalhe_tambem_esconde_antes_de_resposta_financeiro(self):
         """RN-067: mesma restrição no <select> da tela de detalhe (grid e
@@ -3546,6 +3597,20 @@ class RiDetailViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Nenhum RI iniciado")
         self.assertContains(resp, "Iniciar RI")
+
+    def test_pill_de_status_trava_para_analista_em_faturamento_concluido(self):
+        """RN-020: com o RI em "Faturamento Concluído", a pill de status
+        da tela de detalhe trava no valor atual para o Analista (sem
+        `<select>`) — o backend também recusa (`RiStatusUpdateViewTests`,
+        `test_analista_nao_troca_status_a_partir_de_faturamento_concluido`),
+        aqui é só a UI. Movida do grid de Equipamentos (RN-092,
+        2026-09-10): um RI em "Faturamento Concluído" agora sai daquele
+        grid — o INEP continua acessível aqui, na tela de detalhe."""
+        Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "Só Administrador altera o status a partir de")
+        self.assertNotContains(resp, '<select name="status"')
 
     def test_iniciar_ri_cria_com_status_implantacao_eace(self):
         self.client.force_login(self.analista)
@@ -7945,3 +8010,320 @@ class RelatorioFaturamentoEaceMateriaisViewTests(TestCase):
             "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
         })
         self.assertEqual(resp.status_code, 403)
+
+
+CABECALHO_LEGADO_EACE = [
+    "LOTE", "UF", "MUNICIPIO", "INEP", "UNIDADE ESCOLAR",
+    "ENDEREÇO UNIDADE ESCOLAR", "VELOCIDADE", "KIT WIFI ESTIMADO",
+    "KIT WIFI INSTALADO", "AP ADICIONAL ESTIMADO", "NOBREAK", "SWITCH",
+    "CONVERSOR", "RACK", "STATUS", "DATA DE ATIVAÇÃO",
+]
+
+
+def _criar_planilha_legado_eace(tmp_path, linhas, linha_cabecalho=13):
+    """Monta um .xlsx no mesmo formato (simplificado) do CONSOLIDADO EACE
+    Atualizado.xlsx, aba FATURAMENTO MATERIAIS: cabeçalho na linha 13,
+    dados a partir da linha 14 — mesmo padrão de `_criar_planilha`
+    (apps.escolas.tests)."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FATURAMENTO MATERIAIS"
+
+    for indice, titulo in enumerate(CABECALHO_LEGADO_EACE, start=1):
+        ws.cell(row=linha_cabecalho, column=indice, value=titulo)
+
+    for offset, linha in enumerate(linhas, start=1):
+        for indice, valor in enumerate(linha, start=1):
+            ws.cell(row=linha_cabecalho + offset, column=indice, value=valor)
+
+    caminho = tmp_path / "consolidado_eace_atualizado_teste.xlsx"
+    wb.save(caminho)
+    return caminho
+
+
+class ImportarRiLegadoEaceTests(TestCase):
+    """Comando `importar_ri_legado_eace` (pedido do usuário, 2026-09-10):
+    traz como histórico os INEPs "ATIVO" da planilha CONSOLIDADO EACE
+    Atualizado.xlsx cujo RI ainda está 100% intocado — equipamento no
+    Lado IXC (2º lado, nomenclatura/valor da LPU por Lote), status
+    "Aguardando validação EACE", histórico e nome do INEP marcado como
+    legado. Nunca mexe em RI com progresso real, mesmo que a planilha
+    marque o INEP como "ATIVO"."""
+
+    def setUp(self):
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._tmp_dir.name)
+        self.addCleanup(self._tmp_dir.cleanup)
+
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points (serviços, materiais e equipamentos)",
+            lote=9, unidade="Escola", valor_equipamento="11064.88", valor_servico="16109",
+        )
+        KitPadrao.objects.create(
+            descricao="Nobreak (serviço, material, equipamento)",
+            lote=9, unidade="Unidade", valor_equipamento="1551.93", valor_servico="380.39",
+        )
+
+    def _linha_padrao(self, inep=35057873, status="ATIVO"):
+        return [
+            9, "SP", "São Paulo", inep, "ESCOLA TESTE", "RUA TESTE, 1", 100,
+            2, 2, None, 1, None, None, None, status, date(2026, 8, 31),
+        ]
+
+    def test_simulacao_nao_grava_nada(self):
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao()])
+
+        call_command("importar_ri_legado_eace", str(caminho))
+
+        self.assertEqual(Escola.objects.count(), 0)
+        self.assertEqual(Ri.objects.count(), 0)
+
+    def test_aplicar_cria_escola_ri_itens_e_historico(self):
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao()])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        escola = Escola.objects.get(inep="35057873")
+        self.assertTrue(escola.legado)
+
+        ri = Ri.objects.get(escola=escola)
+        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.data_ativacao, date(2026, 8, 31))
+
+        itens = list(ri.itens_ixc.order_by("id"))
+        self.assertEqual(len(itens), 2)
+        kit = next(i for i in itens if i.eh_kit)
+        self.assertEqual(kit.descricao_item, "Kit Cobertura Wi-Fi - 2 Access Points")
+        self.assertEqual(kit.quantidade, 1)
+        self.assertEqual(kit.valor_unitario, Decimal("11064.88"))
+
+        nobreak = next(i for i in itens if not i.eh_kit)
+        self.assertEqual(nobreak.descricao_item, "Nobreak")
+        self.assertEqual(nobreak.quantidade, 1)
+        self.assertEqual(nobreak.valor_unitario, Decimal("1551.93"))
+
+        self.assertTrue(
+            ri.historico.filter(
+                tipo=RiHistorico.MENSAGEM, mensagem__icontains="antes deste sistema existir"
+            ).exists()
+        )
+        # Lado 3 nunca é tocado por este comando.
+        self.assertFalse(ri.itens_relatorio_eace.exists())
+
+    def test_status_diferente_de_ativo_e_ignorado(self):
+        caminho = _criar_planilha_legado_eace(
+            self.tmp_path, [self._linha_padrao(status="DESATIVADO")]
+        )
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        self.assertEqual(Escola.objects.count(), 0)
+
+    def test_status_em_branco_e_ignorado(self):
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(status=None)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        self.assertEqual(Escola.objects.count(), 0)
+
+    def test_ri_ja_existente_intocado_e_atualizado_sem_sobrescrever_escola(self):
+        escola = Escola.objects.create(inep="35057873", nome="NOME JA CADASTRADO", lote=9)
+        ri = Ri.objects.create(escola=escola)  # status inicial Implantação EACE, 100% intocado
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(inep=35057873)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        escola.refresh_from_db()
+        self.assertEqual(escola.nome, "NOME JA CADASTRADO")  # nunca sobrescreve dado ja existente
+        self.assertTrue(escola.legado)
+
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.itens_ixc.count(), 2)
+
+    def test_ri_com_progresso_real_nunca_e_mexido(self):
+        escola = Escola.objects.create(inep="35057873", nome="ESCOLA COM PROGRESSO", lote=9)
+        ri = Ri.objects.create(escola=escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(inep=35057873)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        escola.refresh_from_db()
+        ri.refresh_from_db()
+        self.assertFalse(escola.legado)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(ri.itens_ixc.count(), 0)
+        self.assertEqual(ri.historico.count(), 0)
+
+    def test_incluir_com_progresso_reverte_faturamento_concluido_sem_duplicar_itens(self):
+        """Pedido do usuário (2026-09-10, ampliação): --incluir-com-progresso
+        estende o tratamento mesmo a um RI já "Faturamento Concluído" com
+        KIT/Nobreak já lançados (idênticos ao que a planilha traria) — o
+        status muda, mas os itens não duplicam."""
+        escola = Escola.objects.create(inep="35057873", nome="ESCOLA JA FATURADA", lote=9)
+        ri = Ri.objects.create(escola=escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+            quantidade=1, valor_unitario="48453.02", eh_kit=True,
+        )
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Nobreak", quantidade=1, valor_unitario="1932.32", eh_kit=False,
+        )
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(inep=35057873)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar", "--incluir-com-progresso")
+
+        escola.refresh_from_db()
+        ri.refresh_from_db()
+        self.assertTrue(escola.legado)
+        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        # Nao duplicou: continuam so os 2 itens ja lancados antes, com o
+        # valor original (nunca sobrescrito por este comando).
+        self.assertEqual(ri.itens_ixc.count(), 2)
+        kit = ri.itens_ixc.get(eh_kit=True)
+        self.assertEqual(kit.valor_unitario, Decimal("48453.02"))
+
+    def test_incluir_com_progresso_nao_duplica_kit_mesmo_com_descricao_diferente(self):
+        """Mesmo com o KIT real (Lado IXC) tendo uma Descrição diferente
+        da que a planilha traria (ex.: tamanho corrigido depois pelo
+        usuário), o comando nunca lança um 2º KIT — no máximo 1 por RI
+        (RN-015), igual à regra já usada em qualquer lançamento."""
+        escola = Escola.objects.create(inep="35057873", nome="ESCOLA", lote=9)
+        ri = Ri.objects.create(escola=escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Kit Cobertura Wi-Fi - 6 Access Points",
+            quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(inep=35057873)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar", "--incluir-com-progresso")
+
+        ri.refresh_from_db()
+        self.assertEqual(ri.itens_ixc.filter(eh_kit=True).count(), 1)
+        self.assertEqual(ri.itens_ixc.get(eh_kit=True).descricao_item, "Kit Cobertura Wi-Fi - 6 Access Points")
+        # Nobreak nao existia ainda - esse sim entra.
+        self.assertTrue(ri.itens_ixc.filter(descricao_item="Nobreak").exists())
+
+    def test_incluir_com_progresso_nao_sobrescreve_data_ativacao_existente(self):
+        escola = Escola.objects.create(inep="35057873", nome="ESCOLA", lote=9)
+        ri = Ri.objects.create(
+            escola=escola, status=Ri.FATURAMENTO_CONCLUIDO, data_ativacao=date(2026, 1, 15),
+        )
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(inep=35057873)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar", "--incluir-com-progresso")
+
+        ri.refresh_from_db()
+        self.assertEqual(ri.data_ativacao, date(2026, 1, 15))
+
+    def test_incluir_com_progresso_rodar_duas_vezes_nao_duplica(self):
+        escola = Escola.objects.create(inep="35057873", nome="ESCOLA", lote=9)
+        Ri.objects.create(escola=escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(inep=35057873)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar", "--incluir-com-progresso")
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar", "--incluir-com-progresso")
+
+        ri = Ri.objects.get(escola=escola)
+        self.assertEqual(ri.itens_ixc.count(), 2)
+        self.assertEqual(ri.historico.filter(tipo=RiHistorico.MENSAGEM).count(), 1)
+
+    def test_sem_incluir_com_progresso_continua_ignorando_faturamento_concluido(self):
+        """Sem a flag, o comportamento padrão (mais seguro) continua
+        exatamente como antes — regressão da mudança acima."""
+        escola = Escola.objects.create(inep="35057873", nome="ESCOLA", lote=9)
+        ri = Ri.objects.create(escola=escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(inep=35057873)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(ri.itens_ixc.count(), 0)
+
+    def test_ri_intocado_mas_com_item_ja_lancado_nao_e_mexido(self):
+        """RI ainda "Implantação EACE" mas já com item lançado em algum
+        lado não conta como intocado - fica de fora."""
+        escola = Escola.objects.create(inep="35057873", nome="ESCOLA", lote=9)
+        ri = Ri.objects.create(escola=escola)
+        RiItemIxc.objects.create(ri=ri, descricao_item="Item manual", quantidade=1, valor_unitario="0")
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao(inep=35057873)])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        escola.refresh_from_db()
+        self.assertFalse(escola.legado)
+        self.assertEqual(ri.itens_ixc.count(), 1)
+
+    def test_switch_e_rack_sem_modelo_nao_sao_lancados(self):
+        linha = self._linha_padrao()
+        linha[11] = 1  # SWITCH
+        linha[13] = 1  # RACK
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [linha])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        ri = Ri.objects.get(escola__inep="35057873")
+        descricoes = set(ri.itens_ixc.values_list("descricao_item", flat=True))
+        self.assertNotIn("Switch", descricoes)
+        self.assertNotIn("Rack", descricoes)
+        self.assertEqual(len(descricoes), 2)  # so KIT + Nobreak, sem modelo inventado
+
+    def test_kit_sem_correspondencia_na_lpu_nao_inventa_item_mas_segue_o_resto(self):
+        linha = self._linha_padrao()
+        linha[8] = 99  # KIT WIFI INSTALADO sem correspondencia na LPU
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [linha])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+        ri = Ri.objects.get(escola__inep="35057873")
+        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertFalse(ri.itens_ixc.filter(eh_kit=True).exists())
+        self.assertTrue(ri.itens_ixc.filter(descricao_item="Nobreak").exists())
+
+    def test_rodar_duas_vezes_nao_duplica(self):
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao()])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")  # idempotente
+
+        ri = Ri.objects.get(escola__inep="35057873")
+        self.assertEqual(ri.itens_ixc.count(), 2)
+        self.assertEqual(ri.historico.filter(tipo=RiHistorico.MENSAGEM).count(), 1)
+
+    def test_aplicar_tambem_sincroniza_a_bolinha_do_mip_quando_ha_planilha_ativa(self):
+        """Pedido do usuário (2026-09-10): INEP legado nasce com
+        `encontrado_relatorio_eace_mip=None` - sem bolinha nenhuma no grid
+        Projeto > MIP - até alguém clicar "Sincronizar todos os INEPs". O
+        comando também roda essa mesma sincronização, pra ele entrar na
+        regra normal (verde/vermelha) igual a qualquer outro INEP."""
+        media_root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, media_root, True)
+        with override_settings(MEDIA_ROOT=media_root):
+            PlanilhaRelatorioEaceMip.objects.create(
+                arquivo=_xlsx_relatorio_eace_mip(), nome_original="relatorio.xlsx",
+            )
+            caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao()])
+
+            call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
+
+            escola = Escola.objects.get(inep="35057873")
+            self.assertFalse(escola.encontrado_relatorio_eace_mip)  # False, nao None - entrou na regra
+
+    def test_aplicar_sem_planilha_mip_ativa_nao_falha(self):
+        caminho = _criar_planilha_legado_eace(self.tmp_path, [self._linha_padrao()])
+
+        call_command("importar_ri_legado_eace", str(caminho), "--aplicar")  # nao deve lancar excecao
+
+        escola = Escola.objects.get(inep="35057873")
+        self.assertIsNone(escola.encontrado_relatorio_eace_mip)
+
+    def test_aba_inexistente_gera_erro_claro(self):
+        wb = openpyxl.Workbook()
+        wb.active.title = "OUTRA ABA"
+        caminho = self.tmp_path / "planilha_sem_aba.xlsx"
+        wb.save(caminho)
+
+        with self.assertRaises(Exception):
+            call_command("importar_ri_legado_eace", str(caminho))

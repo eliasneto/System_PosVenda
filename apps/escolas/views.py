@@ -8,8 +8,12 @@ from django.db.models import DateField, OuterRef, Prefetch, Q, Subquery
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 
-from apps.ri.forms import RiHistoricoForm
-from apps.ri.models import Documento, KitPadrao, Ri
+from apps.auditoria.models import Auditoria
+from apps.auditoria.services import registrar as auditar
+from apps.ri.forms import RiHistoricoForm, RiItemIxcProdutoFormSet, catalogo_ixc_somente_servico
+from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemIxc
+from apps.ri.services import sincronizar_divergencia_kit_relatorio, trocar_status_com_log
+from apps.ri.views import _validar_transicao_status_ri
 
 from .forms import PlanilhaRelatorioEaceMipUploadForm
 from .models import Escola, EscolaItemRelatorioEaceMip, PlanilhaRelatorioEaceMip
@@ -166,11 +170,22 @@ def mip_inep_view(request):
             ).values_list("escola_id", flat=True)
         )
 
+    # RN-092 (2026-09-10): o grid deixa de filtrar por `Ri.status` e passa
+    # a filtrar por `Escola.status_mip` — campo próprio do MIP, gravado no
+    # handoff automático (`apps.ri.services.trocar_status_com_log`) quando
+    # o RI chega em "Aguardando validação EACE" pela 1ª vez, e daí em
+    # diante controlado só por aqui. `status_mip` preenchido (qualquer um
+    # dos 3 valores) é o que faz o INEP aparecer neste grid — não é mais
+    # só "Aguardando validação EACE" (RN-074, substituída por esta).
     ri_atual_qs = Ri.objects.filter(escola=OuterRef("pk")).order_by("-criado_em")
+    status_mip_filtro = (request.GET.get("status_mip") or "").strip()
     escolas = Escola.objects.annotate(
-        status_ri_atual=Subquery(ri_atual_qs.values("status")[:1]),
         ri_atual_id=Subquery(ri_atual_qs.values("pk")[:1]),
-    ).filter(status_ri_atual=Ri.AGUARDANDO_VALIDACAO_EACE)
+    ).filter(status_mip__isnull=False)
+    if status_mip_filtro not in dict(Escola.STATUS_MIP_CHOICES):
+        status_mip_filtro = ""
+    if status_mip_filtro:
+        escolas = escolas.filter(status_mip=status_mip_filtro)
 
     # RN-079 (a criar): opções do filtro Estado — só os estados que já
     # têm pelo menos 1 INEP na base do grid ("Validação EACE"), calculado
@@ -318,24 +333,26 @@ def mip_inep_view(request):
     )
     total_geral_lado3_incompleto = any(linha["valor_total_lado3_incompleto"] for linha in linhas)
 
-    # RN-081 (a criar): INEPs encontrados na última sincronização do
-    # Relatório EACE (MIP), mas cuja Escola não está em "Aguardando
-    # validação EACE" — não são linha normal do grid (RN-074), mas o
-    # usuário pediu pra sinalizar esse descompasso mesmo assim: aparecem
-    # à parte, sempre em vermelho. Só a busca (`q`) filtra essa lista —
-    # Estado/Município não, porque o `<select>` de Estado (RN-079) só
-    # oferece as UFs da base Validação EACE, e essas escolas por
-    # definição estão fora dela (poderiam ter um Estado nem listado no
-    # `<select>`); divergência/período/data de entrada em Validação EACE
-    # também não fazem sentido pra quem nunca chegou nesse status.
-    # `.exclude(status_ri_atual=...)` sozinho excluiria também quem nunca
-    # teve RI nenhum (`status_ri_atual` NULL) — três-valores do SQL faz
-    # `NOT (NULL = 'x')` virar NULL, tratado como falso pelo WHERE; por
-    # isso o "OR ... isnull" explícito abaixo, pra incluir esse caso.
-    escolas_fora_da_validacao_eace = Escola.objects.annotate(
-        status_ri_atual=Subquery(ri_atual_qs.values("status")[:1])
-    ).filter(encontrado_relatorio_eace_mip=True).filter(
-        Q(status_ri_atual__isnull=True) | ~Q(status_ri_atual=Ri.AGUARDANDO_VALIDACAO_EACE)
+    # RN-081 (revista pela RN-092): INEPs encontrados na última
+    # sincronização do Relatório EACE (MIP), mas cuja Escola não está com
+    # `status_mip="Aguardando Validação EACE"` — não são linha normal do
+    # grid, mas o usuário pediu pra sinalizar esse descompasso mesmo
+    # assim: aparecem à parte, sempre em vermelho. Cobre tanto quem nunca
+    # entrou no MIP (`status_mip` `None`) quanto quem já saiu dessa etapa
+    # (Em Andamento/Faturamento Concluído). Só a busca (`q`) filtra essa
+    # lista — Estado/Município não, porque o `<select>` de Estado (RN-079)
+    # só oferece as UFs da base do MIP, e essas escolas por definição
+    # estão fora dela (poderiam ter um Estado nem listado no `<select>`);
+    # divergência/período/data de ativação também não fazem sentido pra
+    # quem nunca chegou nesse status. `.exclude(status_mip=...)` sozinho
+    # excluiria também quem nunca entrou no MIP (`status_mip` NULL) —
+    # três-valores do SQL faz `NOT (NULL = 'x')` virar NULL, tratado como
+    # falso pelo WHERE; por isso o "OR ... isnull" explícito abaixo (mesma
+    # cautela já registrada na versão anterior desta regra).
+    escolas_fora_da_validacao_eace = Escola.objects.filter(
+        encontrado_relatorio_eace_mip=True
+    ).filter(
+        Q(status_mip__isnull=True) | ~Q(status_mip=Escola.AGUARDANDO_VALIDACAO_EACE)
     )
     if q:
         escolas_fora_da_validacao_eace = escolas_fora_da_validacao_eace.filter(
@@ -355,6 +372,8 @@ def mip_inep_view(request):
         {
             "page_obj": page_obj,
             "total_inep": total_inep,
+            "status_mip_filtro": status_mip_filtro,
+            "status_mip_opcoes": Escola.STATUS_MIP_CHOICES,
             "total_divergencia": total_divergencia,
             "divergencia_filtro": divergencia_filtro,
             "planilha_ativa": planilha_ativa,
@@ -376,19 +395,69 @@ def mip_inep_view(request):
     )
 
 
+def _descricoes_somente_servico(escola):
+    """RN-089/RN-092 (2026-09-10): Descrições do catálogo LPU sem
+    "Equipamentos (R$)" (só "Serviços (R$)") para o Lote desta escola —
+    mesmo catálogo do 2º bloco "+" do Lado IXC do RI (`ri_detail.html`),
+    usado aqui só para reconhecer, na lista já lançada, quais itens podem
+    ser excluídos direto do MIP (nunca um Produto normal nem o KIT)."""
+    return {
+        kit.descricao_curta or kit.descricao for kit in catalogo_ixc_somente_servico(escola)
+    }
+
+
+def _registrar_log_campo_mip(ri, usuario, campo, valor_anterior, valor_novo):
+    """Mesmo padrão de `apps.ri.views._registrar_log_campo` (RN-008) —
+    duplicado aqui (função pequena, evita importar símbolo privado de
+    outro app) para o log da troca de Status (MIP)."""
+    RiHistorico.objects.create(
+        ri=ri,
+        tipo=RiHistorico.LOG_CAMPO,
+        autor=usuario,
+        campo=campo,
+        valor_anterior=valor_anterior,
+        valor_novo=valor_novo,
+    )
+    auditar(
+        usuario,
+        Auditoria.ALTERACAO_CAMPO,
+        entidade="Ri",
+        entidade_id=ri.pk,
+        campo=campo,
+        valor_anterior=valor_anterior,
+        valor_novo=valor_novo,
+    )
+
+
 @login_required
 def mip_detail_view(request, inep):
     """Tela aberta ao clicar em qualquer card do MIP — mesma estrutura de
-    3 lados da tela do RI (`ri_detail`), só que 100% leitura: Kit
-    declarado (1º), IXC (2º) e Relatório EACE (3º, `EscolaItemRelatorio
-    EaceMip`), mais o histórico de comunicação do RI atual daquele INEP
-    logo abaixo. Reaproveita o histórico do RI
-    (`RiHistorico`/`ri/_historico_panel.html`) em vez de um histórico
-    próprio do MIP — o formulário de nova mensagem do painel posta direto
-    para `ri_detail` (mesmo endpoint que o RI já usa), então as duas
-    telas leem e escrevem o mesmo histórico daquele RI (decisão combinada
-    com o usuário, 2026-09-07). Sem RI ainda para o INEP, não há onde
-    gravar histórico — mostra só um aviso, sem o painel.
+    3 lados da tela do RI (`ri_detail`): Kit declarado (1º), IXC (2º) e
+    Relatório EACE (3º, `EscolaItemRelatorioEaceMip`), mais o histórico de
+    comunicação do RI atual daquele INEP logo abaixo. Reaproveita o
+    histórico do RI (`RiHistorico`/`ri/_historico_panel.html`) em vez de
+    um histórico próprio do MIP — o formulário de nova mensagem do painel
+    posta direto para `ri_detail` (mesmo endpoint que o RI já usa), então
+    as duas telas leem e escrevem o mesmo histórico daquele RI (decisão
+    combinada com o usuário, 2026-09-07). Sem RI ainda para o INEP, não há
+    onde gravar histórico — mostra só um aviso, sem o painel.
+
+    RN-092 (2026-09-10; revista no mesmo dia): os 3 lados continuam só
+    leitura aqui — igual a antes. A tela ganha um controle pra trocar o
+    Status (MIP) entre os 3 valores; ao escolher "Em Andamento", o INEP
+    volta a aparecer no grid de Equipamentos (Projeto > Equipamentos,
+    `Ri.status="andamento"` de verdade) e o lançamento/edição do Lado IXC
+    volta a acontecer lá, com o mesmo formulário e acesso de sempre
+    (RN-011/RN-052) — não duplicado aqui.
+
+    RN-092 (ampliação, 2026-09-10, mesmo dia): exceção pontual — com
+    `Escola.status_mip == "Aguardando Validação EACE"`, a tela ganha um
+    lançamento/exclusão próprio, só para os itens do catálogo "só valor
+    de serviço" (RN-089 — LPU sem "Equipamentos (R$)"). Esses itens nunca
+    são usados pelo RI (só pelo Valor de Serviço do MIP, RN-067/RN-076),
+    então não faz sentido exigir mandar o INEP de volta pra "Em
+    Andamento" (reabrindo o RI inteiro) só para incluir/remover um
+    desses.
     """
     escola = get_object_or_404(Escola, inep=inep)
     ri = (
@@ -404,6 +473,14 @@ def mip_detail_view(request, inep):
     lado3_relatorio_eace_mip = _resolver_lado3_relatorio_eace_mip(escola)
     divergencia_valor_servico = _comparar_valor_servico_ixc_relatorio_mip(ri, escola, escola.lote, catalogo_kits)
     lado2_nf_recebida_em = _resolver_lado2_nf_recebida_em(ri)
+
+    somente_servico_editavel = escola.status_mip == Escola.AGUARDANDO_VALIDACAO_EACE
+    descricoes_somente_servico = _descricoes_somente_servico(escola) if somente_servico_editavel else set()
+    produto_servico_formset = None
+    if somente_servico_editavel and ri:
+        produto_servico_formset = RiItemIxcProdutoFormSet(
+            form_kwargs={"escola": escola, "somente_servico": True}, prefix="produto_servico_mip",
+        )
 
     historico_form = None
     historico_page_obj = None
@@ -428,8 +505,142 @@ def mip_detail_view(request, inep):
             "lado2_nf_recebida_em": lado2_nf_recebida_em,
             "historico_form": historico_form,
             "historico": historico_page_obj,
+            "status_mip_opcoes": Escola.STATUS_MIP_CHOICES,
+            "somente_servico_editavel": somente_servico_editavel,
+            "descricoes_somente_servico": descricoes_somente_servico,
+            "produto_servico_formset": produto_servico_formset,
         },
     )
+
+
+@login_required
+def mip_status_update_view(request, inep):
+    """RN-092 (revista em 2026-09-10): troca o Status (MIP). "Aguardando
+    Validação EACE" e "Faturamento Concluído" só mexem em
+    `Escola.status_mip` (label do MIP, sem tocar o RI). "Em Andamento" é
+    diferente — é o mesmo `Ri.status="andamento"` de sempre: passa pela
+    mesma validação de transição do RI (`_validar_transicao_status_ri`,
+    inclusive a exceção de Administrador da RN-020 quando o RI está
+    "Faturamento Concluído") e pelo mesmo `trocar_status_com_log`, pra ter
+    todo o acesso que "Em Andamento" já tem hoje na tela de Equipamentos
+    (RN-011/RN-052) — nada duplicado aqui."""
+    escola = get_object_or_404(Escola, inep=inep)
+    if request.method != "POST":
+        return redirect("mip_detail", inep=inep)
+
+    novo_status = (request.POST.get("status_mip") or "").strip()
+    if novo_status not in dict(Escola.STATUS_MIP_CHOICES):
+        messages.error(request, "Status inválido.")
+        return redirect("mip_detail", inep=inep)
+    if novo_status == escola.status_mip:
+        return redirect("mip_detail", inep=inep)
+
+    if novo_status == Escola.EM_ANDAMENTO:
+        ri = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if not ri:
+            messages.error(request, "Este INEP ainda não tem RI.")
+            return redirect("mip_detail", inep=inep)
+        erro = _validar_transicao_status_ri(ri, Ri.ANDAMENTO, request.user)
+        if erro:
+            messages.error(request, erro)
+            return redirect("mip_detail", inep=inep)
+        trocar_status_com_log(ri, Ri.ANDAMENTO, request.user)
+        # `Ri.save()` (RN-092) só sincroniza `status_mip` para "Aguardando
+        # Validação EACE"/"Faturamento Concluído" — "Em Andamento" é
+        # gravado aqui, de propósito (é o próprio MIP mandando pra lá).
+        escola.status_mip = Escola.EM_ANDAMENTO
+        escola.save(update_fields=["status_mip"])
+        messages.success(request, 'Status (MIP) atualizado — RI voltou para "Em Andamento".')
+    else:
+        status_anterior = escola.get_status_mip_display()
+        escola.status_mip = novo_status
+        escola.save(update_fields=["status_mip"])
+        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if ri_atual:
+            _registrar_log_campo_mip(
+                ri_atual, request.user, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
+            )
+        messages.success(request, "Status (MIP) atualizado.")
+    return redirect("mip_detail", inep=inep)
+
+
+@login_required
+def mip_item_ixc_somente_servico_salvar_view(request, inep):
+    """RN-092 (ampliação, 2026-09-10): lançamento de equipamento "só valor
+    de serviço" (RN-089 — catálogo LPU sem "Equipamentos (R$)") direto no
+    MIP, só com `Escola.status_mip == "Aguardando Validação EACE"`. Nunca
+    o KIT nem um Produto normal — só esse catálogo restrito (a própria
+    queryset do formset já filtra, `RiItemIxcProdutoForm`)."""
+    escola = get_object_or_404(Escola, inep=inep)
+    if escola.status_mip != Escola.AGUARDANDO_VALIDACAO_EACE:
+        messages.error(
+            request,
+            'Só é possível lançar equipamento (valor de serviço) com o Status (MIP) em '
+            '"Aguardando Validação EACE".',
+        )
+        return redirect("mip_detail", inep=inep)
+    ri = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+    if not ri:
+        messages.error(request, "Este INEP ainda não tem RI.")
+        return redirect("mip_detail", inep=inep)
+    if request.method != "POST":
+        return redirect("mip_detail", inep=inep)
+
+    formset = RiItemIxcProdutoFormSet(
+        request.POST, form_kwargs={"escola": escola, "somente_servico": True}, prefix="produto_servico_mip",
+    )
+    if not formset.is_valid():
+        messages.error(request, "Não foi possível salvar: verifique os itens selecionados.")
+        return redirect("mip_detail", inep=inep)
+
+    linhas_preenchidas = [dados for dados in formset.cleaned_data if dados and dados.get("produto")]
+    for dados in linhas_preenchidas:
+        produto = dados["produto"]
+        item = RiItemIxc.objects.create(
+            ri=ri, descricao_item=produto.descricao_curta or produto.descricao,
+            quantidade=dados["quantidade"], valor_unitario=Decimal("0"),
+        )
+        _registrar_log_campo_mip(
+            ri, request.user, "Equipamento (valor de serviço, via MIP)", "",
+            f"{item.descricao_item} — {item.quantidade} un.",
+        )
+    if linhas_preenchidas:
+        sincronizar_divergencia_kit_relatorio(ri)
+        messages.success(request, "Equipamento lançado.")
+    return redirect("mip_detail", inep=inep)
+
+
+@login_required
+def mip_item_ixc_somente_servico_delete_view(request, item_pk):
+    """RN-092 (ampliação, 2026-09-10): exclusão de um item "só valor de
+    serviço" (RN-089) lançado via MIP — só Administrador (RN-004), só com
+    `Escola.status_mip == "Aguardando Validação EACE"`, e só quando o
+    item de fato pertence a esse catálogo restrito (nunca o KIT nem um
+    Produto normal, mesmo que alguém monte a URL à mão)."""
+    item = get_object_or_404(RiItemIxc, pk=item_pk)
+    ri = item.ri
+    escola = ri.escola
+    inep = escola.inep
+    if escola.status_mip != Escola.AGUARDANDO_VALIDACAO_EACE:
+        messages.error(
+            request,
+            'Só é possível excluir equipamento (valor de serviço) com o Status (MIP) em '
+            '"Aguardando Validação EACE".',
+        )
+        return redirect("mip_detail", inep=inep)
+    if item.eh_kit or item.descricao_item not in _descricoes_somente_servico(escola):
+        return HttpResponseForbidden("Este item não pode ser excluído por aqui.")
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode excluir itens.")
+    if request.method == "POST":
+        resumo = f"{item.descricao_item} — {item.quantidade} un."
+        item.delete()
+        _registrar_log_campo_mip(
+            ri, request.user, "Equipamento (valor de serviço, via MIP) excluído", resumo, "Excluído",
+        )
+        sincronizar_divergencia_kit_relatorio(ri)
+        messages.success(request, "Item excluído.")
+    return redirect("mip_detail", inep=inep)
 
 
 @login_required

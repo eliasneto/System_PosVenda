@@ -5,6 +5,17 @@ from . import views
 urlpatterns = [
     path("mip/", views.mip_inep_view, name="mip_inep"),
     path("mip/<str:inep>/", views.mip_detail_view, name="mip_detail"),
+    path("mip/<str:inep>/status/", views.mip_status_update_view, name="mip_status_update"),
+    path(
+        "mip/<str:inep>/lado-ixc/servico/salvar/",
+        views.mip_item_ixc_somente_servico_salvar_view,
+        name="mip_item_ixc_somente_servico_salvar",
+    ),
+    path(
+        "mip/lado-ixc/servico/<int:item_pk>/excluir/",
+        views.mip_item_ixc_somente_servico_delete_view,
+        name="mip_item_ixc_somente_servico_delete",
+    ),
     path(
         "administrador/relatorio-eace-mip/",
         views.relatorio_eace_mip_view,

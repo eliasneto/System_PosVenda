@@ -3531,9 +3531,141 @@ regra de negócio (CLAUDE.md, `.claude/agents/dev.md` §3).
 
 ---
 
+### FEAT-038 — Importação de RI legado a partir do histórico do pós-venda
+
+**Descrição:** Comando `importar_ri_legado_eace` (linha de comando, sem
+tela própria) traz para o sistema, como histórico, os INEPs "ATIVO" da
+planilha de acompanhamento do pós-venda `CONSOLIDADO EACE
+Atualizado.xlsx` (aba FATURAMENTO MATERIAIS) cujo RI ainda nunca foi
+tocado pelo sistema — atendimento já realizado antes da existência
+deste sistema. Cada INEP elegível nasce/passa para "Aguardando
+validação EACE", ganha o equipamento (KIT Instalado, Nobreak, AP
+Adicional, Conversor) no Lado IXC com Descrição/Valor real da LPU por
+Lote, ganha uma entrada no Histórico do RI explicando a origem, tem o
+nome do INEP marcado em negrito/amarelo no Grid de INEPs e no MIP, e
+entra na sincronização normal da bolinha do MIP.
+**Revisão (mesmo dia):** flag `--incluir-com-progresso` estende a
+importação aos 550 INEPs "ATIVO" da planilha inteiros (não só os 100%
+intocados) — sem duplicar item já lançado nem sobrescrever Data de
+Ativação existente.
+**Tipo:** backend-only
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta — passo prévio à mesma importação no servidor de
+produção.
+**Critérios de aceite:**
+- Só entra o INEP com STATUS="ATIVO" na planilha **e** cujo RI (quando
+  já existe) estiver 100% intocado — status "Implantação EACE", sem
+  Data de Ativação, sem item lançado em nenhum dos 3 lados. RI com
+  progresso real nunca é tocado, mesmo marcado "ATIVO" na planilha. ✅
+- Equipamento (KIT Instalado, Nobreak, AP Adicional, Conversor) lançado
+  só no Lado IXC (2º lado), com Descrição e Valor Unitário resolvidos
+  pelo catálogo LPU (`KitPadrao`) por Lote; sem correspondência no
+  catálogo, o item não é lançado (nunca inventa modelo/valor). ✅
+- Switch e Rack nunca são lançados (planilha não informa
+  tamanho/modelo, LPU tem várias variantes) — ficam de fora, listados
+  no resumo para lançamento manual. ✅
+- Lado Relatório EACE (3º lado) nunca é tocado — fica em branco, sem
+  gerar divergência de KIT (RN-003 já trata lado vazio). ✅
+- `Escola.legado=True` gravado sem sobrescrever nenhum outro campo já
+  cadastrado; nome do INEP exibido em negrito/amarelo no Grid de INEPs e
+  no MIP quando `legado=True`. ✅
+- Roda em modo simulação por padrão; só grava com `--aplicar`.
+  Reexecutar não duplica nada (idempotente). ✅
+- Ao aplicar, também roda a sincronização da bolinha do MIP (RN-081) —
+  sem Relatório EACE (MIP) ativo, só avisa, não falha a importação. ✅
+- `--incluir-com-progresso` estende a importação a todos os 550 INEPs
+  "ATIVO", mesmo com RI já em progresso real (inclusive revertendo
+  "Faturamento Concluído") — nunca duplica item já lançado (KIT no
+  máximo 1 por RI; Nobreak/AP Adicional/Conversor por Descrição exata)
+  nem sobrescreve Data de Ativação existente. ✅
+**Regras relacionadas:** RN-091, RN-001, RN-003, RN-008, RN-010,
+RN-011, RN-081.
+**Dependências:** FEAT-002 (Escola), FEAT-004 (RI, Lado IXC), FEAT-007
+(Grid de INEPs), FEAT-015 (catálogo LPU), FEAT-034/FEAT-035
+(sincronização da bolinha do MIP) — todas `✅ Concluída`.
+**Tipo de validação:** QA — cria/altera dado real de produção (Escola,
+Ri, RiItemIxc, RiHistorico) a partir de planilha externa.
+**Entrega do Dev (2026-09-10):**
+- Campo `Escola.legado` (migration `0008_escola_legado`) e badge
+  negrito/amarelo no Grid de INEPs (`ri/grid_inep.html`) e no MIP
+  (`escolas/mip_inep.html`).
+- Comando `importar_ri_legado_eace` (`apps/ri/management/commands/`),
+  simulação por padrão, `--aplicar` para gravar; ao final, roda também
+  a sincronização da bolinha do MIP (RN-081); flag
+  `--incluir-com-progresso` estende o alcance aos 550 INEPs inteiros.
+- Testes novos; suíte completa de `apps.escolas` e `apps.ri` (651
+  testes) sem regressão.
+- Aplicado e validado no servidor local: primeiro os 14 INEPs 100%
+  intocados, depois os 550 INEPs "ATIVO" inteiros com
+  `--incluir-com-progresso` (529 com status alterado, 21 já corretos,
+  433 itens de equipamento lançados).
+**Pendência atual:** aguardando QA; depois de aprovado, rodar o mesmo
+comando no servidor de produção (usuário pediu para não fazer o deploy
+ainda).
+
+---
+
+### FEAT-039 — MIP: Status próprio (Em Andamento / Aguardando Validação EACE / Faturamento Concluído)
+
+**Descrição:** Tela do MIP ganha um campo Status independente do
+`Ri.status`, com 3 valores. "Aguardando Validação EACE" e "Faturamento
+Concluído" são só um rótulo do MIP. "Em Andamento" é diferente: é o
+mesmo `Ri.status="andamento"` de sempre — ao escolher esse valor, o INEP
+volta a aparecer no grid de Equipamentos (Projeto > Equipamentos), com
+o formulário/acesso normal de lançamento do Lado IXC de lá (nada
+duplicado no MIP). Exceção: equipamento "só valor de serviço" (RN-089 —
+LPU sem "Equipamentos R$") pode ser lançado/excluído direto no MIP,
+mesmo com o Status em "Aguardando Validação EACE", porque esse tipo de
+item nunca é usado pelo RI, só pelo Valor de Serviço do MIP.
+**Tipo:** backend-only (com frontend funcional embutido)
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta — desbloqueia corrigir/lançar equipamento de um
+INEP sem precisar reabrir o RI inteiro.
+**Critérios de aceite:**
+- Campo/filtro Status no grid do MIP, com os 3 valores — grid deixa de
+  mostrar só "Aguardando Validação EACE" (RN-074, substituída). ✅
+- Grid de Equipamentos deixa de mostrar INEP com Status (MIP) em
+  "Aguardando Validação EACE" ou "Faturamento Concluído"; continua
+  mostrando (ou volta a mostrar) INEP em "Em Andamento" ou nunca
+  entregue ao MIP. ✅
+- Trocar o Status (MIP) para "Em Andamento" muda o `Ri.status` de
+  verdade, passando pela mesma validação de transição e mesmo log do RI
+  (inclusive a exceção de Administrador quando o RI estava "Faturamento
+  Concluído"). ✅
+- RI que progride sozinho de novo (fluxo normal de e-mail/financeiro) e
+  chega em "Aguardando Validação EACE"/"Faturamento Concluído" atualiza
+  o Status (MIP) automaticamente — não fica preso em "Em Andamento". ✅
+- Equipamento "só valor de serviço" (RN-089): lançamento/exclusão só com
+  Status (MIP) em "Aguardando Validação EACE"; nunca aceita o KIT nem um
+  Produto normal por essa rota; exclusão só Administrador. ✅
+- Nome do INEP legado (FEAT-038) em negrito/amarelo, tanto no Grid de
+  Equipamentos quanto no MIP. ✅
+**Regras relacionadas:** RN-092, RN-001, RN-003, RN-004, RN-008, RN-011,
+RN-020, RN-052, RN-067, RN-074 (substituída), RN-076, RN-089, RN-091.
+**Dependências:** FEAT-007 (Grid de Equipamentos), FEAT-034/FEAT-035
+(MIP), FEAT-038 (INEP legado) — todas `✅ Concluída`/`🔍 Aguardando QA`.
+**Tipo de validação:** QA — muda status/dado real de RI em produção e
+adiciona rota de escrita nova no MIP.
+**Entrega do Dev (2026-09-10):**
+- Campo `Escola.status_mip` (migrations `0009_escola_status_mip`,
+  `0010_backfill_status_mip_faturamento_concluido`) e handoff automático
+  em `Ri.save()`.
+- Grid de Equipamentos (`ri/grid_inep.html`) e grid do MIP
+  (`escolas/mip_inep.html`) ajustados para o novo filtro.
+- Tela de detalhe do MIP (`escolas/mip_detail.html`) ganha o controle de
+  Status e o formulário restrito de equipamento só-serviço.
+- 651 testes (suíte completa de `apps.escolas` e `apps.ri`) sem
+  regressão; validado com renderização real de uma escola em produção
+  local.
+**Pendência atual:** aguardando QA.
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-10 | `FEAT-039` criada, `🔍 Aguardando QA` — Status próprio do MIP (RN-092 nova: `Escola.status_mip`, "Em Andamento"/"Aguardando Validação EACE"/"Faturamento Concluído"; RN-074 substituída); `FEAT-038` ganha revisão — flag `--incluir-com-progresso` estende a importação aos 550 INEPs "ATIVO" inteiros, cor do destaque trocada para amarelo; 651 testes sem regressão; aplicado e validado no servidor local | Usuário pediu, em sequência: que "Em Andamento" voltasse a ser o próprio `Ri.status` (não um valor novo e duplicado); que a importação valesse pros 550 INEPs inteiros, não só os 100% intocados (536 já tinham progresso real, inclusive 472 "Faturamento Concluído" — revertidos, efeito assumido); e a exceção do equipamento só-serviço no MIP, depois de notar que sem ela não haveria mais forma de lançar esse item fora de "Em Andamento"; usuário pediu explicitamente para NÃO fazer o deploy em produção ainda; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |
+| 2026-09-10 | `FEAT-038` criada, `🔍 Aguardando QA` — comando `importar_ri_legado_eace` traz para o sistema, como histórico, os INEPs "ATIVO" do `CONSOLIDADO EACE Atualizado.xlsx` cujo RI ainda estava 100% intocado (RN-091 nova); 617 testes sem regressão; aplicado e validado no servidor local (14 INEPs) | Usuário pediu a importação e, questionado (CLAUDE.md §9), confirmou não mexer em RI com progresso real, usar o valor real da LPU por Lote e não lançar Switch/Rack sem modelo definido; depois reportou que os INEPs recém-criados ficaram sem a bolinha do grid do MIP — Dev corrigiu fazendo o comando também rodar a sincronização já existente (RN-081); Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |
 | 2026-09-08 | Dev implementou, fora do fluxo Orquestrador→Dev (autorizado pelo usuário), a geração da planilha de faturamento de implantação a partir do filtro Estado+Município do grid Projeto > MIP — 1 arquivo por Município, somando o Valor Total (IXC) das escolas do filtro (RN-076) e listando os INEPs/Cód. Fornecedor no texto da Nota Fiscal; ainda sem tela própria (só um comando de gestão provisório, para gerar/testar o arquivo); testes novos passando, suíte completa de `apps.escolas` e `apps.ri` sem regressão | Usuário pediu a geração automática dessa planilha a partir do filtro do MIP; falta ao Orquestrador formalizar a RN desta feature em `business_rules.md` e criar a `FEAT-XXX` correspondente, e ao usuário/Orquestrador decidir onde o arquivo fica disponível na tela e como/quando informar a "Data de envio" (por ora é só parâmetro da função) |
 | 2026-09-08 | `FEAT-036` criada e já `✅ Concluída` — cards de itens da tela de detalhe do RI (Kit declarado, IXC, Relatório EACE) ganham altura máxima de 384px com rolagem interna, evitando que cresçam sem limite com muitos equipamentos lançados | Usuário reportou que, com muitos equipamentos no RI, os cards ficavam muito grandes "pra baixo"; Dev aplicou o mesmo padrão `max-h-96 overflow-y-auto` já usado no formulário de Produtos da mesma tela e validou visualmente (Playwright); usuário confirmou o valor de 384px |
 | 2026-09-07 | `FEAT-034` recebe adição — Lado 2 (IXC) da tela de detalhe do MIP passa a mostrar a data de recebimento da Nota Fiscal (PDF+XML) mais recente do financeiro (RN-072 nova, mesmo dado já usado pela RN-056 do RI); com mais de 1 Nota Fiscal, mostra só a mais recente; 4 testes novos, suíte completa (605 testes) sem regressão | Usuário pediu para mostrar a data do recebimento do e-mail do financeiro com XML/PDF no Lado 2 do MIP; questionado sobre múltiplas Notas Fiscais e onde exibir, confirmou "só a mais recente" e "só na tela de detalhe"; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |

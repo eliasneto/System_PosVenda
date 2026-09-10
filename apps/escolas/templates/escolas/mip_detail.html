@@ -11,18 +11,44 @@
             <li class="text-gray-900 dark:text-gray-100">{{ escola.inep }}</li>
         </ol>
     </nav>
-    <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
-        {{ escola.nome }}
-    </h1>
-    <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
-        INEP {{ escola.inep }} — itens dos 3 lados (valor de serviço) e histórico
-    </p>
+    <div class="flex flex-wrap items-end justify-between gap-4">
+        <div>
+            <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+                {{ escola.nome }}
+            </h1>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+                INEP {{ escola.inep }} — itens dos 3 lados (valor de serviço) e histórico
+            </p>
+        </div>
+        <!-- RN-092: Status próprio do MIP — independente do Status do RI
+             (Projeto &gt; Equipamentos). Select com auto-submit ao trocar
+             (mesmo padrão `data-salvar-ao-trocar` já usado no Status do
+             RI, `_status_pill_detail.html`), sem HTMX aqui — página
+             inteira recarrega, suficiente pra esta tela. -->
+        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Status (MIP)</p>
+            <form method="POST" action="{% url 'mip_status_update' inep=escola.inep %}" data-salvar-ao-trocar>
+                {% csrf_token %}
+                <select name="status_mip" class="select-pv-dark bg-transparent border-none outline-none text-sm font-black italic text-pv-yellow cursor-pointer">
+                    {% for valor, rotulo in status_mip_opcoes %}
+                    <option value="{{ valor }}" {% if escola.status_mip == valor %}selected{% endif %}>{{ rotulo }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+    </div>
 </div>
 
 <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6 mb-6">
     <h2 class="text-sm font-black uppercase text-gray-800 dark:text-gray-200 mb-1">Itens — valor de serviço</h2>
     <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold mb-4">
-        Mesmos itens lançados no RI (só leitura — lançar/editar continua em Projeto &gt; Equipamentos).
+        Só leitura — lançar/editar continua em Projeto &gt; Equipamentos.
+        {% if escola.status_mip == "em_andamento" %}
+        Status (MIP) em "Em Andamento": este INEP está de volta lá, com o formulário normal do Lado IXC.
+        <a href="{% url 'ri_detail' inep=escola.inep %}" class="text-amber-600 dark:text-amber-400 hover:underline">Abrir em Equipamentos →</a>
+        {% elif somente_servico_editavel %}
+        Exceção: com o Status (MIP) em "Aguardando Validação EACE", equipamento só com valor de serviço (sem "Equipamentos R$" na LPU) pode ser lançado/excluído direto aqui.
+        {% endif %}
     </p>
     <!-- RN-071 (a criar): confronto de Valor de serviço entre o Lado IXC
          (2º) e o Lado Relatório EACE do MIP (3º) — mesmo mecanismo do
@@ -63,14 +89,78 @@
                  conforme itens são lançados (mesmo ajuste do RI, FEAT-036). -->
             <div class="max-h-96 overflow-y-auto pr-1">
                 {% for item in lado2_ixc %}
-                <p class="text-gray-700 dark:text-gray-300 mb-1{% if item.pk in divergencia_valor_servico.itens_ixc_divergentes_pks %} font-black text-amber-600 dark:text-amber-400{% endif %}">
-                    {{ item.descricao }} — {{ item.quantidade }} un. —
-                    {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}
-                </p>
+                <div class="flex items-center justify-between gap-2 mb-1">
+                    <p class="text-gray-700 dark:text-gray-300{% if item.pk in divergencia_valor_servico.itens_ixc_divergentes_pks %} font-black text-amber-600 dark:text-amber-400{% endif %}">
+                        {{ item.descricao }} — {{ item.quantidade }} un. —
+                        {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}
+                    </p>
+                    {% if somente_servico_editavel and item.descricao in descricoes_somente_servico and request.user.is_administrador %}
+                    <form method="POST" action="{% url 'mip_item_ixc_somente_servico_delete' item_pk=item.pk %}" onsubmit="return confirm('Excluir este equipamento?');" class="shrink-0">
+                        {% csrf_token %}
+                        <button type="submit" class="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Excluir (equipamento só valor de serviço)">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
                 {% empty %}
                 <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
                 {% endfor %}
             </div>
+
+            {% if somente_servico_editavel %}
+            <!-- RN-089/RN-092: lançamento restrito ao catálogo "só valor
+                 de serviço" (LPU sem "Equipamentos R$") — nunca o KIT nem
+                 um Produto normal, direto no MIP quando o Status (MIP)
+                 está "Aguardando Validação EACE". -->
+            <form method="POST" action="{% url 'mip_item_ixc_somente_servico_salvar' inep=escola.inep %}" class="flex flex-col gap-3 border-t border-amber-200 dark:border-amber-800/60 mt-3 pt-3">
+                {% csrf_token %}
+                <div class="flex items-center justify-between">
+                    <h3 class="text-[10px] font-black uppercase text-amber-700 dark:text-amber-400">Equipamento (só valor de serviço)</h3>
+                    <button type="button" id="btn-add-produto-servico-mip"
+                        class="w-6 h-6 flex items-center justify-center rounded-full bg-pv-black text-pv-yellow hover:bg-gray-800 transition"
+                        title="Adicionar equipamento" aria-label="Adicionar equipamento">
+                        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+                {{ produto_servico_formset.management_form }}
+                <div id="produto-servico-mip-linhas" class="flex flex-col gap-3 max-h-72 overflow-y-auto pr-1">
+                    {% for produto_form in produto_servico_formset %}
+                    <div class="produto-servico-mip-linha flex flex-col gap-2 bg-white dark:bg-gray-900 rounded-xl p-3 pr-6 relative">
+                        <button type="button" class="btn-remove-produto-servico-mip absolute top-2 right-2 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Remover linha" aria-label="Remover linha">
+                            <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                        </button>
+                        <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                            Equipamento
+                            {{ produto_form.produto }}
+                        </label>
+                        <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                            Quantidade
+                            {{ produto_form.quantidade }}
+                        </label>
+                    </div>
+                    {% endfor %}
+                </div>
+                <template id="produto-servico-mip-template">
+                    <div class="produto-servico-mip-linha flex flex-col gap-2 bg-white dark:bg-gray-900 rounded-xl p-3 pr-6 relative">
+                        <button type="button" class="btn-remove-produto-servico-mip absolute top-2 right-2 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Remover linha" aria-label="Remover linha">
+                            <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                        </button>
+                        <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                            Equipamento
+                            {{ produto_servico_formset.empty_form.produto }}
+                        </label>
+                        <label class="flex flex-col gap-1 text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                            Quantidade
+                            {{ produto_servico_formset.empty_form.quantidade }}
+                        </label>
+                    </div>
+                </template>
+                <button type="submit" class="self-start px-5 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-xl hover:bg-gray-800 transition shadow mt-2">
+                    Salvar
+                </button>
+            </form>
+            {% endif %}
         </div>
         <div class="bg-gray-100 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
             <p class="font-black uppercase text-gray-500 dark:text-gray-400 mb-2">Relatório EACE <span class="text-gray-400 dark:text-gray-500">(3º)</span></p>
@@ -100,4 +190,42 @@
     </p>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// RN-089/RN-092: botão "+" do equipamento só valor de serviço — mesma
+// mecânica já usada no Lado IXC do RI (`ri_detail.html`): a lista nasce
+// sem nenhuma linha (extra=0), cada clique clona a linha-modelo do
+// formset (empty_form) e incrementa o management form (TOTAL_FORMS).
+function configurarBlocoProdutoServicoMip(config) {
+    var botaoAdicionar = document.getElementById(config.idBotaoAdicionar);
+    var linhas = document.getElementById(config.idLinhas);
+    if (!botaoAdicionar || !linhas) return;
+    botaoAdicionar.addEventListener('click', function () {
+        var totalFormsInput = document.getElementById(config.idTotalForms);
+        var indice = parseInt(totalFormsInput.value, 10);
+        var modelo = document.getElementById(config.idTemplate).innerHTML.replace(/__prefix__/g, indice);
+        var wrapper = document.createElement('div');
+        wrapper.innerHTML = modelo.trim();
+        linhas.appendChild(wrapper.firstElementChild);
+        totalFormsInput.value = indice + 1;
+        if (window.lucide) { window.lucide.createIcons(); }
+    });
+    linhas.addEventListener('click', function (evento) {
+        var botaoRemover = evento.target.closest(config.classeBotaoRemover);
+        if (!botaoRemover) return;
+        var linha = botaoRemover.closest(config.classeLinha);
+        if (linha) linha.remove();
+    });
+}
+configurarBlocoProdutoServicoMip({
+    idBotaoAdicionar: 'btn-add-produto-servico-mip',
+    idLinhas: 'produto-servico-mip-linhas',
+    idTemplate: 'produto-servico-mip-template',
+    idTotalForms: 'id_produto_servico_mip-TOTAL_FORMS',
+    classeBotaoRemover: '.btn-remove-produto-servico-mip',
+    classeLinha: '.produto-servico-mip-linha',
+});
+</script>
 {% endblock %}

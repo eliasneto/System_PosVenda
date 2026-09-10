@@ -2800,7 +2800,11 @@ status do RI mais recente); template `escolas/mip_inep.html`.
 
 **Features relacionadas:** FEAT-034, RN-066 (substituída por esta).
 
-**Status:** Ativa.
+**Status:** Substituída por RN-092 (2026-09-10) — o grid do MIP passa a
+filtrar por `Escola.status_mip` (campo próprio do MIP) em vez do status
+do RI diretamente, e passa a mostrar os 3 status do MIP, não só
+"Aguardando validação EACE". Texto original preservado abaixo como
+histórico.
 
 ### RN-075 — Filtro por data de entrada em "Aguardando validação EACE"
 
@@ -3044,9 +3048,212 @@ encontrado_relatorio_eace_mip` (campo novo, migration
 
 **Status:** Ativa.
 
+## Importação de Histórico Legado (RI)
+
+### RN-091 — Importação de RI legado a partir do histórico do pós-venda
+
+**Descrição:** O comando `importar_ri_legado_eace` traz para o sistema,
+como histórico, os INEPs marcados "ATIVO" na planilha de acompanhamento
+do pós-venda `CONSOLIDADO EACE Atualizado.xlsx` (aba FATURAMENTO
+MATERIAIS) cujo RI ainda nunca foi tocado pelo sistema. Cada INEP
+elegível: nasce ou passa para o status "Aguardando validação EACE"
+(RN-001); ganha os itens de equipamento (KIT Instalado, Nobreak, AP
+Adicional, Conversor) no Lado IXC (2º lado, RN-011), com a Descrição do
+catálogo LPU (`KitPadrao`, RN-010) e Valor Unitário = valor de
+Equipamento da LPU por Lote da Escola; ganha uma entrada no Histórico do
+RI (RN-008) avisando que o equipamento veio desta planilha, de antes do
+sistema existir; e tem o nome do INEP marcado (`Escola.legado=True`),
+exibido em negrito/branco no Grid de INEPs (FEAT-007). Ao final de uma
+aplicação que tocou pelo menos 1 INEP, o comando também roda a
+sincronização da bolinha do MIP (RN-081), pelo mesmo mecanismo do botão
+"Sincronizar todos os INEPs" — sem isso, o INEP novo ficaria sem bolinha
+nenhuma no grid do MIP até alguém clicar manualmente.
+
+**Contexto:** Usuário pediu, em 2026-09-10, para trazer ao sistema o
+histórico de instalação anterior à existência dele, presente numa
+planilha de acompanhamento interno do pós-venda. Levantamento contra o
+banco (2026-09-10) mostrou que a maior parte dos INEPs "ATIVO" da
+planilha já tinha RI com progresso real no sistema (das 550 linhas
+"ATIVO", 536 já tinham RI tocado — 472 delas já "Faturamento
+Concluído"); usuário confirmou explicitamente que esses nunca devem ser
+tocados por esta importação — só o INEP com RI 100% intocado entra
+(resultado real da 1ª aplicação, ambiente local: 14 INEPs). O valor
+real do equipamento (LPU por Lote) veio de pedido explícito do usuário,
+substituindo para este comando o Valor Unitário R$ 0,00 padrão do
+lançamento manual do Lado IXC (RN-011). Depois de uma 1ª aplicação, o
+usuário reportou que os INEPs recém-criados ficaram sem a bolinha do
+grid do MIP — resolvido rodando a sincronização (RN-081) já existente,
+e o comando passou a rodá-la sozinho ao final.
+
+**Critérios:**
+- Só entra o INEP com STATUS="ATIVO" na planilha **e** cujo RI (quando
+  já existe) estiver 100% intocado: status "Implantação EACE", sem Data
+  de Ativação e sem nenhum item lançado em qualquer um dos 3 lados. RI
+  com progresso real (outro status, ou algum dado já lançado em
+  qualquer lado) é sempre ignorado, mesmo que a planilha marque o INEP
+  como "ATIVO" — este comando nunca sobrescreve trabalho já feito no
+  sistema.
+- Equipamento vai só para o Lado IXC (2º lado) — KIT Instalado (casado
+  pelo número de Access Points, mesmo critério da RN-010 para o Kit
+  declarado), Nobreak, AP Adicional e Conversor, cada um com Descrição e
+  Valor Unitário resolvidos pelo catálogo `KitPadrao` (LPU), filtrado
+  pelo Lote da Escola. Sem correspondência exata no catálogo, o item não
+  é lançado — nunca inventa modelo ou valor (CLAUDE.md §9).
+- Switch e Rack nunca são lançados por este comando: a planilha só
+  informa "tem 1 (ou 2) unidade(s)", sem tamanho/modelo, e a LPU tem
+  várias variantes de cada um (ex.: Switch de 8/16/24/36 portas, Rack
+  3U/5U/7U/9U/Outdoor) — ficam de fora, listados no resumo da execução
+  para lançamento manual.
+- O Lado Relatório EACE (3º lado) nunca é tocado por este comando — fica
+  em branco. Isso não bloqueia a transição do RI por divergência de KIT
+  porque a RN-003 já trata lado vazio como "sem divergência".
+- `Escola.legado=True` é gravado tanto para Escola nova quanto para
+  Escola já existente, sem sobrescrever nenhum outro campo já
+  cadastrado — nunca desmarcado por este comando.
+- Roda em modo simulação por padrão (não grava nada); só grava com
+  `--aplicar`. Idempotente: reexecutar não duplica nada, porque o RI
+  deixa de estar "100% intocado" assim que a 1ª aplicação muda o status.
+- Sem Relatório EACE (MIP) ativo no momento da aplicação, a
+  sincronização da bolinha (RN-081) só gera um aviso — não impede nem
+  desfaz o restante da importação, já concluída.
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.escolas.models.Escola.legado` (campo novo,
+migration `0008_escola_legado`); comando
+`apps.ri.management.commands.importar_ri_legado_eace`; template
+`ri/grid_inep.html` (INEP legado em negrito/branco, com legenda ao
+passar o mouse). Reaproveita, sem alterar,
+`apps.ri.services.sincronizar_divergencia_kit_relatorio` (RN-003) e
+`apps.escolas.services.sincronizar_relatorio_eace_mip_de_todas_as_escolas`
+(RN-081).
+
+**Features relacionadas:** FEAT-038, RN-001, RN-003, RN-008, RN-010,
+RN-011, RN-081.
+
+**Status:** Ativa.
+
+**Revisão (2026-09-10, mesmo dia):** usuário pediu para ampliar o
+critério — os 536 INEPs "ATIVO" com RI já tocado (472 já "Faturamento
+Concluído", 57 "Implantação EACE" com algum dado avulso, 7 já
+"Aguardando validação EACE") também precisam ficar com o Lado 2
+preenchido e status "Aguardando validação EACE", "independente de como
+está o status hoje". Nova flag `--incluir-com-progresso` estende o
+comando aos 550 INEPs "ATIVO" inteiros — inclusive revertendo um RI já
+"Faturamento Concluído" — sem nunca duplicar item já lançado (só cria o
+que ainda não existe: KIT no máximo 1 por RI, RN-015; Nobreak/AP
+Adicional/Conversor por Descrição exata) e sem sobrescrever Data de
+Ativação já preenchida num RI que já tinha a sua. Cor do destaque do
+INEP legado trocada de branco para amarelo (`text-pv-yellow`/
+`bg-pv-black`, a mesma cor de destaque já usada em todo o sistema), a
+pedido do usuário, tanto no Grid de Equipamentos quanto no MIP (RN-092).
+Resultado real da aplicação com `--incluir-com-progresso` no ambiente
+local (2026-09-10): 550 INEPs (0 novos, 529 com status alterado, 21 já
+corretos), 433 itens de equipamento lançados, 28 avisos de Switch/Rack
+sem modelo (nunca inventado, mesmo critério de antes). Efeito colateral
+esperado e assumido pelo usuário: os 471 RIs revertidos de "Faturamento
+Concluído" saem dos cards financeiros do dashboard (RN-025/026, que só
+somam RI nesse status) e voltam a ser visitáveis pelo Sincronizador em
+lote (RN-024) — não é um bug, é a correção pedida.
+
+### RN-092 — Status próprio do MIP (Em Andamento / Aguardando Validação EACE / Faturamento Concluído)
+
+**Descrição:** Campo novo `Escola.status_mip`, independente de
+`Ri.status`, com 3 valores. O Grid de Equipamentos (Projeto >
+Equipamentos, FEAT-007) passa a excluir todo INEP cujo `status_mip` está
+em "Aguardando Validação EACE" ou "Faturamento Concluído" — mas **não**
+"Em Andamento": esse valor é o próprio `Ri.status="andamento"` de
+sempre, então o INEP continua (ou volta a) aparecer lá, com todo o
+acesso normal (RN-011/RN-052). O grid do MIP passa a mostrar os 3 status
+(campo/filtro novo), não mais só "Aguardando validação EACE" como antes
+(RN-074, revista por esta regra).
+
+`Ri.save()` (não `trocar_status_com_log`, pra cobrir qualquer caminho que
+grave o status — troca manual/automática, criação direta, comandos de
+gestão) sincroniza `Escola.status_mip` sempre que `Ri.status` chega em
+"Aguardando validação EACE" ou "Faturamento Concluído" — não só na 1ª
+vez, para permitir o ciclo de ida e volta (RI mandado pra correção e
+depois progredindo sozinho de novo pelo fluxo normal de e-mail/
+financeiro, RN-001, até voltar pro MIP).
+
+Trocar o Status (MIP) pra "Em Andamento" (tela do MIP) passa pela mesma
+validação de transição do RI (`_validar_transicao_status_ri`, inclusive
+a exceção de Administrador da RN-020 quando o RI estava "Faturamento
+Concluído") e pelo mesmo `trocar_status_com_log` — grava
+`Ri.status="andamento"` de verdade, com o mesmo log/histórico de sempre;
+nada duplicado no MIP.
+
+**Exceção (mesmo dia, ampliação):** equipamento "só valor de serviço"
+(RN-089 — catálogo LPU sem "Equipamentos R$", só "Serviços R$") pode ser
+lançado/excluído direto no MIP quando o Status (MIP) está "Aguardando
+Validação EACE" — sem precisar mandar o INEP de volta pra "Em Andamento"
+(reabrindo o RI inteiro), já que esse tipo de item nunca é usado pelo RI,
+só pelo Valor de Serviço do MIP (RN-067/RN-076). Nunca o KIT nem um
+Produto normal por essa rota, mesmo que a URL seja montada à mão;
+exclusão só Administrador (RN-004), mesma regra do RI.
+
+**Contexto:** Usuário pediu, em 2026-09-10, que "Em Andamento" no MIP
+"volte pro RI" com todo o acesso que esse status já tem hoje — desenho
+anterior (mesmo dia) tinha esse status como um valor independente, com
+formulário próprio de Lado IXC duplicado no MIP; usuário corrigiu para
+ser o mesmo `Ri.status`, reaproveitando o formulário/acesso já existente
+do RI, sem duplicar. Na sequência, pediu a exceção do equipamento "só
+valor de serviço" — corrigindo/complementando esse mesmo dia, depois de
+perceber que sem essa exceção não havia mais nenhuma forma de lançar
+esse tipo de item com o INEP em "Aguardando Validação EACE" (nem pelo RI
+— bloqueado pela RN-052 fora de "Em Andamento —, nem pelo MIP, que
+voltou a ser só leitura).
+
+**Critérios:**
+- `status_mip` nasce `None` (nunca esteve no MIP) para toda Escola —
+  sem cor/linha nenhuma até o handoff acontecer (CLAUDE.md §9).
+- Handoff automático (`Ri.save()`): sempre que o RI chega em "Aguardando
+  validação EACE" ou "Faturamento Concluído", `Escola.status_mip` recebe
+  o mesmo valor, se for diferente do atual — cobre criação direta
+  (`Ri.objects.create(status=...)`, comandos de gestão) e troca manual/
+  automática, sem depender de cada chamador lembrar de fazer o handoff.
+- Grid de Equipamentos mostra a Escola quando `status_mip` é `None` ou
+  "Em Andamento" — nos outros 2 valores, o INEP só aparece no MIP.
+  Continua acessível direto por `/ri/<inep>/`, sem esse filtro.
+- "Em Andamento" (MIP) é sempre o mesmo valor de `Ri.status` — nunca um
+  rótulo independente. Bloqueado pela mesma regra de transição do RI
+  (RN-020 incluída); sem RI para o INEP, a troca é recusada.
+- "Aguardando Validação EACE"/"Faturamento Concluído" trocados direto no
+  MIP só mexem em `Escola.status_mip` — nunca tocam `Ri.status`.
+- Equipamento "só valor de serviço": lançamento/exclusão restritos ao
+  catálogo `KitPadrao` sem `valor_equipamento` (RN-089), só com
+  `status_mip="aguardando_validacao_eace"`; formulário nunca oferece o
+  KIT nem um Produto normal (queryset já filtrada); exclusão recusa
+  qualquer item fora desse catálogo, mesmo por URL direta.
+- Nome do INEP legado (RN-091) exibido em negrito/amarelo tanto no Grid
+  de Equipamentos quanto no MIP.
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.escolas.models.Escola.status_mip` (campo
+novo, migrations `0009_escola_status_mip`/
+`0010_backfill_status_mip_faturamento_concluido`); `apps.ri.models.
+Ri.save()` (handoff); `apps.ri.views.grid_inep_view` (filtro `status_mip
+is None OR "em_andamento"`); `apps.escolas.views.mip_inep_view` (filtro/
+coluna Status), `mip_detail_view`, `mip_status_update_view`,
+`mip_item_ixc_somente_servico_salvar_view`,
+`mip_item_ixc_somente_servico_delete_view`; templates `escolas/
+mip_inep.html`, `escolas/mip_detail.html`, `ri/grid_inep.html`.
+Reaproveita, sem alterar, `apps.ri.views._validar_transicao_status_ri` e
+`apps.ri.services.trocar_status_com_log` (RN-001/RN-020) e o catálogo
+`catalogo_ixc_somente_servico` (RN-089, `apps.ri.forms`).
+
+**Features relacionadas:** FEAT-039, RN-001, RN-003, RN-004, RN-008,
+RN-011, RN-020, RN-052, RN-067, RN-074 (substituída por esta), RN-076,
+RN-089, RN-091.
+
+**Status:** Ativa.
+
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-10 | RN-092 criada (Status próprio do MIP — `Escola.status_mip`, independente do `Ri.status`: "Em Andamento"/"Aguardando Validação EACE"/"Faturamento Concluído"; grid de Equipamentos passa a excluir os 2 últimos; "Em Andamento" é o mesmo `Ri.status`, reabre o acesso normal da tela de Equipamentos; equipamento "só valor de serviço", RN-089, ganha lançamento/exclusão próprio no MIP em "Aguardando Validação EACE"); RN-074 marcada como substituída por esta; RN-091 ganha revisão (`--incluir-com-progresso`, estende a importação aos 550 INEPs "ATIVO" inteiros, cor do destaque trocada para amarelo) | Usuário pediu, ao longo do dia, várias correções em sequência sobre o mesmo desenho inicial (MIP com status independente): primeiro que "Em Andamento" voltasse a ser o próprio RI (não um valor novo, duplicado); depois, que a importação valesse pros 550 INEPs inteiros, não só os 100% intocados; por fim, a exceção do equipamento só-serviço, depois de notar que sem ela não haveria mais nenhuma forma de lançar esse item com o INEP fora de "Em Andamento"; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (651 testes, sem regressão; aplicado e validado no servidor local) |
+| 2026-09-10 | RN-091 criada (comando `importar_ri_legado_eace` traz para o sistema, como histórico, os INEPs "ATIVO" do `CONSOLIDADO EACE Atualizado.xlsx` cujo RI ainda estava 100% intocado — equipamento no Lado IXC com valor real da LPU por Lote, status "Aguardando validação EACE", `Escola.legado` para o nome em negrito/branco no Grid de INEPs, histórico do RI e sincronização automática da bolinha do MIP, RN-081) | Usuário pediu a importação; Orquestrador perguntou (CLAUDE.md §9) e usuário confirmou 3 pontos antes da implementação: nunca mexer em RI com progresso real (só 14 de 550 INEPs "ATIVO" eram 100% intocados), usar o valor real da LPU por Lote (não o R$ 0,00 padrão do lançamento manual), e não lançar Switch/Rack sem modelo definido; usuário reportou depois que os INEPs recém-criados ficaram sem a bolinha do grid do MIP — Dev corrigiu rodando a sincronização já existente (RN-081) automaticamente ao final do comando; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (617 testes, sem regressão; aplicado e validado no servidor local) |
 | 2026-09-08 | RN-081 criada (bolinha verde/vermelha no grid do MIP sobre o resultado da última sincronização do Relatório EACE (MIP) — `Escola.encontrado_relatorio_eace_mip`, campo novo; INEP encontrado na planilha mas fora da "Validação EACE" ganha lista própria, "Fora da Validação EACE") | Usuário pediu a bolinha com as combinações planilha×sistema; Orquestrador perguntou (CLAUDE.md §9) e usuário confirmou 2 pontos antes da implementação: o caso "fora da Validação EACE" vira linha nova na lista à parte, e a cor só atualiza depois de "Sincronizar todos os INEPs" rodar, não ao vivo; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (530 testes, sem regressão, validado com dado real de produção) |
 | 2026-09-08 | RN-080 criada (linha de total geral, somando Valor Total IXC/EACE de todos os INEPs filtrados, não só da página); RN-078 criada (colunas Estado/Município substituem Endereço/Município-UF); RN-079 criada (filtros Estado/Município do tipo lista — Município só depois de escolher Estado) | Três pedidos do usuário em sequência, todos só de template/consulta; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (suíte completa, 520 testes, sem regressão) |
 | 2026-09-08 | RN-076 criada (coluna "Valor Total (IXC)" no lugar da coluna Lote, soma quantidade × Valor de serviço); RN-077 criada (coluna "Valor Total (EACE)", destaque em amarelo quando os dois totais divergem) | Usuário pediu para tirar a coluna Lote e colocar o valor total do INEP (Lado IXC) e, na sequência, o mesmo valor do Lado EACE com destaque quando diferente; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (515 testes, sem regressão) |

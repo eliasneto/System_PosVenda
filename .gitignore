@@ -23,6 +23,10 @@ doc/EACE.csv
 doc/FATURAMENTO MATERIAS EACE.xlsx
 doc/FATURAMENTO EACE VALIDAÇÃO FINANCEIRA.xlsx
 
+# Planilha historica usada pelo comando importar_ri_legado_eace (pedido
+# do usuario, 2026-09-10) - dado real de negocio, mesmo padrao acima.
+doc/CONSOLIDADO EACE Atualizado.xlsx
+
 # Planilhas-modelo/fonte real do MIP (FEAT-034/035, mesmo padrao das
 # acima) - "Base MIP.xlsx" e so referencia local (upload real e feito
 # pela tela, RN-069); "FATURAMENTO IMPLANTACAO.xlsx" e modelo fixo lido

@@ -14,18 +14,18 @@
         <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
             MIP
         </h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">INEPs com RI em Validação EACE</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">INEPs no MIP (Em Andamento, Aguardando Validação EACE ou Faturamento Concluído)</p>
     </div>
 
     <div class="flex gap-4">
         <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
-            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Em Validação EACE</p>
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Total no MIP</p>
             <p class="text-xl font-black italic text-pv-yellow">{{ total_inep }}</p>
         </div>
         <!-- RN-071: confronto de Valor de serviço entre Lado IXC (2º) e
              Lado Relatório EACE do MIP (3º) — mesmo card/filtro "Com
              divergência" do Grid de Equipamentos (RN-003). -->
-        <a href="{% url 'mip_inep' %}?divergencia=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}"
+        <a href="{% url 'mip_inep' %}?divergencia=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}{% if status_mip_filtro %}&status_mip={{ status_mip_filtro|urlencode }}{% endif %}"
            class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white hover:ring-2 hover:ring-amber-400 transition {% if divergencia_filtro %}ring-2 ring-pv-yellow{% endif %}"
            title="Clique para filtrar os INEPs com divergência de Valor de serviço">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Com divergência</p>
@@ -36,7 +36,7 @@
              "Com divergência" (RN-071). Sem planilha ativa, não há
              período pra comparar. -->
         {% if planilha_ativa.data_inicial and planilha_ativa.data_final %}
-        <a href="{% url 'mip_inep' %}?periodo=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}"
+        <a href="{% url 'mip_inep' %}?periodo=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}{% if status_mip_filtro %}&status_mip={{ status_mip_filtro|urlencode }}{% endif %}"
            class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white hover:ring-2 hover:ring-amber-400 transition {% if periodo_filtro %}ring-2 ring-pv-yellow{% endif %}"
            title="Clique para filtrar os INEPs com item do Relatório EACE (MIP) entre {{ planilha_ativa.data_inicial|date:'d/m/Y' }} e {{ planilha_ativa.data_final|date:'d/m/Y' }}">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">No período</p>
@@ -85,6 +85,19 @@
         </select>
     </div>
 
+    <!-- RN-092: Status próprio do MIP (`Escola.status_mip`) — os 3
+         valores possíveis, independente do status do RI. -->
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="mip-status" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Status</label>
+        <select id="mip-status" name="status_mip" data-select-placeholder
+                class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase">
+            <option value="">Todos os status</option>
+            {% for valor, rotulo in status_mip_opcoes %}
+            <option value="{{ valor }}" {% if valor == status_mip_filtro %}selected{% endif %}>{{ rotulo }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
     <!-- RN-075 (revista em 2026-09-09): filtro pela Data de Ativação do
          Lado IXC (2º lado) do RI atual (`Ri.data_ativacao`) — dado
          diferente do card do período de Data Emissão ACS (RN-073), que
@@ -115,7 +128,7 @@
         <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
             Filtrar
         </button>
-        {% if q or divergencia_filtro or periodo_filtro or data_inicial_validacao or data_final_validacao or estado_filtro or municipio_filtro %}
+        {% if q or divergencia_filtro or periodo_filtro or data_inicial_validacao or data_final_validacao or estado_filtro or municipio_filtro or status_mip_filtro %}
         <a href="{% url 'mip_inep' %}" class="px-4 py-3 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-2xl hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 dark:hover:text-red-400 transition flex items-center justify-center" title="Limpar filtro">
             <i data-lucide="x" class="w-5 h-5"></i>
         </a>
@@ -140,6 +153,7 @@
                     <th class="px-4 py-2">Nome da Escola</th>
                     <th class="px-4 py-2">Estado</th>
                     <th class="px-4 py-2">Município</th>
+                    <th class="px-4 py-2">Status</th>
                     <th class="px-4 py-2">Valor Total (IXC)</th>
                     <th class="px-4 py-2">Valor Total (EACE)</th>
                 </tr>
@@ -156,12 +170,25 @@
                             {% elif linha.status_planilha_mip == "vermelho" %}
                             <span class="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" title="Não encontrado na última sincronização do Relatório EACE (MIP)."></span>
                             {% endif %}
+                            {% if linha.escola.legado %}
+                            <span class="font-black italic uppercase text-[12px] leading-none text-pv-yellow bg-pv-black px-1.5 py-0.5 rounded"
+                                  title="INEP legado — dados de equipamento vieram do histórico do pós-venda, anterior a este sistema">{{ linha.escola.inep }}</span>
+                            {% else %}
                             <span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[12px] leading-none">{{ linha.escola.inep }}</span>
+                            {% endif %}
                         </div>
                     </td>
                     <td class="px-4 py-2"><span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">{{ linha.escola.nome }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.escola.estado|default:"—" }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.escola.municipio|default:"—" }}</span></td>
+                    <td class="px-4 py-2">
+                        <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
+                            {% if linha.escola.status_mip == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
+                            {% elif linha.escola.status_mip == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
+                            {% else %}bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400{% endif %}">
+                            {{ linha.escola.get_status_mip_display }}
+                        </span>
+                    </td>
                     <td class="px-4 py-2">
                         {% if linha.valor_total_lado2 is not None %}
                         <span class="text-[11px] text-gray-700 dark:text-gray-300 font-bold">R$ {{ linha.valor_total_lado2|intcomma }}</span>
@@ -184,7 +211,7 @@
                     </td>
                 </tr>
                 <tr class="hidden" data-inep-detalhe>
-                    <td colspan="6" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
+                    <td colspan="7" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
                         <div class="flex items-center justify-between gap-3 mb-2">
                             <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">Itens (Kit declarado × IXC × Relatório EACE) — valor de serviço</p>
                             <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="shrink-0 inline-flex items-center gap-1 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400 hover:underline">
@@ -238,7 +265,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="6" class="px-8 py-20 text-center">
+                    <td colspan="7" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="search-x" class="w-8 h-8"></i>
@@ -259,7 +286,7 @@
                  divergência, período), pedido explícito do usuário. -->
             <tfoot>
                 <tr class="text-[11px] font-black uppercase text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/60 border-t-2 border-gray-300 dark:border-gray-700">
-                    <td colspan="4" class="px-4 py-3 text-right">Total geral</td>
+                    <td colspan="5" class="px-4 py-3 text-right">Total geral</td>
                     <td class="px-4 py-2">
                         R$ {{ total_geral_lado2|intcomma }}{% if total_geral_lado2_incompleto %}<span class="text-amber-500 dark:text-amber-400" title="Um ou mais INEPs têm item do Lado IXC sem Valor de serviço encontrado no catálogo — não somado.">*</span>{% endif %}
                     </td>
@@ -279,12 +306,12 @@
         </span>
         <div class="flex gap-2">
             {% if page_obj.has_previous %}
-            <a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+            <a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}{% if status_mip_filtro %}&status_mip={{ status_mip_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-left" class="w-5 h-5"></i>
             </a>
             {% endif %}
             {% if page_obj.has_next %}
-            <a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+            <a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}{% if status_mip_filtro %}&status_mip={{ status_mip_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-right" class="w-5 h-5"></i>
             </a>
             {% endif %}
@@ -303,7 +330,7 @@
     <div class="px-8 py-6 border-b border-red-100 dark:border-red-900/40">
         <p class="text-[10px] font-black uppercase text-red-500 dark:text-red-400 tracking-widest mb-1">Fora da Validação EACE</p>
         <p class="text-xs font-bold text-gray-500 dark:text-gray-400">
-            Estes INEPs apareceram na última sincronização do Relatório EACE (MIP), mas o RI não está em "Aguardando validação EACE" — confira o status na tela de Equipamentos.
+            Estes INEPs apareceram na última sincronização do Relatório EACE (MIP), mas o Status (MIP) não está em "Aguardando Validação EACE" — confira o status na tela de detalhe.
         </p>
     </div>
     <div class="overflow-x-auto contain-layout">
@@ -323,7 +350,12 @@
                     <td class="px-4 py-2">
                         <div class="flex items-center gap-2">
                             <span class="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" title="Encontrado na planilha, mas o RI não está em Validação EACE."></span>
+                            {% if escola.legado %}
+                            <span class="font-black italic uppercase text-[12px] leading-none text-pv-yellow bg-pv-black px-1.5 py-0.5 rounded"
+                                  title="INEP legado — dados de equipamento vieram do histórico do pós-venda, anterior a este sistema">{{ escola.inep }}</span>
+                            {% else %}
                             <span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[12px] leading-none">{{ escola.inep }}</span>
+                            {% endif %}
                         </div>
                     </td>
                     <td class="px-4 py-2"><span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">{{ escola.nome }}</span></td>

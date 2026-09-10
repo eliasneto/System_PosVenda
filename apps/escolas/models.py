@@ -17,6 +17,24 @@ class Escola(models.Model):
         (CONECTADO, "Conectado"),
     ]
 
+    # Pedido do usuário (2026-09-10): status próprio do MIP, independente
+    # de `Ri.status` — a partir do momento em que o RI de um INEP chega em
+    # "Aguardando validação EACE" (RN-001) pela 1ª vez, o INEP "sai" do
+    # grid de Equipamentos (Projeto > Equipamentos, FEAT-007) e passa a
+    # ser controlado só por aqui, no MIP (`apps.ri.services.
+    # trocar_status_com_log` grava `AGUARDANDO_VALIDACAO_EACE` nesse
+    # momento — ver RN-092). Enquanto `None`, o INEP nunca esteve no MIP
+    # (nenhum RI dele chegou lá ainda) — não aparece no grid do MIP, mas
+    # continua no grid de Equipamentos normalmente.
+    EM_ANDAMENTO = "em_andamento"
+    AGUARDANDO_VALIDACAO_EACE = "aguardando_validacao_eace"
+    FATURAMENTO_CONCLUIDO = "faturamento_concluido"
+    STATUS_MIP_CHOICES = [
+        (EM_ANDAMENTO, "Em Andamento"),
+        (AGUARDANDO_VALIDACAO_EACE, "Aguardando Validação EACE"),
+        (FATURAMENTO_CONCLUIDO, "Faturamento Concluído"),
+    ]
+
     inep = models.CharField("INEP", max_length=8, unique=True)
     nome = models.CharField("Nome da escola", max_length=255)
     endereco = models.CharField("Endereço", max_length=255, blank=True)
@@ -55,6 +73,19 @@ class Escola(models.Model):
         blank=True,
         default=None,
     )
+    status_mip = models.CharField(
+        "Status (MIP)",
+        max_length=30,
+        choices=STATUS_MIP_CHOICES,
+        null=True,
+        blank=True,
+        default=None,
+        help_text=(
+            "Gravado automaticamente quando o RI chega em 'Aguardando "
+            "validação EACE' pela 1ª vez (RN-092); editável manualmente "
+            "só na tela do MIP a partir daí."
+        ),
+    )
     cod_fornecedor = models.CharField(
         "Cód. Fornecedor (Relatório EACE MIP)",
         max_length=20,
@@ -65,6 +96,21 @@ class Escola(models.Model):
             "gerar o arquivo Excel pedido pelo usuário. Gravado pelo "
             "Sincronizador do Lado 3, preservado quando o INEP some de uma "
             "rodada (mesma regra do `encontrado_relatorio_eace_mip`)."
+        ),
+    )
+    # Pedido do usuário (2026-09-10): marca um INEP cujo RI nasceu a partir
+    # do histórico legado do pós-venda (planilha "CONSOLIDADO EACE
+    # Atualizado.xlsx", comando `importar_ri_legado_eace`) — atendimento já
+    # realizado antes deste sistema existir, sem lançamento manual pela
+    # tela. Exibido em negrito/amarelo (cor de destaque do sistema) no Grid
+    # de INEPs e no MIP, para diferenciar de um INEP cadastrado/trabalhado
+    # pelo fluxo normal do sistema.
+    legado = models.BooleanField(
+        "Dado legado (histórico anterior ao sistema)",
+        default=False,
+        help_text=(
+            "Marcado automaticamente pela importação do histórico do "
+            "pós-venda — nunca marcado manualmente pela tela."
         ),
     )
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)

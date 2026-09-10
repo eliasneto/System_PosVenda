@@ -390,6 +390,124 @@ class MipInepViewTests(TestCase):
         self.assertNotContains(resp, "Sem RI")
 
 
+class StatusMipHandoffTests(TestCase):
+    """RN-092 (2026-09-10): handoff pro MIP — `Ri.save()` grava
+    `Escola.status_mip` sozinho na 1ª vez que o RI chega em "Aguardando
+    validação EACE" ou "Faturamento Concluído", cobrindo tanto a troca
+    manual/automática de status quanto a criação direta de um RI já
+    nesses status (comandos de gestão, admin)."""
+
+    def test_handoff_ao_trocar_status_para_aguardando_validacao_eace(self):
+        escola = Escola.objects.create(inep="10000001", nome="Escola Teste")
+        ri = Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+        self.assertIsNone(Escola.objects.get(pk=escola.pk).status_mip)
+
+        ri.status = Ri.AGUARDANDO_VALIDACAO_EACE
+        ri.save()
+
+        escola.refresh_from_db()
+        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_handoff_ao_criar_ri_ja_em_aguardando_validacao_eace(self):
+        escola = Escola.objects.create(inep="10000002", nome="Escola Teste")
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+
+        escola.refresh_from_db()
+        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_handoff_ao_chegar_em_faturamento_concluido(self):
+        escola = Escola.objects.create(inep="10000003", nome="Escola Teste")
+        Ri.objects.create(escola=escola, status=Ri.FATURAMENTO_CONCLUIDO)
+
+        escola.refresh_from_db()
+        self.assertEqual(escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+
+    def test_status_mip_e_ressincronizado_quando_o_ri_chega_de_novo_no_status(self):
+        """Revisão da RN-092 (2026-09-10, mesmo dia): "Em Andamento" no
+        MIP volta a ser o `Ri.status="andamento"` de verdade — o RI pode
+        progredir sozinho de novo (fluxo normal de e-mail/financeiro,
+        RN-001) e chegar outra vez em "Aguardando validação EACE"/
+        "Faturamento Concluído". `Ri.save()` precisa sincronizar de novo
+        nesse caso, não só na 1ª vez — senão o MIP ficaria preso
+        mostrando "Em Andamento" para sempre."""
+        escola = Escola.objects.create(
+            inep="10000004", nome="Escola Teste", status_mip=Escola.EM_ANDAMENTO
+        )
+        ri = Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+
+        ri.status = Ri.AGUARDANDO_VALIDACAO_EACE
+        ri.save()
+
+        escola.refresh_from_db()
+        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_outros_status_do_ri_nao_disparam_handoff(self):
+        escola = Escola.objects.create(inep="10000005", nome="Escola Teste")
+        Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+
+        escola.refresh_from_db()
+        self.assertIsNone(escola.status_mip)
+
+
+class MipInepStatusFiltroTests(TestCase):
+    """RN-092: grid do MIP passa a mostrar os 3 status (`Escola.
+    status_mip`), não só "Aguardando validação EACE" (RN-074, revista)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="analista", password="senha-teste-123")
+
+    def test_mostra_ineps_nos_3_status(self):
+        em_andamento = Escola.objects.create(inep="10000001", nome="Escola Andamento")
+        Ri.objects.create(escola=em_andamento, status=Ri.ANDAMENTO)
+        em_andamento.status_mip = Escola.EM_ANDAMENTO
+        em_andamento.save()
+
+        aguardando = Escola.objects.create(inep="10000002", nome="Escola Validacao")
+        Ri.objects.create(escola=aguardando, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+
+        concluido = Escola.objects.create(inep="10000003", nome="Escola Concluida")
+        Ri.objects.create(escola=concluido, status=Ri.FATURAMENTO_CONCLUIDO)
+
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_inep"))
+        self.assertContains(resp, em_andamento.inep)
+        self.assertContains(resp, aguardando.inep)
+        self.assertContains(resp, concluido.inep)
+
+    def test_filtro_por_status(self):
+        em_andamento = Escola.objects.create(
+            inep="10000001", nome="Escola Andamento", status_mip=Escola.EM_ANDAMENTO
+        )
+        aguardando = Escola.objects.create(inep="10000002", nome="Escola Validacao")
+        Ri.objects.create(escola=aguardando, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_inep"), {"status_mip": Escola.EM_ANDAMENTO})
+        self.assertContains(resp, em_andamento.inep)
+        self.assertNotContains(resp, aguardando.inep)
+
+    def test_sem_handoff_nao_aparece(self):
+        escola = Escola.objects.create(inep="10000004", nome="Escola Sem Handoff")
+        Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_inep"))
+        self.assertNotContains(resp, escola.inep)
+
+    def test_inep_legado_mostra_o_mesmo_destaque_do_grid_de_equipamentos(self):
+        """Bug reportado pelo usuário (2026-09-10): o INEP legado
+        (`Escola.legado=True`, `importar_ri_legado_eace`) nasce direto em
+        "Aguardando validação EACE" — nunca aparece no grid de
+        Equipamentos (RN-092), só aqui no MIP. O destaque em negrito/
+        branco precisa aparecer aqui também, não só lá."""
+        escola = Escola.objects.create(inep="10000005", nome="Escola Legado", legado=True)
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_inep"))
+        self.assertContains(resp, "INEP legado")
+
+
 class MipInepDrilldownTests(TestCase):
     """Projeto > MIP, drill-down dos 3 lados (RN combinada com o usuário,
     2026-09-07): lados 1 e 2 mostram os mesmos itens do RI (RiItemEace/
@@ -1313,6 +1431,260 @@ class MipDetailViewTests(TestCase):
             reverse("mip_detail", kwargs={"inep": self.escola.inep}),
             count=3,
         )
+
+
+class MipStatusUpdateViewTests(TestCase):
+    """RN-092 (revista em 2026-09-10): troca do Status (MIP). "Aguardando
+    Validação EACE"/"Faturamento Concluído" só mexem em `Escola.
+    status_mip` (label do MIP). "Em Andamento" é diferente — é o mesmo
+    `Ri.status="andamento"` de sempre: o INEP volta a aparecer no grid de
+    Equipamentos, com todo o acesso normal de lá (RN-011/RN-052)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista", password="senha-teste-123", perfil=User.PERFIL_ANALISTA,
+        )
+        self.admin = User.objects.create_user(
+            username="admin-mip-status", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.escola = Escola.objects.create(
+            inep="10000001", nome="Escola Teste", status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+        )
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_exige_login(self):
+        resp = self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.EM_ANDAMENTO},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_em_andamento_volta_o_ri_de_verdade_e_reaparece_no_grid_de_equipamentos(self):
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.EM_ANDAMENTO},
+        )
+        self.escola.refresh_from_db()
+        self.ri.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.EM_ANDAMENTO)
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
+        # Mesmo log automático de troca de status do RI (RN-008), não um
+        # log separado do MIP — é o mesmo `trocar_status_com_log`.
+        self.assertTrue(
+            self.ri.historico.filter(tipo=RiHistorico.LOG_STATUS, campo="Status do RI").exists()
+        )
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, self.escola.inep)
+
+    def test_em_andamento_bloqueado_pela_mesma_regra_do_ri_rn020(self):
+        """RN-020: com o RI em "Faturamento Concluído", só Administrador
+        muda o status — vale também pra tentativa de "Em Andamento" vinda
+        do MIP, porque reaproveita a mesma validação do RI."""
+        self.escola.status_mip = Escola.FATURAMENTO_CONCLUIDO
+        self.escola.save()
+        self.ri.status = Ri.FATURAMENTO_CONCLUIDO
+        self.ri.save()
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.EM_ANDAMENTO},
+        )
+        self.escola.refresh_from_db()
+        self.ri.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_CONCLUIDO)
+
+    def test_administrador_consegue_em_andamento_a_partir_de_faturamento_concluido(self):
+        self.escola.status_mip = Escola.FATURAMENTO_CONCLUIDO
+        self.escola.save()
+        self.ri.status = Ri.FATURAMENTO_CONCLUIDO
+        self.ri.save()
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.EM_ANDAMENTO},
+        )
+        self.escola.refresh_from_db()
+        self.ri.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.EM_ANDAMENTO)
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
+
+    def test_aguardando_validacao_eace_so_mexe_no_status_mip(self):
+        """Ida/volta pra "Aguardando Validação EACE" direto do MIP não
+        mexe no `Ri.status` — só quem faz isso é "Em Andamento"."""
+        self.escola.status_mip = Escola.EM_ANDAMENTO
+        self.escola.save()
+        self.ri.status = Ri.ANDAMENTO
+        self.ri.save()
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.AGUARDANDO_VALIDACAO_EACE},
+        )
+        self.escola.refresh_from_db()
+        self.ri.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO)  # Ri.status nao mudou
+        self.assertTrue(
+            self.ri.historico.filter(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)").exists()
+        )
+
+    def test_valor_invalido_nao_altera_nada(self):
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": "valor-invalido"},
+        )
+        self.escola.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_sem_ri_nao_consegue_ir_para_em_andamento(self):
+        escola_sem_ri = Escola.objects.create(
+            inep="10000002", nome="Escola Sem RI", status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+        )
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": escola_sem_ri.inep}),
+            {"status_mip": Escola.EM_ANDAMENTO},
+        )
+        escola_sem_ri.refresh_from_db()
+        self.assertEqual(escola_sem_ri.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+
+class MipItemIxcSomenteServicoTests(TestCase):
+    """RN-089/RN-092 (ampliação, 2026-09-10): equipamento só valor de
+    serviço (LPU sem "Equipamentos R$") pode ser lançado/excluído direto
+    no MIP quando `Escola.status_mip == "Aguardando Validação EACE"` —
+    exceção pontual, nunca o KIT nem um Produto normal, e sem precisar
+    mandar o INEP de volta pra "Em Andamento"."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-mip-servico", password="senha-teste-123", perfil=User.PERFIL_ANALISTA,
+        )
+        self.admin = User.objects.create_user(
+            username="admin-mip-servico", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.escola = Escola.objects.create(
+            inep="10000001", nome="Escola Teste", lote=9, status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+        )
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.injetor = KitPadrao.objects.create(
+            descricao="Injetor PoE (serviço, material, equipamento)", lote=9, unidade="Unidade",
+            valor_equipamento=None, valor_servico="564.04",
+        )
+        self.kit_normal = KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9, unidade="Escola",
+            valor_equipamento="1000.00", valor_servico="200.00",
+        )
+
+    def test_lancar_equipamento_quando_aguardando_validacao_eace(self):
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_item_ixc_somente_servico_salvar", kwargs={"inep": self.escola.inep}),
+            {
+                "produto_servico_mip-TOTAL_FORMS": 1, "produto_servico_mip-INITIAL_FORMS": 0,
+                "produto_servico_mip-0-produto": self.injetor.pk, "produto_servico_mip-0-quantidade": 2,
+            },
+        )
+        item = self.ri.itens_ixc.get()
+        self.assertEqual(item.descricao_item, "Injetor PoE")
+        self.assertEqual(item.quantidade, 2)
+        self.assertEqual(item.valor_unitario, Decimal("0"))
+        self.assertFalse(item.eh_kit)
+
+    def test_lancamento_bloqueado_fora_de_aguardando_validacao_eace(self):
+        self.escola.status_mip = Escola.EM_ANDAMENTO
+        self.escola.save()
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_item_ixc_somente_servico_salvar", kwargs={"inep": self.escola.inep}),
+            {
+                "produto_servico_mip-TOTAL_FORMS": 1, "produto_servico_mip-INITIAL_FORMS": 0,
+                "produto_servico_mip-0-produto": self.injetor.pk, "produto_servico_mip-0-quantidade": 2,
+            },
+        )
+        self.assertFalse(self.ri.itens_ixc.exists())
+
+    def test_catalogo_nao_aceita_kit_nem_produto_normal(self):
+        """O formset só oferece o catálogo restrito (RN-089) — um `pk` de
+        KIT (Unidade "Escola", com valor de equipamento) é inválido."""
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_item_ixc_somente_servico_salvar", kwargs={"inep": self.escola.inep}),
+            {
+                "produto_servico_mip-TOTAL_FORMS": 1, "produto_servico_mip-INITIAL_FORMS": 0,
+                "produto_servico_mip-0-produto": self.kit_normal.pk, "produto_servico_mip-0-quantidade": 1,
+            },
+        )
+        self.assertFalse(self.ri.itens_ixc.exists())
+
+    def test_excluir_item_administrador(self):
+        item = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
+        )
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item.pk})
+        )
+        self.assertFalse(RiItemIxc.objects.filter(pk=item.pk).exists())
+
+    def test_excluir_item_analista_e_negado(self):
+        item = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
+        )
+        self.client.force_login(self.user)
+        resp = self.client.post(
+            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item.pk})
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
+
+    def test_nao_exclui_kit_nem_produto_normal_por_esta_rota(self):
+        """Mesmo o Administrador não consegue excluir o KIT ou um Produto
+        normal por esta rota restrita — só itens do catálogo RN-089."""
+        item_kit = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+            quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        item_produto = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Produto Qualquer", quantidade=1, valor_unitario="0",
+        )
+        self.client.force_login(self.admin)
+        resp_kit = self.client.post(
+            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item_kit.pk})
+        )
+        resp_produto = self.client.post(
+            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item_produto.pk})
+        )
+        self.assertEqual(resp_kit.status_code, 403)
+        self.assertEqual(resp_produto.status_code, 403)
+        self.assertTrue(RiItemIxc.objects.filter(pk=item_kit.pk).exists())
+        self.assertTrue(RiItemIxc.objects.filter(pk=item_produto.pk).exists())
+
+    def test_exclusao_bloqueada_fora_de_aguardando_validacao_eace(self):
+        item = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
+        )
+        self.escola.status_mip = Escola.EM_ANDAMENTO
+        self.escola.save()
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item.pk})
+        )
+        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
+
+    def test_tela_do_mip_mostra_formulario_so_com_status_correto(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "Equipamento (só valor de serviço)")
+
+        self.escola.status_mip = Escola.EM_ANDAMENTO
+        self.escola.save()
+        resp2 = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp2, "Equipamento (só valor de serviço)")
 
 
 _MEDIA_ROOT_TESTE_MIP_NF_FINANCEIRO = tempfile.mkdtemp()

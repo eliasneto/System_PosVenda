@@ -147,6 +147,36 @@ class Ri(models.Model):
     def __str__(self):
         return f"RI {self.escola.inep} - {self.get_status_display()}"
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # RN-092 (2026-09-10; revista no mesmo dia): sempre que este RI
+        # chega em "Aguardando validação EACE" ou "Faturamento Concluído",
+        # sincroniza o mesmo valor em `Escola.status_mip` — não só na 1ª
+        # vez. A partir daí o INEP "sai" do grid de Equipamentos (FEAT-007)
+        # e passa a ser controlado só pelo MIP.
+        #
+        # Revisão: "Em Andamento" (MIP) é o único status que faz o INEP
+        # "voltar" pro RI de verdade (mesmo `Ri.status="andamento"`, mesmo
+        # acesso de sempre — RN-052/RN-011 — na tela de Equipamentos, ver
+        # `apps.escolas.views.mip_status_update_view`). Por isso, quando o
+        # RI volta a progredir sozinho (fluxo normal de e-mail/financeiro,
+        # RN-001) e chega de novo em "Aguardando validação EACE" ou
+        # "Faturamento Concluído", este `save()` precisa sincronizar
+        # `status_mip` de novo (não só a 1ª vez) — senão o INEP ficaria
+        # preso mostrando "Em Andamento" no MIP para sempre, mesmo já
+        # tendo avançado.
+        #
+        # No `save()` do model (não em `trocar_status_com_log`) para
+        # cobrir qualquer caminho que grave o status — troca manual/
+        # automática, criação direta (`Ri.objects.create(status=...)`,
+        # comandos de gestão, admin) —, sem depender de cada chamador
+        # lembrar de fazer o handoff.
+        if self.status in (self.AGUARDANDO_VALIDACAO_EACE, self.FATURAMENTO_CONCLUIDO):
+            escola = self.escola
+            if escola.status_mip != self.status:
+                escola.status_mip = self.status  # mesmos valores em Ri e Escola
+                escola.save(update_fields=["status_mip"])
+
 
 class KitPadrao(models.Model):
     """Catálogo de valores fixos por produto/kit (RN-010), usado para

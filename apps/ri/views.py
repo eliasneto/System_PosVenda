@@ -439,13 +439,30 @@ def grid_inep_view(request):
     "Responsável" (RN-012) não é coluna desta tabela — aparece só dentro do
     drill-down, editável. O cadastro do RI e dos itens é feito na tela da
     FEAT-004 (`ri_detail`).
+
+    RN-092 (2026-09-10; revista no mesmo dia): INEP cujo `Escola.
+    status_mip` está em "Aguardando validação EACE" ou "Faturamento
+    Concluído" "sai" deste grid — passa a ser controlado só pelo MIP
+    (Projeto > MIP). Exceção: `status_mip="Em Andamento"` continua (ou
+    volta a) aparecer aqui normalmente — esse status do MIP É o
+    `Ri.status="andamento"` de verdade, com todo o acesso de sempre desta
+    tela (RN-052/RN-011); só os outros 2 status tiram o INEP daqui.
+    Continua acessível direto por `/ri/<inep>/` (tela de detalhe), que
+    não tem esse filtro de qualquer forma.
     """
     q = (request.GET.get("q") or "").strip()
     status_conexao_filtro = (request.GET.get("status_conexao") or "").strip()
     status_ri_filtro = (request.GET.get("status_ri") or "").strip()
     divergencia_filtro = (request.GET.get("divergencia") or "").strip() == "1"
 
-    escolas = Escola.objects.all().order_by("nome")
+    # `.exclude(status_mip__in=[...])` sozinho excluiria também quem nunca
+    # entrou no MIP (`status_mip` NULL) — três-valores do SQL faz `NOT
+    # (NULL IN (...))` virar NULL, tratado como falso pelo WHERE; por isso
+    # o filtro positivo abaixo (nunca entrou OU está "Em Andamento"), em
+    # vez de um exclude.
+    escolas = Escola.objects.filter(
+        Q(status_mip__isnull=True) | Q(status_mip=Escola.EM_ANDAMENTO)
+    ).order_by("nome")
     if q:
         escolas = escolas.filter(
             Q(inep__icontains=q)

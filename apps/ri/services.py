@@ -472,7 +472,12 @@ def trocar_status_com_log(ri, novo_status, usuario):
     `usuario=None` é válido (RiHistorico.autor aceita nulo) — a leitura da
     caixa de e-mail é uma rotina automática, sem usuário logado.
 
-    FEAT-010/RF-11: ao concluir manualmente, grava `concluido_em`."""
+    FEAT-010/RF-11: ao concluir manualmente, grava `concluido_em`.
+
+    RN-092 (2026-09-10): o handoff pro MIP (`Escola.status_mip`) acontece
+    em `Ri.save()` (models.py), não aqui — cobre também quem cria/atualiza
+    um RI direto (`Ri.objects.create(...)`, comandos de gestão, admin),
+    sem depender de passar por esta função."""
     status_anterior = ri.get_status_display()
     ri.status = novo_status
     campos_alterados = ["status", "atualizado_em"]
