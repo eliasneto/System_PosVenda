@@ -7,18 +7,12 @@ _Última atualização: 2026-09-03_
 > agente DevOps nunca dispara isso sozinho, mesmo tendo o passo a passo
 > pronto.
 
-## Homologação — fluxo automático (quando o servidor existir)
+## Homologação — deploy manual (sem CI/CD)
 
-Pipeline `.github/workflows/homolog.yml`: push direto na branch `homolog`
-→ CI (`check`/`test`/build) → se passar, conecta via SSH e roda
-`scripts/deploy_homolog.sh` no servidor. Secrets necessários no GitHub:
-`HML_HOST`, `HML_USER`, `HML_PORT`, `HML_SSH_KEY` (ver `CI_CD.md`).
-
-Hoje isso ainda não roda de ponta a ponta: não há servidor de
-homologação dedicado provisionado (pendência aberta em
-`architecture.md`, "Decisões Pendentes"). O que existe em produção
-(`192.168.90.109`) foi uma correção pontual (`ADR-003`), não este
-pipeline.
+Este projeto não usa pipeline de CI/CD (decisão do usuário) — todo deploy,
+em qualquer ambiente, é manual via SSH, rodando `scripts/deploy_homolog.sh`
+direto no servidor (ele detecta sozinho a branch com checkout feito lá,
+sem nome de branch fixo).
 
 Equivalente manual do que o script faz, para rodar direto num servidor
 com `.env.hml` já preenchido — um servidor de homologação **novo**, sem
@@ -27,8 +21,8 @@ o histórico de volume do `192.168.90.109` (seção abaixo), não precisa do
 
 ```bash
 cd /home/Sistem_PosVenda   # ou o caminho real do checkout
-git fetch origin homolog
-git reset --hard origin/homolog
+git fetch origin <branch_com_checkout_no_servidor>
+git reset --hard origin/<branch_com_checkout_no_servidor>
 docker compose -f docker-compose.hml.yml --env-file .env.hml up -d --build
 docker compose -f docker-compose.hml.yml --env-file .env.hml up -d --wait db
 docker compose -f docker-compose.hml.yml --env-file .env.hml exec -T web python manage.py migrate --noinput
@@ -263,6 +257,5 @@ sudo userdel -r <usuario_consulta>
 ## Ver também
 
 - `CONTAINERS.md` — o que cada serviço faz e por quê.
-- `CI_CD.md` — secrets e o pipeline de homologação.
 - `TROUBLESHOOTING.md` — sintomas comuns (estático quebrado, `db` não
   sobe) e como diagnosticar.

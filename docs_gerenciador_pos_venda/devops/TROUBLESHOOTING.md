@@ -154,7 +154,7 @@ variável de ambiente envolvida.
 
 **Causa:** `doc/FATURAMENTO MATERIAS EACE.xlsx` está no `.gitignore` (é a
 planilha-modelo real de faturamento, tratada como dado sensível/local, não
-código). Como o deploy faz `git reset --hard origin/homolog`, esse arquivo
+código). Como o deploy faz `git reset --hard origin/<branch>`, esse arquivo
 nunca chega ao servidor — e sem volume dedicado, some a cada rebuild da
 imagem.
 
@@ -167,11 +167,10 @@ pelo `manage.py shell` (sem depender de sessão autenticada no navegador).
 
 **Atenção:** `scripts/deploy_homolog.sh` só incluía `-f
 docker-compose.hml.yml` nos comandos — sem o `-f
-docker-compose.hml.override.yml`, o próximo deploy automático recriaria os
+docker-compose.hml.override.yml`, o próximo deploy recriaria os
 containers **sem** `doc_hml` nem o volume externo do banco, revertendo os
 dois problemas desta página. Corrigido no script (inclui o override
-automaticamente quando o arquivo existe no servidor) — mas essa correção
-só entra em vigor depois de mergeada/publicada na branch `homolog`.
+automaticamente quando o arquivo existe no servidor).
 
 **Se o modelo da planilha mudar no futuro:** repetir o `docker cp` do
 arquivo novo para dentro do container `web` em `/app/doc/` (o volume
@@ -296,10 +295,3 @@ neste servidor deve terminar com esse `restart nginx` — não é opcional,
 é sempre necessário depois de recriar o `web` especificamente. Validar
 com `curl -I http://192.168.90.109:8000/login/` (esperado `200`) antes de
 considerar o deploy concluído.
-
-### Deploy automático (push na branch `homolog`) não dispara ou falha no job "deploy"
-
-Confirmar que os secrets (`HML_HOST`, `HML_USER`, `HML_PORT`,
-`HML_SSH_KEY`) estão cadastrados no GitHub (`CI_CD.md`) — sem eles o job
-"deploy" falha na conexão SSH, mesmo com o "ci" verde. O job "deploy" só
-roda em push direto na branch `homolog`, nunca em Pull Request.

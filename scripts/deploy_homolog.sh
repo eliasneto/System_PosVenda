@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Deploy de homologacao do Gerenciador Pos-Venda (FEAT-012).
 #
-# Rodado no SERVIDOR de homologacao (via SSH, disparado pelo pipeline
-# .github/workflows/homolog.yml) - nao roda localmente. Segue o fluxo
-# documentado em .claude/agents/devops.md:
+# Rodado NA MAO no SERVIDOR de homologacao, via SSH - nao ha pipeline de
+# CI/CD neste projeto (decisao do usuario: deploy sempre manual via SSH).
+# Segue o fluxo documentado em .claude/agents/devops.md:
 #   Atualiza codigo -> Sobe containers -> Migrations -> Collectstatic
 #
 # Caminho conhecido no servidor de homologacao (docs_gerenciador_pos_venda/
@@ -19,9 +19,13 @@ ENV_FILE=".env.hml"
 echo "==> Entrando em ${DEPLOY_DIR}"
 cd "${DEPLOY_DIR}"
 
-echo "==> Atualizando codigo (branch homolog)"
-git fetch origin homolog
-git reset --hard origin/homolog
+# Sem branch fixa "homolog" - atualiza a branch que ja estiver com checkout
+# feito no servidor (hoje feat-002-importar-escolas-planilha, mas isso muda
+# ao longo do projeto; nunca hardcodar aqui).
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+echo "==> Atualizando codigo (branch ${BRANCH})"
+git fetch origin "${BRANCH}"
+git reset --hard "origin/${BRANCH}"
 
 if [ ! -f "${ENV_FILE}" ]; then
     echo "ERRO: ${ENV_FILE} nao encontrado em ${DEPLOY_DIR}." >&2
