@@ -857,18 +857,35 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
     — nunca o valor bruto da planilha, que é só conferência (o próprio
     usuário confirmou que já deve bater com o do catálogo).
 
-    Item já lançado (mesma Descrição + Quantidade) não duplica ao
-    sincronizar de novo — mas os 4 campos fechados (Num OSP, Validação
-    OSP, Nota Fiscal, "Status Equip") são atualizados nele quando a
-    planilha ativa trouxer um valor novo e diferente do já gravado
-    (correção 2026-08-28, `_atualizar_campos_fechados_item_existente`):
-    cobre o caso real de a EACE emitir a Nota Fiscal só depois de o item
-    já ter sido sincronizado sem ela. RI que já tem um KIT lançado nesse
-    lado (RN-015) não ganha outro — a linha da planilha some para a lista
+    Item já lançado (mesma Descrição + Quantidade, e para Produto avulso
+    também mesmo Num OSP — RN-094) não duplica ao sincronizar de novo —
+    mas os 4 campos fechados (Num OSP, Validação OSP, Nota Fiscal, "Status
+    Equip") são atualizados nele quando a planilha ativa trouxer um valor
+    novo e diferente do já gravado (correção 2026-08-28,
+    `_atualizar_campos_fechados_item_existente`): cobre o caso real de a
+    EACE emitir a Nota Fiscal só depois de o item já ter sido
+    sincronizado sem ela. RI que já tem um KIT lançado nesse lado
+    (RN-015) não ganha outro — a linha da planilha some para a lista
     "kit_ignorado" em vez de bloquear o resto da sincronização, mas o KIT
     já lançado também recebe essa atualização. Item sem correspondência
     no catálogo, ou com Quantidade inválida, nunca é lançado — fica nas
     listas devolvidas para o usuário decidir (CLAUDE.md §9).
+
+    RN-094 (nova, a formalizar pelo Orquestrador em business_rules.md;
+    correção de bug, 2026-09-11): a chave de casamento de Produto avulso
+    passa a incluir o Num OSP da linha (a de KIT continua só por
+    Descrição — RN-015 permite no máximo 1 por INEP, independente do
+    OSP). A Planilha EACE real pode trazer 2 linhas com a mesma Descrição
+    para o mesmo INEP, vindas de provisões/OSP diferentes (ex.: 2 Nobreak
+    comprados em 2 Ordens de Serviço Provisórias distintas) — antes desta
+    correção, a 2ª linha colidia com a 1ª (mesma Descrição + Quantidade)
+    e virava "duplicado" dela, perdendo o item e sobrescrevendo o Num OSP
+    já gravado no lugar de criar um segundo item (caso real do NEP
+    53005015, 2 Nobreak com OSP diferente — reportado pelo usuário,
+    2026-09-11). Item lançado manualmente (Num OSP em branco) continua
+    sendo "confirmado" pela 1ª linha real da mesma Descrição, preenchendo
+    o Num OSP nele em vez de virar um item novo ao lado (mesmo
+    comportamento de antes desta correção).
 
     RN-022 (ampliada, 2026-08-27): também grava Num OSP, Validação OSP e
     Nota Fiscal (colunas "Num OSP"/"Validação OSP"/"Nota Fiscal" da mesma
@@ -941,19 +958,25 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
     substituir_pela_ultima_planilha = ri.status not in (Ri.IMPLANTACAO_EACE, Ri.ANDAMENTO)
 
     itens_existentes_lista = list(ri.itens_relatorio_eace.all())
-    # RN-046 (correção, 2026-08-28): dicionário (não mais um set) para
-    # conseguir, no item já lançado (`duplicados` abaixo), reaproveitar o
-    # objeto e atualizar o "Status escola" — item lançado antes desta
-    # regra existir nasceu com o campo em branco e uma nova sincronização
-    # não criava outro item (mesma Descrição + Quantidade), então nunca
-    # preenchia o valor. Num OSP/Validação OSP/Nota Fiscal (RN-022
-    # ampliada) continuam só na criação — não fazem parte deste ajuste.
-    itens_existentes = {(item.descricao_item, item.quantidade): item for item in itens_existentes_lista}
-    # RN-062: índice só por Descrição, usado exclusivamente no modo
-    # "substituir pela última planilha" — casa o mesmo item mesmo quando a
+    # RN-062: índice por Descrição — casa KIT (RN-015 permite no máximo 1
+    # por INEP, independente do OSP) e, no modo "substituir pela última
+    # planilha", também reconhece o mesmo Produto avulso quando só a
     # Quantidade/Valor mudou de uma planilha para outra.
     itens_existentes_por_descricao = {item.descricao_item: item for item in itens_existentes_lista}
-    descricoes_confirmadas = set()
+    # RN-094 (2026-09-11): índice de Produto avulso por Descrição + Num
+    # OSP. Sem isto, 2 linhas com a mesma Descrição e Num OSP diferentes
+    # no mesmo INEP (2 provisões/OSP distintos comprando o mesmo
+    # equipamento, ex.: 2 Nobreak) colidiam no índice só por Descrição — a
+    # 2ª linha virava "duplicado" da 1ª, perdendo o item e sobrescrevendo
+    # o Num OSP já gravado (caso real do NEP 53005015). Item lançado
+    # manualmente nasce com Num OSP em branco — fica indexado em
+    # `(descrição, "")`, e a 1ª linha real com essa Descrição o "confirma"
+    # (fallback logo abaixo, no loop), preenchendo o Num OSP nele em vez
+    # de criar um item novo ao lado.
+    itens_existentes_por_descricao_osp = {
+        (item.descricao_item, item.num_osp): item for item in itens_existentes_lista
+    }
+    itens_confirmados = set()  # RN-094: por pk do item (2 itens podem repetir a Descrição, acima).
     kit_existente_no_ri = next((item for item in itens_existentes_lista if item.eh_kit), None)
     kit_ja_lancado = kit_existente_no_ri is not None
 
@@ -987,7 +1010,24 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
                 continue
 
         descricao_item = catalogo.descricao_curta or catalogo.descricao
+        num_osp_linha = (linha.get("Num OSP") or "").strip()
         item_mesma_descricao = itens_existentes_por_descricao.get(descricao_item)
+        # RN-094: Produto avulso casa também pelo Num OSP da linha — KIT
+        # continua casando só por Descrição (`item_mesma_descricao`, acima
+        # — RN-015 permite no máximo 1 KIT por INEP, independente do OSP).
+        if eh_kit:
+            item_correspondente = item_mesma_descricao
+        else:
+            item_correspondente = itens_existentes_por_descricao_osp.get((descricao_item, num_osp_linha))
+            if item_correspondente is None and num_osp_linha:
+                # Item lançado manualmente (Num OSP em branco) confirmado
+                # pela 1ª linha real desta Descrição (RN-062) — a chave
+                # "sem OSP" sai do índice assim que usada, para uma 2ª
+                # linha com outro Num OSP (2 equipamentos de verdade, não
+                # o mesmo item) não reaproveitar o mesmo slot.
+                item_correspondente = itens_existentes_por_descricao_osp.pop((descricao_item, ""), None)
+                if item_correspondente is not None:
+                    itens_existentes_por_descricao_osp[(descricao_item, num_osp_linha)] = item_correspondente
 
         # RN-015 (estendida pela RN-018): comportamento de sempre (RN-046)
         # preservado fora do modo RN-062 — KIT já lançado sempre cai em
@@ -1001,9 +1041,7 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
             substituir_pela_ultima_planilha and item_mesma_descricao is not None
         ):
             resultado["kit_ignorado"].append(descricao_item)
-            _atualizar_campos_fechados_item_existente(
-                itens_existentes.get((descricao_item, quantidade)), linha
-            )
+            _atualizar_campos_fechados_item_existente(item_mesma_descricao, linha)
             # RN-062: o KIT já lançado (RN-015, sempre 1 por INEP) fica
             # protegido de remoção mesmo sem ser confirmado por esta linha
             # — é justamente o caso de a planilha trazer um KIT diferente
@@ -1011,39 +1049,38 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
             # o KIT que deveria ficar intacto seria removido no final por
             # "não veio na planilha".
             if kit_existente_no_ri is not None:
-                descricoes_confirmadas.add(kit_existente_no_ri.descricao_item)
+                itens_confirmados.add(kit_existente_no_ri.pk)
             continue
 
-        if substituir_pela_ultima_planilha and item_mesma_descricao is not None:
-            # RN-062: mesmo item de antes (mesma Descrição) — atualiza em
-            # vez de duplicar, mesmo que a Quantidade/Valor tenha mudado.
-            descricoes_confirmadas.add(descricao_item)
+        if substituir_pela_ultima_planilha and item_correspondente is not None:
+            # RN-062: mesmo item de antes (mesma Descrição, e para Produto
+            # avulso também mesmo Num OSP — RN-094) — atualiza em vez de
+            # duplicar, mesmo que a Quantidade/Valor tenha mudado.
+            itens_confirmados.add(item_correspondente.pk)
             valor_unitario_novo = catalogo.valor_faturavel
             if (
-                item_mesma_descricao.quantidade != quantidade
-                or item_mesma_descricao.valor_unitario != valor_unitario_novo
+                item_correspondente.quantidade != quantidade
+                or item_correspondente.valor_unitario != valor_unitario_novo
             ):
-                resumo_anterior = _resumo_item_relatorio_eace(item_mesma_descricao)
-                item_mesma_descricao.quantidade = quantidade
-                item_mesma_descricao.valor_unitario = valor_unitario_novo
-                item_mesma_descricao.origem_sincronizador = True
-                item_mesma_descricao.save(
+                resumo_anterior = _resumo_item_relatorio_eace(item_correspondente)
+                item_correspondente.quantidade = quantidade
+                item_correspondente.valor_unitario = valor_unitario_novo
+                item_correspondente.origem_sincronizador = True
+                item_correspondente.save(
                     update_fields=["quantidade", "valor_unitario", "origem_sincronizador"]
                 )
-                resultado["atualizados"].append((item_mesma_descricao, resumo_anterior))
+                resultado["atualizados"].append((item_correspondente, resumo_anterior))
             else:
                 resultado["duplicados"].append(descricao_item)
-                if not item_mesma_descricao.origem_sincronizador:
-                    item_mesma_descricao.origem_sincronizador = True
-                    item_mesma_descricao.save(update_fields=["origem_sincronizador"])
-            _atualizar_campos_fechados_item_existente(item_mesma_descricao, linha)
+                if not item_correspondente.origem_sincronizador:
+                    item_correspondente.origem_sincronizador = True
+                    item_correspondente.save(update_fields=["origem_sincronizador"])
+            _atualizar_campos_fechados_item_existente(item_correspondente, linha)
             continue
 
-        if (descricao_item, quantidade) in itens_existentes:
+        if item_correspondente is not None and item_correspondente.quantidade == quantidade:
             resultado["duplicados"].append(descricao_item)
-            _atualizar_campos_fechados_item_existente(
-                itens_existentes[(descricao_item, quantidade)], linha
-            )
+            _atualizar_campos_fechados_item_existente(item_correspondente, linha)
             continue
 
         item = RiItemRelatorioEace.objects.create(
@@ -1061,9 +1098,8 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
             # lidos direto da mesma linha da planilha que originou o item.
             **_valores_fechados_da_linha(linha),
         )
-        itens_existentes[(descricao_item, quantidade)] = item
         itens_existentes_por_descricao[descricao_item] = item
-        descricoes_confirmadas.add(descricao_item)
+        itens_existentes_por_descricao_osp[(descricao_item, num_osp_linha)] = item
         resultado["criados"].append(item)
         if eh_kit:
             kit_ja_lancado = True
@@ -1074,8 +1110,13 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
         # registra o "antes" no histórico (a view grava o "depois").  Item
         # lançado manualmente (`origem_sincronizador=False`) nunca entra
         # aqui, mesmo ausente da planilha.
-        for descricao_item, item in itens_existentes_por_descricao.items():
-            if descricao_item in descricoes_confirmadas or not item.origem_sincronizador:
+        # RN-094: itera a lista original de itens já existentes (por
+        # pk), não mais um dicionário por Descrição — desde que 2 itens
+        # podem compartilhar a mesma Descrição (Produto avulso com Num OSP
+        # diferente), aquele dicionário descartava um dos dois antes mesmo
+        # de chegar aqui.
+        for item in itens_existentes_lista:
+            if item.pk in itens_confirmados or not item.origem_sincronizador:
                 continue
             resultado["removidos"].append(
                 (item.descricao_item, item.quantidade, item.valor_unitario, item.eh_kit)

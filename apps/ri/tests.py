@@ -74,6 +74,9 @@ class GridInepViewTests(TestCase):
 
     def setUp(self):
         self.user = User.objects.create_user(username="analista", password="senha-teste-123")
+        self.visualizador = User.objects.create_user(
+            username="visualizador-grid", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR
+        )
         self.escola_sem_ri = Escola.objects.create(
             inep="10000001", nome="Escola Sem RI", municipio="Fortaleza", estado="CE"
         )  # status_conexao = desconectado (padrao, sem data de instalacao)
@@ -255,6 +258,25 @@ class GridInepViewTests(TestCase):
         resp = self.client.get(reverse("grid_inep"))
         self.assertContains(resp, "Kit Wi-Fi")
         self.assertContains(resp, "Relatório EACE")
+
+    def test_visualizador_ve_os_3_cards_mas_nao_status_responsavel_ou_email(self):
+        """RN-093/FEAT-040: Visualizador só visualiza os 3 lados — sem a
+        coluna/badge "Status do RI", sem "Responsável" e sem a ação
+        "Compor e-mail" no drill-down."""
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00"
+        )
+        self.ri.status = Ri.ENVIO_EMAIL_FATURAMENTO
+        self.ri.save(update_fields=["status"])
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Kit Wi-Fi")
+        self.assertContains(resp, "IXC")
+        self.assertContains(resp, "Relatório EACE")
+        self.assertNotContains(resp, "status-badge-")
+        self.assertNotContains(resp, "form-responsavel-grid-")
+        self.assertNotContains(resp, f'data-abrir-modal-email="modal-email-{self.ri.pk}"')
 
     def test_grid_tem_as_5_colunas_conexao_e_status_ri_sem_responsavel(self):
         """RF-05 + RF-20 (revisto em 2026-08-25, RN-012): grid tem 5 colunas
@@ -3578,6 +3600,9 @@ class RiDetailViewTests(TestCase):
         self.admin = User.objects.create_user(
             username="admin-ri", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR
         )
+        self.visualizador = User.objects.create_user(
+            username="visualizador-ri", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR
+        )
         self.escola = Escola.objects.create(
             inep="20000001",
             nome="Escola Teste RI",
@@ -3597,6 +3622,53 @@ class RiDetailViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Nenhum RI iniciado")
         self.assertContains(resp, "Iniciar RI")
+
+    def test_visualizador_sem_ri_nao_ve_botao_de_iniciar(self):
+        """RN-093/FEAT-040: "Iniciar RI" é uma ação de edição — Visualizador
+        vê o aviso, mas não o botão."""
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Nenhum RI iniciado")
+        self.assertNotContains(resp, "Iniciar RI")
+
+    def test_visualizador_ve_so_os_3_cards(self):
+        """RN-093/FEAT-040: só os 3 lados (itens já lançados) aparecem —
+        sem Responsável, Status do RI, ação de e-mail, notas fiscais/RPA,
+        histórico de comunicação ou qualquer controle de edição."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        RiItemEace.objects.create(ri=ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00")
+        RiItemIxc.objects.create(ri=ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00")
+        RiItemRelatorioEace.objects.create(
+            ri=ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00"
+        )
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(resp.status_code, 200)
+        # os 3 cards continuam visíveis, com os itens já lançados
+        self.assertContains(resp, "Kit declarado")
+        self.assertContains(resp, "Relatório EACE")
+        self.assertContains(resp, "Kit Wi-Fi")
+        # nada além disso
+        self.assertNotContains(resp, "card-responsavel-")
+        self.assertNotContains(resp, "status-pill-")
+        self.assertNotContains(resp, f'data-abrir-modal-email="modal-email-{ri.pk}"')
+        self.assertNotContains(resp, "Notas Fiscais para anexar")
+        self.assertNotContains(resp, "Sincronizador")
+        self.assertNotContains(resp, "Histórico de comunicação")
+        self.assertNotContains(resp, "Salvar")
+        self.assertNotContains(resp, 'title="Editar"')
+        self.assertNotContains(resp, 'title="Excluir"')
+
+    def test_visualizador_nao_consegue_editar_via_post(self):
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.visualizador)
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "sincronizar_planilha_eace"},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse("grid_inep"))
 
     def test_pill_de_status_trava_para_analista_em_faturamento_concluido(self):
         """RN-020: com o RI em "Faturamento Concluído", a pill de status
@@ -6370,6 +6442,64 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
         self.assertEqual(segunda["duplicados"], ["Nobreak"])
         self.assertEqual(RiItemRelatorioEace.objects.count(), 1)
 
+    def test_2_produtos_mesma_descricao_osp_diferentes_nao_colidem(self):
+        """RN-094 (2026-09-11): caso real do NEP 53005015 — a Planilha EACE
+        trouxe 2 linhas "Nobreak - Equip - MEGA - CO" para o mesmo INEP,
+        vindas de 2 Num OSP diferentes (2 Ordens de Serviço Provisórias
+        distintas comprando o mesmo equipamento). Antes da correção, a 2ª
+        linha colidia com a 1ª (mesma Descrição + Quantidade) e virava
+        "duplicado" dela, perdendo o 2º Nobreak e sobrescrevendo o Num OSP
+        já gravado."""
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", num_osp="4626"),
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", num_osp="4867"),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(len(resultado["criados"]), 2)
+        self.assertEqual(resultado["duplicados"], [])
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
+        osps = sorted(
+            RiItemRelatorioEace.objects.filter(ri=self.ri).values_list("num_osp", flat=True)
+        )
+        self.assertEqual(osps, ["4626", "4867"])
+
+    def test_sincronizar_de_novo_com_mesmos_2_osp_continua_idempotente(self):
+        """Rodar o Sincronizador de novo com a mesma planilha (os mesmos 2
+        Num OSP já lançados) continua sem duplicar — cada linha casa com o
+        item do próprio Num OSP, não com o do outro."""
+        linhas = [
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", num_osp="4626"),
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", num_osp="4867"),
+        ]
+        self._upload_planilha(linhas)
+        sincronizar_relatorio_eace_da_planilha(self.ri)
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(resultado["criados"], [])
+        self.assertEqual(resultado["duplicados"], ["Nobreak", "Nobreak"])
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
+
+    def test_re_sincronizar_recupera_item_perdido_pelo_bug_antigo(self):
+        """Caso real do NEP 53005015: antes desta correção, a base já
+        tinha só 1 Nobreak (o Num OSP do 2º sobrescreveu o do 1º, pelo bug
+        da RN-094). Rodar o Sincronizador de novo, já com a correção,
+        lança o item que faltava (Num OSP 4626) sem duplicar o que já
+        existe (Num OSP 4867) — recupera o dado sem precisar de ajuste
+        manual no banco."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1,
+            valor_unitario=Decimal("150.00"), num_osp="4867",
+            origem_sincronizador=True,
+        )
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", num_osp="4626"),
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", num_osp="4867"),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(len(resultado["criados"]), 1)
+        self.assertEqual(resultado["criados"][0].num_osp, "4626")
+        self.assertEqual(resultado["duplicados"], ["Nobreak"])
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
+
     def test_sincronizar_nao_altera_status_do_ri(self):
         """RN-024 (retirada, 2026-09-02, pedido do usuário): sincronizar o
         Relatório EACE não altera mais o status do RI, nem quando alguma
@@ -6825,6 +6955,26 @@ class SincronizadorSubstituiPelaUltimaPlanilhaTests(TestCase):
         self.assertEqual(len(resultado["criados"]), 1)
         self.assertEqual(resultado["atualizados"], [])
         self.assertEqual(resultado["removidos"], [])
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
+
+    def test_2_produtos_mesma_descricao_osp_diferentes_sao_lancados_e_preservados(self):
+        """RN-094 (2026-09-11): mesmo caso real do NEP 53005015, agora no
+        modo "substituir pela última planilha" (RN-062) — os 2 Nobreak
+        (Num OSP diferente) são lançados como itens separados, e uma
+        sincronização seguinte com a mesma planilha não remove nenhum dos
+        2 (a mesma Descrição não "engole" mais o outro item pela lógica de
+        remoção, que antes só olhava por Descrição)."""
+        self._upload_planilha([
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", num_osp="4626"),
+            _linha_planilha_eace(self.escola.inep, "Nobreak - Equip - MEGA - CO", num_osp="4867"),
+        ])
+        resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(len(resultado["criados"]), 2)
+        self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
+
+        resultado_2 = sincronizar_relatorio_eace_da_planilha(self.ri)
+        self.assertEqual(resultado_2["criados"], [])
+        self.assertEqual(resultado_2["removidos"], [])
         self.assertEqual(RiItemRelatorioEace.objects.filter(ri=self.ri).count(), 2)
 
     def test_kit_diferente_ignorado_nao_remove_o_kit_ja_lancado(self):
