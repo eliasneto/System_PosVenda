@@ -154,8 +154,16 @@
                     <th class="px-4 py-2">Estado</th>
                     <th class="px-4 py-2">Município</th>
                     <th class="px-4 py-2">Status</th>
+                    <!-- RN-096 (nova, a formalizar pelo Orquestrador em
+                         business_rules.md; pedido do usuário, 2026-09-12):
+                         Visualizador ganha acesso ao MIP, mas sem nenhum
+                         valor financeiro — as 2 colunas de Valor Total
+                         somem para ele (mesmo padrão já usado pra "Status
+                         do RI" no Grid de Equipamentos, RN-093). -->
+                    {% if not request.user.is_visualizador %}
                     <th class="px-4 py-2">Valor Total (IXC)</th>
                     <th class="px-4 py-2">Valor Total (EACE)</th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
@@ -189,6 +197,7 @@
                             {{ linha.escola.get_status_mip_display }}
                         </span>
                     </td>
+                    {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2">
                         {% if linha.valor_total_lado2 is not None %}
                         <span class="text-[11px] text-gray-700 dark:text-gray-300 font-bold">R$ {{ linha.valor_total_lado2|intcomma }}</span>
@@ -209,9 +218,10 @@
                         <span class="text-[11px] text-gray-400 dark:text-gray-500">—</span>
                         {% endif %}
                     </td>
+                    {% endif %}
                 </tr>
                 <tr class="hidden" data-inep-detalhe>
-                    <td colspan="7" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
+                    <td colspan="{% if request.user.is_visualizador %}5{% else %}7{% endif %}" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
                         <div class="flex items-center justify-between gap-3 mb-2">
                             <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">Itens (Kit declarado × IXC × Relatório EACE) — valor de serviço</p>
                             <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="shrink-0 inline-flex items-center gap-1 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400 hover:underline">
@@ -228,8 +238,7 @@
                                 <p class="font-black uppercase text-amber-800 dark:text-amber-300 mb-1">Kit declarado <span class="text-amber-600 dark:text-amber-400">(1º)</span></p>
                                 {% for item in linha.lado1_kit_declarado %}
                                 <p class="text-gray-700 dark:text-gray-300">
-                                    {{ item.descricao }} — {{ item.quantidade }} un. —
-                                    {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}
+                                    {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
                                 </p>
                                 {% if item.referencia %}
                                 <p class="text-gray-400 dark:text-gray-500 italic mt-1">referência, ainda não lançado no RI</p>
@@ -242,8 +251,7 @@
                                 <p class="font-black uppercase text-amber-800 dark:text-amber-300 mb-1">IXC <span class="text-amber-600 dark:text-amber-400">(2º)</span></p>
                                 {% for item in linha.lado2_ixc %}
                                 <p class="text-gray-700 dark:text-gray-300{% if item.pk in linha.itens_ixc_divergentes_pks %} font-black text-amber-600 dark:text-amber-400{% endif %}">
-                                    {{ item.descricao }} — {{ item.quantidade }} un. —
-                                    {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}
+                                    {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
                                 </p>
                                 {% empty %}
                                 <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
@@ -253,8 +261,7 @@
                                 <p class="font-black uppercase text-gray-500 dark:text-gray-400 mb-1">Relatório EACE <span class="text-gray-400 dark:text-gray-500">(3º)</span></p>
                                 {% for item in linha.lado3_relatorio_eace_mip %}
                                 <p class="text-gray-700 dark:text-gray-300{% if item.pk in linha.itens_mip_divergentes_pks %} font-black text-amber-600 dark:text-amber-400{% endif %}">
-                                    {{ item.descricao }} — {{ item.quantidade }} un. —
-                                    {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}
+                                    {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
                                 </p>
                                 {% empty %}
                                 <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
@@ -265,7 +272,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="7" class="px-8 py-20 text-center">
+                    <td colspan="{% if request.user.is_visualizador %}5{% else %}7{% endif %}" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="search-x" class="w-8 h-8"></i>
@@ -279,11 +286,12 @@
                 </tr>
                 {% endfor %}
             </tbody>
-            {% if page_obj.paginator.count %}
+            {% if page_obj.paginator.count and not request.user.is_visualizador %}
             <!-- RN-080 (a criar): total geral (IXC/EACE) de todos os
                  INEPs filtrados, não só da página atual — muda junto com
                  qualquer filtro aplicado (busca, data, Estado/Município,
-                 divergência, período), pedido explícito do usuário. -->
+                 divergência, período), pedido explícito do usuário.
+                 RN-096: some inteiro pro Visualizador — é só valor. -->
             <tfoot>
                 <tr class="text-[11px] font-black uppercase text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/60 border-t-2 border-gray-300 dark:border-gray-700">
                     <td colspan="5" class="px-4 py-3 text-right">Total geral</td>

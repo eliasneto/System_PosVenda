@@ -1,4 +1,5 @@
 {% extends "core/base.html" %}
+{% load humanize %}
 
 {% block title %}Gerenciador Pós Venda | RI {{ escola.inep }}{% endblock %}
 
@@ -21,7 +22,7 @@
         </p>
     </div>
 
-    {% if ri %}
+    {% if ri and not request.user.is_visualizador %}
     <div class="flex flex-wrap gap-4">
         {% include "ri/_responsavel_form_detail.html" with ri=ri next_url=request.get_full_path usuarios=usuarios %}
     </div>
@@ -38,12 +39,14 @@
             <p class="font-black italic uppercase text-gray-700 dark:text-gray-300">Nenhum RI iniciado para este INEP</p>
             <p class="text-xs font-bold text-gray-400 dark:text-gray-500 mt-1">O RI nasce com status "Implantação EACE" (RN-001).</p>
         </div>
+        {% if not request.user.is_visualizador %}
         <form method="POST" action="{% url 'ri_iniciar' inep=escola.inep %}">
             {% csrf_token %}
             <button type="submit" class="px-6 py-4 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg">
                 Iniciar RI
             </button>
         </form>
+        {% endif %}
     </div>
 </div>
 
@@ -74,6 +77,13 @@
             <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
             {% endfor %}
         </div>
+        <!-- RN-097: total do lado, escondido do Visualizador (RN-093/
+             RN-096) — mesmo padrão de total do MIP (RN-076/RN-077). -->
+        {% if not request.user.is_visualizador %}
+        <p class="text-[11px] font-black uppercase text-gray-500 dark:text-gray-400 mb-4">
+            Total: {% if total_lado1 is not None %}<span class="text-gray-900 dark:text-gray-100">R$ {{ total_lado1|intcomma }}</span>{% else %}<span class="text-gray-400 dark:text-gray-500 font-bold normal-case">nenhum item lançado</span>{% endif %}
+        </p>
+        {% endif %}
 
         <div class="flex flex-col gap-3 border-t border-gray-100 dark:border-gray-800 pt-4">
             <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400" title="RN-010">
@@ -119,7 +129,7 @@
                     <span class="text-xs font-bold text-gray-700 dark:text-gray-300">{{ item.descricao_item }}</span>
                     <div class="flex items-center gap-3">
                         <span class="text-xs font-bold text-gray-500 dark:text-gray-400">{{ item.quantidade }} un.</span>
-                        {% if lado_ixc_editavel %}
+                        {% if lado_ixc_editavel and not request.user.is_visualizador %}
                         <button type="button" onclick="document.getElementById('editar-ixc-{{ item.pk }}').classList.toggle('hidden')" class="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" title="Editar">
                             <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                         </button>
@@ -134,6 +144,7 @@
                         {% endif %}
                     </div>
                 </div>
+                {% if not request.user.is_visualizador %}
                 <form id="editar-ixc-{{ item.pk }}" method="POST" action="{% url 'ri_item_ixc_update' item_pk=item.pk %}" class="hidden flex-col gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
                     {% csrf_token %}
                     <input type="text" name="descricao_item" value="{{ item.descricao_item }}" class="w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
@@ -145,6 +156,7 @@
                         Salvar
                     </button>
                 </form>
+                {% endif %}
                 <!-- RN-003 (2026-08-26): comparação formal contra o Lado
                      Relatório EACE — vermelho, bloqueia (diferente da
                      RN-002 abaixo, amarelo, só conferência). -->
@@ -167,7 +179,17 @@
             <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
             {% endfor %}
         </div>
+        <!-- RN-097: total do lado, escondido do Visualizador (RN-093/
+             RN-096) — mesmo padrão de total do MIP (RN-076/RN-077). -->
+        {% if not request.user.is_visualizador %}
+        <p class="text-[11px] font-black uppercase text-gray-500 dark:text-gray-400 mb-4">
+            Total: {% if total_lado2 is not None %}<span class="text-gray-900 dark:text-gray-100">R$ {{ total_lado2|intcomma }}</span>{% else %}<span class="text-gray-400 dark:text-gray-500 font-bold normal-case">nenhum item lançado</span>{% endif %}
+        </p>
+        {% endif %}
 
+        <!-- RN-093/FEAT-040: Visualizador não vê nem o formulário em modo
+             leitura — só os itens já lançados, no bloco acima. -->
+        {% if not request.user.is_visualizador %}
         <!-- RN-052 (2026-09-02): fora de "Em Andamento", o formulário
              continua visível (usuário precisa ver Data Ativação/CNPJ/
              Município/Estado já lançados) mas os campos ficam com
@@ -411,6 +433,7 @@
             </button>
             {% endif %}
         </form>
+        {% endif %}
     </div>
 
     <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6">
@@ -442,7 +465,7 @@
         </p>
         {% endif %}
 
-        {% if not ri_bloqueado_faturamento_concluido %}
+        {% if not ri_bloqueado_faturamento_concluido and not request.user.is_visualizador %}
         <!-- FEAT-024/RN-022: busca os itens da Planilha EACE (Administrador
              > Planilha EACE) pelo INEP deste RI e lança os que casarem com
              o catálogo — igual a um lançamento manual abaixo. Não
@@ -470,7 +493,7 @@
                     </span>
                     <div class="flex items-center gap-3">
                         <span class="text-xs font-bold text-gray-500 dark:text-gray-400">{{ item.quantidade }} un. — R$ {{ item.valor_unitario }}</span>
-                        {% if not ri_bloqueado_faturamento_concluido %}
+                        {% if not ri_bloqueado_faturamento_concluido and not request.user.is_visualizador %}
                         <button type="button" onclick="document.getElementById('editar-relatorio-eace-{{ item.pk }}').classList.toggle('hidden')" class="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" title="Editar">
                             <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                         </button>
@@ -504,7 +527,7 @@
                     {% endif %}
                 </div>
                 {% endif %}
-                {% if not ri_bloqueado_faturamento_concluido %}
+                {% if not ri_bloqueado_faturamento_concluido and not request.user.is_visualizador %}
                 <form id="editar-relatorio-eace-{{ item.pk }}" method="POST" action="{% url 'ri_item_relatorio_eace_update' item_pk=item.pk %}" class="hidden flex-col gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
                     {% csrf_token %}
                     <input type="text" name="descricao_item" value="{{ item.descricao_item }}" class="w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
@@ -522,7 +545,17 @@
             <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
             {% endfor %}
         </div>
+        <!-- RN-097: total do lado, escondido do Visualizador (RN-093/
+             RN-096) — mesmo padrão de total do MIP (RN-076/RN-077). -->
+        {% if not request.user.is_visualizador %}
+        <p class="text-[11px] font-black uppercase text-gray-500 dark:text-gray-400 mb-4">
+            Total: {% if total_lado3 is not None %}<span class="text-gray-900 dark:text-gray-100">R$ {{ total_lado3|intcomma }}</span>{% else %}<span class="text-gray-400 dark:text-gray-500 font-bold normal-case">nenhum item lançado</span>{% endif %}
+        </p>
+        {% endif %}
 
+        <!-- RN-093/FEAT-040: Visualizador não vê nem a mensagem de bloqueio
+             nem o formulário — só os itens já lançados, no bloco acima. -->
+        {% if not request.user.is_visualizador %}
         <!-- RN-020 (2026-08-27): mesmo bloqueio do Lado IXC — com o RI em
              "Faturamento Concluído", o formulário some para os dois perfis. -->
         {% if ri_bloqueado_faturamento_concluido %}
@@ -615,10 +648,15 @@
             </button>
         </form>
         {% endif %}
+        {% endif %}
     </div>
 
 </div>
 
+<!-- RN-093/FEAT-040: Visualizador só vê os 3 cards acima — nada de
+     Status, Responsável, ação de e-mail, logs de RPA ou Histórico de
+     comunicação. -->
+{% if not request.user.is_visualizador %}
 {% comment %}
 RN-051 (ajuste 2026-09-02, pedido do usuário): status do RI e ação
 "Enviar e-mail" saem do cabeçalho (ficavam apertados perto do título) e
@@ -633,6 +671,7 @@ Histórico de Comunicação, mais espaço pra respirar.
 {% include "ri/_logs_rpa_eace_detail.html" with ri=ri logs_rpa_eace=logs_rpa_eace documentos_pdf=documentos_pdf documentos_xml=documentos_xml next_url=request.get_full_path existe_log_ativo=existe_log_ativo oob=oob %}
 
 {% include "ri/_historico_panel.html" %}
+{% endif %}
 {% endif %}
 {% endblock %}
 

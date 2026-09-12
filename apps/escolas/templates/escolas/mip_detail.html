@@ -1,4 +1,5 @@
 {% extends "core/base.html" %}
+{% load humanize %}
 
 {% block title %}Gerenciador Pós Venda | MIP — {{ escola.inep }}{% endblock %}
 
@@ -27,6 +28,12 @@
              inteira recarrega, suficiente pra esta tela. -->
         <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Status (MIP)</p>
+            <!-- RN-096: Visualizador vê o Status (MIP), só não troca —
+                 mesmo padrão de "só leitura" já usado nos itens abaixo;
+                 sem formulário, o valor aparece como texto simples. -->
+            {% if request.user.is_visualizador %}
+            <p class="text-sm font-black italic text-pv-yellow">{{ escola.get_status_mip_display }}</p>
+            {% else %}
             <form method="POST" action="{% url 'mip_status_update' inep=escola.inep %}" data-salvar-ao-trocar>
                 {% csrf_token %}
                 <select name="status_mip" class="select-pv-dark bg-transparent border-none outline-none text-sm font-black italic text-pv-yellow cursor-pointer">
@@ -35,6 +42,7 @@
                     {% endfor %}
                 </select>
             </form>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -46,7 +54,7 @@
         {% if escola.status_mip == "em_andamento" %}
         Status (MIP) em "Em Andamento": este INEP está de volta lá, com o formulário normal do Lado IXC.
         <a href="{% url 'ri_detail' inep=escola.inep %}" class="text-amber-600 dark:text-amber-400 hover:underline">Abrir em Equipamentos →</a>
-        {% elif somente_servico_editavel %}
+        {% elif somente_servico_editavel and not request.user.is_visualizador %}
         Exceção: com o Status (MIP) em "Aguardando Validação EACE", equipamento só com valor de serviço (sem "Equipamentos R$" na LPU) pode ser lançado/excluído direto aqui.
         {% endif %}
     </p>
@@ -67,8 +75,7 @@
             <div class="max-h-96 overflow-y-auto pr-1">
                 {% for item in lado1_kit_declarado %}
                 <p class="text-gray-700 dark:text-gray-300 mb-1">
-                    {{ item.descricao }} — {{ item.quantidade }} un. —
-                    {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}
+                    {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
                 </p>
                 {% if item.referencia %}
                 <p class="text-gray-400 dark:text-gray-500 italic mt-1">referência, ainda não lançado no RI</p>
@@ -77,6 +84,12 @@
                 <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
                 {% endfor %}
             </div>
+            <!-- RN-097: total do lado, escondido do Visualizador (RN-096). -->
+            {% if not request.user.is_visualizador %}
+            <p class="text-[10px] font-black uppercase text-amber-700 dark:text-amber-400 border-t border-amber-200 dark:border-amber-800/60 mt-3 pt-3">
+                Total: {% if valor_total_lado1 is not None %}R$ {{ valor_total_lado1|intcomma }}{% if valor_total_lado1_incompleto %}<span class="text-red-500 dark:text-red-400" title="Um ou mais itens sem Valor de serviço encontrado no catálogo — não somado aqui.">*</span>{% endif %}{% else %}<span class="normal-case text-gray-400 dark:text-gray-500">nenhum item lançado</span>{% endif %}
+            </p>
+            {% endif %}
         </div>
         <div class="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded-xl p-4">
             <p class="font-black uppercase text-amber-800 dark:text-amber-300 mb-2">IXC <span class="text-amber-600 dark:text-amber-400">(2º)</span></p>
@@ -91,8 +104,7 @@
                 {% for item in lado2_ixc %}
                 <div class="flex items-center justify-between gap-2 mb-1">
                     <p class="text-gray-700 dark:text-gray-300{% if item.pk in divergencia_valor_servico.itens_ixc_divergentes_pks %} font-black text-amber-600 dark:text-amber-400{% endif %}">
-                        {{ item.descricao }} — {{ item.quantidade }} un. —
-                        {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}
+                        {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
                     </p>
                     {% if somente_servico_editavel and item.descricao in descricoes_somente_servico and request.user.is_administrador %}
                     <form method="POST" action="{% url 'mip_item_ixc_somente_servico_delete' item_pk=item.pk %}" onsubmit="return confirm('Excluir este equipamento?');" class="shrink-0">
@@ -107,12 +119,20 @@
                 <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
                 {% endfor %}
             </div>
+            <!-- RN-097: total do lado, escondido do Visualizador (RN-096). -->
+            {% if not request.user.is_visualizador %}
+            <p class="text-[10px] font-black uppercase text-amber-700 dark:text-amber-400 border-t border-amber-200 dark:border-amber-800/60 mt-3 pt-3">
+                Total: {% if valor_total_lado2 is not None %}R$ {{ valor_total_lado2|intcomma }}{% if valor_total_lado2_incompleto %}<span class="text-red-500 dark:text-red-400" title="Um ou mais itens sem Valor de serviço encontrado no catálogo — não somado aqui.">*</span>{% endif %}{% else %}<span class="normal-case text-gray-400 dark:text-gray-500">nenhum item lançado</span>{% endif %}
+            </p>
+            {% endif %}
 
-            {% if somente_servico_editavel %}
+            {% if somente_servico_editavel and not request.user.is_visualizador %}
             <!-- RN-089/RN-092: lançamento restrito ao catálogo "só valor
                  de serviço" (LPU sem "Equipamentos R$") — nunca o KIT nem
                  um Produto normal, direto no MIP quando o Status (MIP)
-                 está "Aguardando Validação EACE". -->
+                 está "Aguardando Validação EACE". RN-096: Visualizador
+                 nunca lança nada — mesmo padrão de só-leitura do resto do
+                 sistema (RN-093). -->
             <form method="POST" action="{% url 'mip_item_ixc_somente_servico_salvar' inep=escola.inep %}" class="flex flex-col gap-3 border-t border-amber-200 dark:border-amber-800/60 mt-3 pt-3">
                 {% csrf_token %}
                 <div class="flex items-center justify-between">
@@ -164,18 +184,43 @@
         </div>
         <div class="bg-gray-100 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
             <p class="font-black uppercase text-gray-500 dark:text-gray-400 mb-2">Relatório EACE <span class="text-gray-400 dark:text-gray-500">(3º)</span></p>
-            <!-- Altura travada + rolagem própria: card não cresce sem limite
-                 conforme itens são lançados (mesmo ajuste do RI, FEAT-036). -->
-            <div class="max-h-96 overflow-y-auto pr-1">
-                {% for item in lado3_relatorio_eace_mip %}
-                <p class="text-gray-700 dark:text-gray-300 mb-1{% if item.pk in divergencia_valor_servico.itens_mip_divergentes_pks %} font-black text-amber-600 dark:text-amber-400{% endif %}">
-                    {{ item.descricao }} — {{ item.quantidade }} un. —
-                    {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}
+            {% if escola.status_mip == "aguardando_validacao_eace" %}
+            <!-- RN-095: dados do Relatório EACE da própria RI, só para o
+                 usuário bater visualmente com o Relatório EACE do MIP
+                 (bloco de sempre, abaixo da linha) — nunca grava nada,
+                 nunca altera valor/regra dos 2 lados (RN-067). -->
+            <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 mb-1">Dados Relatório RI</p>
+            <div class="max-h-40 overflow-y-auto pr-1 mb-3">
+                {% for item in lado3_relatorio_eace_ri %}
+                <p class="text-gray-700 dark:text-gray-300 mb-1">
+                    {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
                 </p>
                 {% empty %}
                 <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
                 {% endfor %}
             </div>
+            <hr class="border-gray-300 dark:border-gray-600 mb-3">
+            <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 mb-1">Dados Relatório MIP</p>
+            {% endif %}
+            <!-- Altura travada + rolagem própria: card não cresce sem limite
+                 conforme itens são lançados (mesmo ajuste do RI, FEAT-036). -->
+            <div class="max-h-96 overflow-y-auto pr-1">
+                {% for item in lado3_relatorio_eace_mip %}
+                <p class="text-gray-700 dark:text-gray-300 mb-1{% if item.pk in divergencia_valor_servico.itens_mip_divergentes_pks %} font-black text-amber-600 dark:text-amber-400{% endif %}">
+                    {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
+                </p>
+                {% empty %}
+                <p class="text-gray-400 dark:text-gray-500 italic">Nenhum item lançado.</p>
+                {% endfor %}
+            </div>
+            <!-- RN-097: total do lado (dados do MIP — o "Dados Relatório
+                 RI" acima é só comparação, não entra neste total), escondido
+                 do Visualizador (RN-096). -->
+            {% if not request.user.is_visualizador %}
+            <p class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 border-t border-gray-300 dark:border-gray-700 mt-3 pt-3">
+                Total: {% if valor_total_lado3 is not None %}R$ {{ valor_total_lado3|intcomma }}{% if valor_total_lado3_incompleto %}<span class="text-red-500 dark:text-red-400" title="Um ou mais itens sem Valor de serviço preenchido — não somado aqui.">*</span>{% endif %}{% else %}<span class="normal-case text-gray-400 dark:text-gray-500">nenhum item lançado</span>{% endif %}
+            </p>
+            {% endif %}
         </div>
     </div>
 </div>

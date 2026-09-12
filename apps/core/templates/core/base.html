@@ -83,6 +83,10 @@
         <nav class="px-4 space-y-1 flex-grow">
             <p class="text-[10px] uppercase text-gray-600 font-extrabold px-4 py-3 tracking-widest">Menu Principal</p>
 
+            <!-- RN-093/FEAT-040: Visualizador não vê o Dashboard — só a
+                 seção Projeto (abaixo), que a partir da RN-096 já inclui
+                 Equipamentos e MIP, os 2 só leitura e sem valor financeiro. -->
+            {% if not user.is_visualizador %}
             <!-- FEAT-026: Dashboard ganha 3 submenus (Faturamento, Equipamentos, Relatórios). -->
             <div class="mb-1 relative">
                 <button onclick="toggleSubmenu('submenu-dashboard', 'seta-dashboard')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'home' or request.resolver_match.url_name == 'dashboard_equipamentos' or request.resolver_match.url_name == 'dashboard_relatorios' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
@@ -104,6 +108,7 @@
                     </a>
                 </div>
             </div>
+            {% endif %}
 
             <div class="mb-1 relative">
                 <button onclick="toggleSubmenu('submenu-projeto', 'seta-projeto')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'grid_inep' or request.resolver_match.url_name == 'mip_inep' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
@@ -117,6 +122,8 @@
                     <a href="{% url 'grid_inep' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'grid_inep' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
                         <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'grid_inep' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Equipamentos
                     </a>
+                    <!-- RN-096: Visualizador ganha também o link do MIP
+                         (só leitura, sem valor financeiro nas telas). -->
                     <a href="{% url 'mip_inep' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'mip_inep' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
                         <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'mip_inep' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> MIP
                     </a>
@@ -159,7 +166,7 @@
                     <div class="overflow-hidden">
                         <p class="text-[11px] font-bold truncate text-white leading-tight">{{ user.username }}</p>
                         <span class="text-[8px] bg-white/10 text-gray-400 px-2 py-0.5 rounded-full font-bold uppercase tracking-widest border border-white/5">
-                            {% if user.is_administrador %}Administrador{% else %}Analista{% endif %}
+                            {% if user.is_administrador %}Administrador{% elif user.is_visualizador %}Visualizador{% else %}Analista{% endif %}
                         </span>
                     </div>
                 </div>

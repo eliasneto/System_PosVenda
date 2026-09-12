@@ -225,6 +225,25 @@ def _lado_ixc_editavel(ri):
     return ri.status == Ri.ANDAMENTO
 
 
+def _total_itens_ri(itens):
+    """RN-097 (nova, a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-12): soma Quantidade × Valor Unitário de
+    uma lista/queryset de itens de 1 lado do RI (`RiItemEace`/
+    `RiItemIxc`/`RiItemRelatorioEace`, todos com esses 2 campos) — usado
+    para o total exibido abaixo de cada um dos 3 lados na tela do RI
+    (`ri_detail_view`). `None` sem nenhum item lançado — não confundir
+    com um total zero, que sugeriria itens já lançados sem custo (mesmo
+    critério de `apps.escolas.services._valor_total_itens`, que serve o
+    mesmo papel no MIP; não reaproveitado direto por não haver
+    dependência de `apps.ri` sobre `apps.escolas`, e por aqui o valor já
+    vir pronto no item — `valor_unitario` —, sem precisar resolver pelo
+    catálogo)."""
+    itens = list(itens)
+    if not itens:
+        return None
+    return sum((item.quantidade * item.valor_unitario for item in itens), Decimal("0"))
+
+
 def _requisicao_htmx(request):
     """FEAT-019: identifica requisição feita pelo HTMX (header enviado
     automaticamente por toda troca `hx-*`) — usado para responder com um
@@ -1740,6 +1759,28 @@ def ri_detail_view(request, inep):
             for campo in subform.fields.values():
                 campo.disabled = True
 
+    # RN-097: total de cada um dos 3 lados, exibido abaixo da lista de
+    # itens (escondido do Visualizador direto no template, RN-093/RN-096
+    # — aqui é só o cálculo). `None` sem RI ainda (nenhum item possível).
+    if ri and itens_eace_existentes:
+        total_lado1 = _total_itens_ri(itens_eace_existentes)
+    elif ri and kit_declarado_resolvido:
+        # RN-097 (correção, 2026-09-12): usuário reportou que o Lado 1 do
+        # RI nunca mostrava total, diferente do MIP — Lado 1 não é lançado
+        # nesta tela (RN-010), então quase nunca tem `RiItemEace`; sem
+        # esta referência, `total_lado1` ficaria sempre "nenhum item
+        # lançado" mesmo quando o MIP já mostra um valor pro mesmo Kit.
+        # Mesma referência já usada acima pra `kit_declarado_descricao`
+        # (mesmo critério de `apps.escolas.services.
+        # _resolver_lado_kit_declarado`) — mas em Valor de equipamento
+        # (`valor_faturavel`), não Valor de serviço (RN-067: RI sempre
+        # mostra equipamento, nunca o valor de serviço do MIP).
+        total_lado1 = kit_declarado_resolvido.valor_faturavel
+    else:
+        total_lado1 = None
+    total_lado2 = _total_itens_ri(ri.itens_ixc.all()) if ri else None
+    total_lado3 = _total_itens_ri(ri.itens_relatorio_eace.all()) if ri else None
+
     return render(
         request,
         "ri/ri_detail.html",
@@ -1747,6 +1788,9 @@ def ri_detail_view(request, inep):
             "escola": escola,
             "kit_declarado_descricao": kit_declarado_descricao,
             "ri": ri,
+            "total_lado1": total_lado1,
+            "total_lado2": total_lado2,
+            "total_lado3": total_lado3,
             "kit_form": kit_form,
             "kit_ja_lancado": kit_ja_lancado,
             # RN-020: com o RI em "Faturamento Concluído", os campos do

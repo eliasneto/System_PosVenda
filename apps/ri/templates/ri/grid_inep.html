@@ -27,12 +27,14 @@
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Com divergência</p>
             <p class="text-xl font-black italic {% if total_divergencia %}text-red-400{% else %}text-pv-yellow{% endif %}">{{ total_divergencia }}</p>
         </a>
+        {% if not request.user.is_visualizador %}
         <a href="{% url 'grid_inep' %}?status_ri={{ status_resposta_financeiro }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if status_conexao_filtro %}&status_conexao={{ status_conexao_filtro }}{% endif %}{% if divergencia_filtro %}&divergencia=1{% endif %}"
            class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white hover:ring-2 hover:ring-amber-400 transition {% if status_ri_filtro == status_resposta_financeiro %}ring-2 ring-pv-yellow{% endif %}"
            title="Clique para filtrar os INEPs com RI em Resposta Financeiro">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Resposta Financeiro</p>
             <p class="text-xl font-black italic text-pv-yellow">{{ total_resposta_financeiro }}</p>
         </a>
+        {% endif %}
     </div>
 </div>
 
@@ -50,12 +52,14 @@
         {% endfor %}
     </select>
 
+    {% if not request.user.is_visualizador %}
     <select name="status_ri" data-select-placeholder class="w-full lg:w-56 px-4 py-4 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase">
         <option value="">Status do RI</option>
         {% for valor, rotulo in status_ri_opcoes %}
         <option value="{{ valor }}" {% if status_ri_filtro == valor %}selected{% endif %}>{{ rotulo }}</option>
         {% endfor %}
     </select>
+    {% endif %}
 
     <div class="flex gap-2 w-full lg:w-auto">
         <button type="submit" class="px-6 py-4 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
@@ -78,7 +82,10 @@
                     <th class="px-4 py-2">Nome da Escola</th>
                     <th class="px-4 py-2">Endereço</th>
                     <th class="px-4 py-2" title="Status de conexão da Escola (RF-20)">Conexão</th>
+                    <!-- RN-093/FEAT-040: Visualizador não vê Status do RI. -->
+                    {% if not request.user.is_visualizador %}
                     <th class="px-4 py-2" title="Status do RI (RN-001); vermelho na linha = divergência aberta (RN-003)">Status do RI</th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
@@ -104,18 +111,26 @@
                             <span class="text-[11px] font-bold text-gray-800 dark:text-gray-200">{{ linha.escola.get_status_conexao_display }}</span>
                         </span>
                     </td>
+                    {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2">
                         {% include "ri/_status_badge_grid.html" with ri=linha.ri escola=linha.escola divergencia_aberta=linha.divergencia_aberta %}
                     </td>
+                    {% endif %}
                 </tr>
                 <tr class="hidden" data-inep-detalhe>
-                    <td colspan="5" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
+                    <td colspan="{% if request.user.is_visualizador %}4{% else %}5{% endif %}" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
                         {% if not linha.ri %}
                         <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">RI ainda não iniciado para este INEP.</p>
+                        {% if not request.user.is_visualizador %}
                         <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-xl hover:bg-gray-800 transition">
                             Iniciar RI
                         </a>
+                        {% endif %}
                         {% else %}
+                        <!-- RN-093/FEAT-040: Visualizador só vê os 3 cards
+                             abaixo — nada de Status, Responsável ou ação de
+                             e-mail. -->
+                        {% if not request.user.is_visualizador %}
                         <div class="flex flex-col sm:flex-row gap-3 mb-4">
                             {% include "ri/_status_form.html" with ri=linha.ri next_url=request.get_full_path status_ri_manuais=status_ri_manuais status_ri_opcoes_disponiveis=linha.status_ri_opcoes_disponiveis usuario_administrador=usuario_administrador status_resposta_financeiro=status_resposta_financeiro %}
                             {% include "ri/_responsavel_form_grid.html" with ri=linha.ri next_url=request.get_full_path usuarios=usuarios %}
@@ -138,6 +153,7 @@
                                 Compor e-mail
                             </button>
                         </div>
+                        {% endif %}
                         {% endif %}
 
                         <div class="flex items-center justify-between gap-3 mb-2">
@@ -187,7 +203,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="5" class="px-8 py-20 text-center">
+                    <td colspan="{% if request.user.is_visualizador %}4{% else %}5{% endif %}" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="search-x" class="w-8 h-8"></i>
@@ -234,11 +250,13 @@ cobrir a viewport inteira. Por isso este 2º laço, fora do card, só para
 renderizar os modais (nenhuma consulta nova — mesmo `page_obj` já
 carregado acima).
 {% endcomment %}
+{% if not request.user.is_visualizador %}
 {% for linha in page_obj %}
 {% if linha.ri.status == 'envio_email_faturamento' %}
 {% include "ri/_modal_enviar_email.html" with ri=linha.ri escola=linha.escola assunto_sugerido=linha.assunto_sugerido next_url=request.get_full_path %}
 {% endif %}
 {% endfor %}
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}

@@ -19,6 +19,7 @@ from .forms import PlanilhaRelatorioEaceMipUploadForm
 from .models import Escola, EscolaItemRelatorioEaceMip, PlanilhaRelatorioEaceMip
 from .services import (
     RelatorioEaceMipSincronizacaoError,
+    _resolver_lado3_relatorio_eace_ri,
     _resolver_lado_ixc,
     _valor_servico,
     _valor_total_itens,
@@ -458,12 +459,23 @@ def mip_detail_view(request, inep):
     então não faz sentido exigir mandar o INEP de volta pra "Em
     Andamento" (reabrindo o RI inteiro) só para incluir/remover um
     desses.
+
+    RN-095 (nova, a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-12): com `Escola.status_mip ==
+    "Aguardando Validação EACE"`, o card do Lado 3 ganha também os dados
+    do Relatório EACE da própria RI (`_resolver_lado3_relatorio_eace_ri`)
+    — mostrados acima dos dados do MIP de sempre, separados por uma linha
+    horizontal (decidida pelo template), só para o usuário bater
+    visualmente os 2 relatórios. Puramente de leitura — não grava nada,
+    não muda o Sincronizador de nenhum dos 2 lados nem o valor exibido
+    (RN-067 continua valendo). Fora desse status, o card continua
+    idêntico a antes.
     """
     escola = get_object_or_404(Escola, inep=inep)
     ri = (
         Ri.objects.filter(escola=escola)
         .order_by("-criado_em")
-        .prefetch_related("itens_eace", "itens_ixc")
+        .prefetch_related("itens_eace", "itens_ixc", "itens_relatorio_eace")
         .first()
     )
 
@@ -471,8 +483,23 @@ def mip_detail_view(request, inep):
     lado1_kit_declarado = _resolver_lado_kit_declarado(escola, ri, catalogo_kits)
     lado2_ixc = _resolver_lado_ixc(ri, escola.lote, catalogo_kits)
     lado3_relatorio_eace_mip = _resolver_lado3_relatorio_eace_mip(escola)
+    # RN-095: dados da própria RI só para comparação visual (ver docstring
+    # acima) — calculado só quando o template vai exibi-lo, para não
+    # gastar consulta/CPU à toa nos outros 2 status do MIP.
+    lado3_relatorio_eace_ri = (
+        _resolver_lado3_relatorio_eace_ri(ri, escola.lote, catalogo_kits)
+        if escola.status_mip == Escola.AGUARDANDO_VALIDACAO_EACE
+        else []
+    )
     divergencia_valor_servico = _comparar_valor_servico_ixc_relatorio_mip(ri, escola, escola.lote, catalogo_kits)
     lado2_nf_recebida_em = _resolver_lado2_nf_recebida_em(ri)
+    # RN-097 (nova, a formalizar pelo Orquestrador em business_rules.md;
+    # pedido do usuário, 2026-09-12): total de cada lado, mesma soma já
+    # usada no grid (RN-076/RN-077, `_valor_total_itens`) — escondido do
+    # Visualizador direto no template (RN-096).
+    valor_total_lado1, valor_total_lado1_incompleto = _valor_total_itens(lado1_kit_declarado)
+    valor_total_lado2, valor_total_lado2_incompleto = _valor_total_itens(lado2_ixc)
+    valor_total_lado3, valor_total_lado3_incompleto = _valor_total_itens(lado3_relatorio_eace_mip)
 
     somente_servico_editavel = escola.status_mip == Escola.AGUARDANDO_VALIDACAO_EACE
     descricoes_somente_servico = _descricoes_somente_servico(escola) if somente_servico_editavel else set()
@@ -501,6 +528,13 @@ def mip_detail_view(request, inep):
             "lado1_kit_declarado": lado1_kit_declarado,
             "lado2_ixc": lado2_ixc,
             "lado3_relatorio_eace_mip": lado3_relatorio_eace_mip,
+            "lado3_relatorio_eace_ri": lado3_relatorio_eace_ri,
+            "valor_total_lado1": valor_total_lado1,
+            "valor_total_lado1_incompleto": valor_total_lado1_incompleto,
+            "valor_total_lado2": valor_total_lado2,
+            "valor_total_lado2_incompleto": valor_total_lado2_incompleto,
+            "valor_total_lado3": valor_total_lado3,
+            "valor_total_lado3_incompleto": valor_total_lado3_incompleto,
             "divergencia_valor_servico": divergencia_valor_servico,
             "lado2_nf_recebida_em": lado2_nf_recebida_em,
             "historico_form": historico_form,

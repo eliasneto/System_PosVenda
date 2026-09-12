@@ -58,6 +58,10 @@ MIDDLEWARE = [
     # FEAT-029/RN-045: precisa vir depois de AuthenticationMiddleware
     # (usa request.user).
     "apps.core.middleware.AcessoLiberadoMiddleware",
+    # RN-093/FEAT-040: mesmo motivo acima — usa request.user e a
+    # framework de mensagens (MessageMiddleware, já carregada nesta
+    # altura da lista).
+    "apps.core.middleware.VisualizadorAccessMiddleware",
     # FEAT-011/RN-006: precisa vir depois de AuthenticationMiddleware
     # (usa request.user) — registra em auditoria qualquer erro não
     # tratado durante uma requisição.

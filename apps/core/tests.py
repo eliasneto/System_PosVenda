@@ -935,8 +935,15 @@ class UsuariosTrocarPerfilTests(TestCase):
         self.assertContains(resp, "analista-teste")
 
     def test_administrador_promove_analista(self):
+        """RN-093/FEAT-040: com 3 perfis fixos, a troca não é mais um
+        alternância binária — o POST agora informa o perfil desejado
+        (select em `usuarios.html`)."""
         self.client.force_login(self.administrador)
-        resp = self.client.post(reverse("usuarios_trocar_perfil", args=[self.analista.id]), follow=True)
+        resp = self.client.post(
+            reverse("usuarios_trocar_perfil", args=[self.analista.id]),
+            {"perfil": User.PERFIL_ADMINISTRADOR},
+            follow=True,
+        )
         self.assertEqual(resp.status_code, 200)
         self.analista.refresh_from_db()
         self.assertEqual(self.analista.perfil, User.PERFIL_ADMINISTRADOR)
@@ -947,15 +954,49 @@ class UsuariosTrocarPerfilTests(TestCase):
             username="admin-teste-2", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
         )
         self.client.force_login(self.administrador)
-        resp = self.client.post(reverse("usuarios_trocar_perfil", args=[outro_admin.id]), follow=True)
+        resp = self.client.post(
+            reverse("usuarios_trocar_perfil", args=[outro_admin.id]),
+            {"perfil": User.PERFIL_ANALISTA},
+            follow=True,
+        )
         self.assertEqual(resp.status_code, 200)
         outro_admin.refresh_from_db()
         self.assertEqual(outro_admin.perfil, User.PERFIL_ANALISTA)
         self.assertContains(resp, "alterado para Analista")
 
+    def test_administrador_torna_usuario_visualizador(self):
+        """RN-093/FEAT-040: 3º perfil fixo, escolhido pelo mesmo select."""
+        self.client.force_login(self.administrador)
+        resp = self.client.post(
+            reverse("usuarios_trocar_perfil", args=[self.analista.id]),
+            {"perfil": User.PERFIL_VISUALIZADOR},
+            follow=True,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.analista.refresh_from_db()
+        self.assertEqual(self.analista.perfil, User.PERFIL_VISUALIZADOR)
+        self.assertTrue(self.analista.is_visualizador)
+        self.assertContains(resp, "alterado para Visualizador")
+
+    def test_perfil_invalido_e_rejeitado(self):
+        self.client.force_login(self.administrador)
+        resp = self.client.post(
+            reverse("usuarios_trocar_perfil", args=[self.analista.id]),
+            {"perfil": "gerente"},
+            follow=True,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.analista.refresh_from_db()
+        self.assertEqual(self.analista.perfil, User.PERFIL_ANALISTA)
+        self.assertContains(resp, "Perfil inválido")
+
     def test_administrador_nao_troca_o_proprio_perfil(self):
         self.client.force_login(self.administrador)
-        resp = self.client.post(reverse("usuarios_trocar_perfil", args=[self.administrador.id]), follow=True)
+        resp = self.client.post(
+            reverse("usuarios_trocar_perfil", args=[self.administrador.id]),
+            {"perfil": User.PERFIL_ANALISTA},
+            follow=True,
+        )
         self.assertEqual(resp.status_code, 200)
         self.administrador.refresh_from_db()
         self.assertEqual(self.administrador.perfil, User.PERFIL_ADMINISTRADOR)
@@ -1071,3 +1112,133 @@ class AcessoLiberadoMiddlewareTests(TestCase):
         resp = self.client.get(reverse("home"))
         self.assertEqual(resp.status_code, 302)
         self.assertIn(reverse("login"), resp.url)
+
+
+class PerfilPropertyTests(TestCase):
+    """RN-004/RN-093: `is_administrador`/`is_visualizador` não se
+    sobrepõem — superuser sempre conta como Administrador, mesmo que o
+    campo `perfil` esteja (por engano) como Visualizador."""
+
+    def test_is_visualizador_true_so_para_o_perfil_visualizador(self):
+        usuario = User.objects.create_user(
+            username="visualizador-teste", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.assertTrue(usuario.is_visualizador)
+        self.assertFalse(usuario.is_administrador)
+
+    def test_administrador_e_analista_nao_sao_visualizador(self):
+        administrador = User.objects.create_user(
+            username="admin-prop", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        analista = User.objects.create_user(
+            username="analista-prop", password="senha-teste-123", perfil=User.PERFIL_ANALISTA,
+        )
+        self.assertFalse(administrador.is_visualizador)
+        self.assertFalse(analista.is_visualizador)
+
+    def test_superuser_com_perfil_visualizador_continua_administrador(self):
+        superuser = User.objects.create_superuser(
+            username="super-visualizador", password="senha-teste-123",
+        )
+        superuser.perfil = User.PERFIL_VISUALIZADOR
+        superuser.save(update_fields=["perfil"])
+        self.assertTrue(superuser.is_administrador)
+        self.assertFalse(superuser.is_visualizador)
+
+
+class VisualizadorAccessMiddlewareTests(TestCase):
+    """RN-093/FEAT-040: Visualizador só acessa Projeto > Equipamentos
+    (grid_inep + ri_detail), somente leitura — reforço técnico por trás
+    do que a tela já esconde (`RiDetailViewTests`/`GridInepViewTests`).
+
+    RN-096 (2026-09-12): Projeto > MIP (mip_inep + mip_detail) entra na
+    mesma lista, também só leitura (GET) — o Visualizador ganha acesso ao
+    MIP, mas as telas escondem os valores financeiros e os controles de
+    edição (Status (MIP), lançamento de equipamento só valor de serviço),
+    testado à parte em `apps.escolas.tests`."""
+
+    def setUp(self):
+        self.visualizador = User.objects.create_user(
+            username="visualizador-mw", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.escola = Escola.objects.create(inep="60000001", nome="Escola Visualizador")
+
+    def test_acessa_grid_de_equipamentos(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_acessa_detalhe_do_ri_via_get(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_dashboard_e_bloqueado_e_redireciona_pro_grid(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("home"), follow=True)
+        self.assertRedirects(resp, reverse("grid_inep"))
+        self.assertContains(resp, "Usuário Visualizador só pode visualizar Projeto")
+
+    def test_acessa_grid_do_mip_via_get(self):
+        """RN-096: MIP deixa de ser bloqueado — Visualizador só não vê
+        valor financeiro nem edita nada lá (`apps.escolas.tests`)."""
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_inep"))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_acessa_detalhe_do_mip_via_get(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_post_no_status_mip_e_bloqueado(self):
+        """RN-096: acesso de leitura ao MIP não abre as ações de escrita
+        das rotas de lá — reforço técnico, mesmo padrão do RI acima."""
+        self.client.force_login(self.visualizador)
+        resp = self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": "em_andamento"},
+            follow=True,
+        )
+        self.assertRedirects(resp, reverse("grid_inep"))
+
+    def test_post_no_lancamento_de_equipamento_so_servico_do_mip_e_bloqueado(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.post(
+            reverse("mip_item_ixc_somente_servico_salvar", kwargs={"inep": self.escola.inep}),
+            {},
+            follow=True,
+        )
+        self.assertRedirects(resp, reverse("grid_inep"))
+
+    def test_tela_de_usuarios_e_bloqueada(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("usuarios"), follow=True)
+        self.assertRedirects(resp, reverse("grid_inep"))
+
+    def test_post_no_detalhe_do_ri_e_bloqueado(self):
+        """Mesmo sem o formulário na tela (escondido por
+        `request.user.is_visualizador`), um POST direto continua recusado
+        — reforço técnico, não só visual."""
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.visualizador)
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "salvar_ixc"},
+            follow=True,
+        )
+        self.assertRedirects(resp, reverse("grid_inep"))
+
+    def test_login_de_visualizador_manda_direto_pro_grid(self):
+        resp = self.client.post(
+            reverse("login"),
+            {"username": "visualizador-mw", "password": "senha-teste-123"},
+        )
+        self.assertRedirects(resp, reverse("grid_inep"))
+
+    def test_login_de_analista_continua_indo_pro_dashboard(self):
+        User.objects.create_user(username="analista-mw", password="senha-teste-123")
+        resp = self.client.post(
+            reverse("login"), {"username": "analista-mw", "password": "senha-teste-123"},
+        )
+        self.assertRedirects(resp, reverse("home"))

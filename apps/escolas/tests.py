@@ -19,7 +19,7 @@ from apps.escolas.services import (
     PlanilhaFaturamentoImplantacaoError,
     gerar_planilha_faturamento_implantacao,
 )
-from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemEace, RiItemIxc
+from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemEace, RiItemIxc, RiItemRelatorioEace
 
 User = get_user_model()
 
@@ -1420,6 +1420,51 @@ class MipDetailViewTests(TestCase):
         # Formulário de nova mensagem posta pro mesmo endpoint do RI (RN combinada com o usuário).
         self.assertContains(resp, f'hx-post="{reverse("ri_detail", kwargs={"inep": self.escola.inep})}"')
 
+    def test_lado3_ganha_dados_da_ri_com_linha_divisoria_quando_aguardando_validacao_eace(self):
+        """RN-095 (2026-09-12): com o Status (MIP) em "Aguardando
+        Validação EACE", o card Relatório EACE (3º) ganha também os dados
+        do próprio Lado 3 da RI, acima de uma linha divisória — só para o
+        usuário bater visualmente os 2 relatórios; o bloco de dados do
+        MIP continua aparecendo do jeito de sempre, logo abaixo."""
+        self.escola.status_mip = Escola.AGUARDANDO_VALIDACAO_EACE
+        self.escola.save()
+        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        RiItemRelatorioEace.objects.create(
+            ri=ri, descricao_item="Nobreak", quantidade=1, valor_unitario=Decimal("150.00"),
+        )
+        KitPadrao.objects.create(
+            descricao="Nobreak", lote=9, valor_equipamento="150.00", valor_servico="30.00",
+        )
+        EscolaItemRelatorioEaceMip.objects.create(
+            escola=self.escola, descricao_item="Cabo de rede", quantidade=10,
+            valor_servico=Decimal("20.00"),
+        )
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "Dados Relatório RI")
+        self.assertContains(resp, "Dados Relatório MIP")
+        # Dado da RI: valor de serviço vem do catálogo (R$ 30,00), nunca o
+        # valor_unitario gravado no item (R$ 150,00, valor de equipamento).
+        self.assertContains(resp, "Nobreak — 1 un. —")
+        self.assertContains(resp, "R$ 30,00")
+        self.assertNotContains(resp, "R$ 150,00")
+        # Dado do MIP: continua aparecendo igual a antes.
+        self.assertContains(resp, "Cabo de rede — 10 un. —")
+        self.assertContains(resp, "R$ 20,00")
+
+    def test_lado3_nao_ganha_dados_da_ri_fora_do_status_aguardando_validacao_eace(self):
+        """Fora de "Aguardando Validação EACE" (RN-095), o card continua
+        idêntico a antes — sem a linha divisória nem os dados da RI."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        RiItemRelatorioEace.objects.create(
+            ri=ri, descricao_item="Nobreak", quantidade=1, valor_unitario=Decimal("150.00"),
+        )
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, "Dados Relatório RI")
+        self.assertNotContains(resp, "Dados Relatório MIP")
+        self.assertNotContains(resp, "Nobreak")
+
     def test_os_3_cards_do_mip_linkam_para_a_mesma_tela_de_detalhe(self):
         # RN-074 (a criar): só aparece no grid quem está em "Aguardando
         # validação EACE".
@@ -1431,6 +1476,100 @@ class MipDetailViewTests(TestCase):
             reverse("mip_detail", kwargs={"inep": self.escola.inep}),
             count=3,
         )
+
+
+class VisualizadorMipTests(TestCase):
+    """RN-096 (2026-09-12): usuário Visualizador ganha acesso (só leitura)
+    ao Projeto > MIP — mip_inep e mip_detail continuam mostrando os itens
+    normalmente, mas sem nenhum valor financeiro ("R$ ..."), sem os
+    controles de edição (Status (MIP), lançamento de equipamento só
+    valor de serviço). O acesso técnico à rota é testado em
+    `apps.core.tests.VisualizadorAccessMiddlewareTests`; aqui é só o que
+    a própria tela mostra/esconde."""
+
+    def setUp(self):
+        self.visualizador = User.objects.create_user(
+            username="visualizador-mip", password="senha-teste-123",
+            perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.escola = Escola.objects.create(
+            inep="10000001", nome="Escola Visualizador MIP", lote=9,
+            status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+        )
+        KitPadrao.objects.create(
+            descricao="Nobreak", lote=9, valor_equipamento="150.00", valor_servico="30.00",
+        )
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="150.00",
+        )
+        EscolaItemRelatorioEaceMip.objects.create(
+            escola=self.escola, descricao_item="Cabo de rede", quantidade=10,
+            valor_servico=Decimal("20.00"),
+        )
+
+    def test_grid_do_mip_esconde_valor_financeiro(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_inep"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "R$")
+        self.assertNotContains(resp, "Valor Total (IXC)")
+        self.assertNotContains(resp, "Valor Total (EACE)")
+        # Descrição/quantidade continuam aparecendo — só o valor some.
+        self.assertContains(resp, "Nobreak")
+        self.assertContains(resp, "Cabo de rede")
+
+    def test_grid_do_mip_mostra_valor_financeiro_para_quem_nao_e_visualizador(self):
+        """Regressão: ninguém além do Visualizador perde o valor."""
+        analista = User.objects.create_user(
+            username="analista-mip-valor", password="senha-teste-123",
+        )
+        self.client.force_login(analista)
+        resp = self.client.get(reverse("mip_inep"))
+        self.assertContains(resp, "R$")
+        self.assertContains(resp, "Valor Total (IXC)")
+
+    def test_detalhe_do_mip_esconde_valor_financeiro(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "R$")
+        self.assertContains(resp, "Nobreak")
+        self.assertContains(resp, "Cabo de rede")
+
+    def test_detalhe_do_mip_mostra_status_como_texto_sem_formulario(self):
+        """Visualizador vê o Status (MIP), só não troca — sem o
+        `<select>`/formulário de edição."""
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "Aguardando Validação EACE")
+        self.assertNotContains(resp, 'name="status_mip"')
+        self.assertNotContains(resp, reverse("mip_status_update", kwargs={"inep": self.escola.inep}))
+
+    def test_detalhe_do_mip_esconde_lancamento_de_equipamento_so_servico(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, "Equipamento (só valor de serviço)")
+        self.assertNotContains(
+            resp, reverse("mip_item_ixc_somente_servico_salvar", kwargs={"inep": self.escola.inep})
+        )
+
+    def test_detalhe_do_mip_mostra_total_dos_lados_para_quem_nao_e_visualizador(self):
+        """RN-097 (2026-09-12): total (Quantidade × Valor de serviço) de
+        cada um dos 3 lados, abaixo da lista de itens."""
+        analista = User.objects.create_user(
+            username="analista-mip-total", password="senha-teste-123",
+        )
+        self.client.force_login(analista)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "R$ 30,00")  # total do Lado 2 (IXC: 1 Nobreak × R$ 30,00)
+        self.assertContains(resp, "R$ 200,00")  # total do Lado 3 (MIP: 10 Cabo de rede × R$ 20,00)
+        self.assertContains(resp, "nenhum item lançado")  # total do Lado 1 (Kit declarado vazio)
+
+    def test_detalhe_do_mip_esconde_total_dos_lados_do_visualizador(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, "Total:")
 
 
 class MipStatusUpdateViewTests(TestCase):

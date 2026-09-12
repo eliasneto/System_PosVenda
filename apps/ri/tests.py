@@ -3660,6 +3660,55 @@ class RiDetailViewTests(TestCase):
         self.assertNotContains(resp, 'title="Editar"')
         self.assertNotContains(resp, 'title="Excluir"')
 
+    def test_totais_dos_3_lados_aparecem_para_analista(self):
+        """RN-097 (2026-09-12): abaixo de cada um dos 3 lados, o total
+        (Quantidade × Valor Unitário) dos itens já lançados naquele lado."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        RiItemEace.objects.create(ri=ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00")
+        RiItemIxc.objects.create(ri=ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00")
+        RiItemIxc.objects.create(ri=ri, descricao_item="Nobreak", quantidade=1, valor_unitario="150.00")
+        RiItemRelatorioEace.objects.create(
+            ri=ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00"
+        )
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        # Lado 1 e Lado 3: mesma soma (700,00); Lado 2: 700,00 + 150,00.
+        self.assertContains(resp, "R$ 700,00", count=2)
+        self.assertContains(resp, "R$ 850,00")
+
+    def test_total_lado1_usa_referencia_do_catalogo_quando_sem_item_lancado(self):
+        """RN-097 (correção, 2026-09-12): usuário reportou que o Lado 1
+        nunca mostrava total, diferente do MIP — Lado 1 quase nunca tem
+        `RiItemEace` lançado (não é lançado nesta tela, RN-010); sem essa
+        referência, o total ficaria sempre "nenhum item lançado", mesmo
+        quando o MIP já mostra um valor pro mesmo Kit declarado."""
+        self.escola.kit_inicial = "Kit Cobertura Wi-Fi - 4 Access Points"
+        self.escola.save()
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 4 Access Points",
+            valor_equipamento=Decimal("1200.00"), valor_servico=Decimal("300.00"),
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        # Valor de equipamento (RI), nunca o de serviço (MIP, RN-067).
+        self.assertContains(resp, "R$ 1.200,00")
+        self.assertNotContains(resp, "R$ 300,00")
+
+    def test_totais_dos_3_lados_nao_aparecem_para_visualizador(self):
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        RiItemIxc.objects.create(ri=ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00")
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, "Total:")
+        self.assertNotContains(resp, "R$ 700,00")
+
+    def test_lado_sem_item_lancado_total_mostra_nenhum_item(self):
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "nenhum item lançado")
+
     def test_visualizador_nao_consegue_editar_via_post(self):
         Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.visualizador)

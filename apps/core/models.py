@@ -29,14 +29,18 @@ class UserManager(BaseUserManager):
 
 class User(AbstractUser):
     """Reaproveitado de apps.core.User do modulo-posVenda (RNF-05), com o
-    campo `perfil` acrescentado para os dois perfis fixos deste sistema
-    (RN-004): Administrador (tudo) e Analista (tudo, exceto excluir)."""
+    campo `perfil` acrescentado para os perfis fixos deste sistema
+    (RN-004): Administrador (tudo), Analista (tudo, exceto excluir) e
+    Visualizador (RN-093/FEAT-040: só visualiza Projeto > Equipamentos,
+    sem Status/Responsável/logs/RPA e sem editar nada)."""
 
     PERFIL_ADMINISTRADOR = "administrador"
     PERFIL_ANALISTA = "analista"
+    PERFIL_VISUALIZADOR = "visualizador"
     PERFIL_CHOICES = [
         (PERFIL_ADMINISTRADOR, "Administrador"),
         (PERFIL_ANALISTA, "Analista"),
+        (PERFIL_VISUALIZADOR, "Visualizador"),
     ]
 
     username = models.CharField("Usuario", max_length=150, unique=True)
@@ -64,3 +68,9 @@ class User(AbstractUser):
     def is_administrador(self):
         """RN-004: superuser tambem conta como Administrador."""
         return self.is_superuser or self.perfil == self.PERFIL_ADMINISTRADOR
+
+    @property
+    def is_visualizador(self):
+        """RN-093/FEAT-040: superuser/Administrador nunca cai aqui, mesmo
+        que o campo `perfil` esteja (por engano) como Visualizador."""
+        return not self.is_administrador and self.perfil == self.PERFIL_VISUALIZADOR

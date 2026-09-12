@@ -46,7 +46,7 @@
                     <td class="px-4 py-3 text-gray-500 dark:text-gray-400">{{ usuario.email|default:"—" }}</td>
                     <td class="px-4 py-3">
                         <span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest
-                            {% if usuario.is_administrador %}bg-pv-yellow/20 text-amber-600 dark:text-pv-yellow{% else %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400{% endif %}">
+                            {% if usuario.is_administrador %}bg-pv-yellow/20 text-amber-600 dark:text-pv-yellow{% elif usuario.is_visualizador %}bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300{% else %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400{% endif %}">
                             {{ usuario.get_perfil_display }}
                         </span>
                     </td>
@@ -60,12 +60,17 @@
                         {% if usuario == request.user %}
                         <span class="text-[10px] text-gray-400 dark:text-gray-500">Não é possível trocar o próprio perfil</span>
                         {% else %}
-                        <form method="POST" action="{% url 'usuarios_trocar_perfil' usuario_id=usuario.id %}"
-                              onsubmit="return confirm('Trocar o perfil de {{ usuario.username|escapejs }} para {% if usuario.is_administrador %}Analista{% else %}Administrador{% endif %}?');">
+                        <!-- RN-093/FEAT-040: com 3 perfis fixos, um botão de
+                             alternância só entre 2 não dá mais conta — vira
+                             <select> com auto-submit ao trocar (mesmo padrão
+                             `data-salvar-ao-trocar` do Status do MIP/RI). -->
+                        <form method="POST" action="{% url 'usuarios_trocar_perfil' usuario_id=usuario.id %}" data-salvar-ao-trocar>
                             {% csrf_token %}
-                            <button type="submit" class="px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-xl hover:bg-gray-800 transition">
-                                {% if usuario.is_administrador %}Tornar Analista{% else %}Tornar Administrador{% endif %}
-                            </button>
+                            <select name="perfil" class="px-3 py-2 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-black text-[10px] text-gray-700 dark:text-gray-300 uppercase">
+                                {% for valor, rotulo in perfil_opcoes %}
+                                <option value="{{ valor }}" {% if usuario.perfil == valor %}selected{% endif %}>{{ rotulo }}</option>
+                                {% endfor %}
+                            </select>
                         </form>
                         {% endif %}
                     </td>

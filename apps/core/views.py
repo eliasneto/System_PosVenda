@@ -1,9 +1,10 @@
 from urllib.parse import urlencode
 
 from django.contrib import messages
+from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponseForbidden
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect, render, resolve_url
 
 from apps.ri.services import (
     montar_dashboard_equipamentos,
@@ -15,6 +16,18 @@ from apps.ri.services import (
 )
 
 from .models import User
+
+
+class LoginPerfilView(auth_views.LoginView):
+    """RN-093/FEAT-040: Visualizador não acessa o Dashboard (home,
+    LOGIN_REDIRECT_URL padrão) — login manda direto para Projeto >
+    Equipamentos, evitando a mensagem de bloqueio do
+    VisualizadorAccessMiddleware logo na primeira tela após entrar."""
+
+    def get_default_redirect_url(self):
+        if self.request.user.is_visualizador:
+            return resolve_url("grid_inep")
+        return super().get_default_redirect_url()
 
 
 @login_required
@@ -236,15 +249,23 @@ def usuarios_view(request):
         return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
 
     usuarios = User.objects.all().order_by("username")
-    return render(request, "core/usuarios.html", {"usuarios": usuarios})
+    return render(
+        request,
+        "core/usuarios.html",
+        {"usuarios": usuarios, "perfil_opcoes": User.PERFIL_CHOICES},
+    )
 
 
 @login_required
 def usuarios_trocar_perfil_view(request, usuario_id):
-    """FEAT-028 (RN-004 ampliada): alterna o perfil de outro usuário entre
-    Administrador e Analista. Bloqueia a troca do próprio perfil — evita o
-    Administrador se autorrebaixar sem ter outro Administrador por perto
-    para reverter (decisão do Orquestrador, opção mais conservadora)."""
+    """FEAT-028 (RN-004 ampliada) + RN-093/FEAT-040: troca o perfil de
+    outro usuário entre os 3 perfis fixos (Administrador, Analista,
+    Visualizador). Antes era um botão de alternância só entre 2 perfis —
+    com 3 opções isso não dá mais, por isso virou um <select> (tela
+    `usuarios.html`) que envia o perfil escolhido. Bloqueia a troca do
+    próprio perfil — evita o Administrador se autorrebaixar sem ter outro
+    Administrador por perto para reverter (decisão do Orquestrador,
+    opção mais conservadora, mantida)."""
     if not request.user.is_administrador:
         return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
     if request.method != "POST":
@@ -255,9 +276,12 @@ def usuarios_trocar_perfil_view(request, usuario_id):
         messages.error(request, "Você não pode trocar o próprio perfil por esta tela.")
         return redirect("usuarios")
 
-    usuario.perfil = (
-        User.PERFIL_ANALISTA if usuario.perfil == User.PERFIL_ADMINISTRADOR else User.PERFIL_ADMINISTRADOR
-    )
+    novo_perfil = request.POST.get("perfil")
+    if novo_perfil not in dict(User.PERFIL_CHOICES):
+        messages.error(request, "Perfil inválido.")
+        return redirect("usuarios")
+
+    usuario.perfil = novo_perfil
     usuario.save(update_fields=["perfil"])
     messages.success(request, f"Perfil de {usuario.username} alterado para {usuario.get_perfil_display()}.")
     return redirect("usuarios")

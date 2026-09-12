@@ -302,6 +302,33 @@ def _valor_servico(descricao, eh_kit, lote, catalogo):
     return match.valor_servico if match else None
 
 
+def _resolver_lado3_relatorio_eace_ri(ri, lote, catalogo):
+    """RN-095 (nova, a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-12): Dados do Relatório EACE da própria RI
+    (`RiItemRelatorioEace`, Lado 3 da tela do RI) exibidos também no Lado
+    3 do MIP (`mip_detail_view`) — só para o usuário bater visualmente se
+    os dois relatórios batem entre si (o quanto a RI já lançou × o que a
+    planilha do MIP trouxe, `_resolver_lado3_relatorio_eace_mip`, abaixo),
+    separados por uma linha horizontal no template. Puramente de leitura:
+    nunca grava nada em `EscolaItemRelatorioEaceMip`, nunca altera o
+    Sincronizador do MIP nem o do RI — RN-067 (as duas fontes nunca se
+    misturam de fato) continua valendo, isto é só as duas listas lado a
+    lado na mesma tela. Mesmo Valor de serviço resolvido pelo catálogo
+    (não o Valor de equipamento gravado no item) — mesmo padrão de
+    `_resolver_lado_ixc`, abaixo."""
+    if not ri:
+        return []
+    return [
+        {
+            "pk": item.pk,
+            "descricao": item.descricao_item,
+            "quantidade": item.quantidade,
+            "valor_servico": _valor_servico(item.descricao_item, item.eh_kit, lote, catalogo),
+        }
+        for item in ri.itens_relatorio_eace.all()
+    ]
+
+
 def _resolver_lado_ixc(ri, lote, catalogo):
     """2º lado (IXC) do grid do MIP — mesmos itens do RI (`RiItemIxc`), sem
     lançamento próprio nesta tela: lançar/editar continua exclusivo da
