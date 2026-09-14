@@ -1,0 +1,116 @@
+{% comment %}
+FEAT-050 (a formalizar pelo Orquestrador em business_rules.md; pedido do
+usuário, 2026-09-14): modal de revisão antes de criar o LOTE — "eu queria
+que após os filtros, ao clicar no input de criação de LOTE, tivesse um
+modal onde mostrasse todos os INEPS que está indo para aquele lote e eu
+possa retirar algum INEP que não deveria está indo" — 1 checkbox por INEP
+elegível (`escolas_elegiveis_lote`, calculada em `mip_inep_view`), todos
+marcados por padrão. Confirmar submete só os marcados
+(`apps.escolas.views.mip_lote_criar_view` lê `request.POST.getlist
+("escola_ids")`); `apps.escolas.services.criar_lote_mip` sempre intersecta
+com quem é elegível de verdade, nunca confia cegamente no POST.
+
+Mesmo JS genérico já existente em `core/base.html`
+(`data-abrir-modal-email`/`data-fechar-modal-email`) usado pelo modal de
+e-mail do LOTE (`_modal_enviar_email_lote.html`) — reaproveitado aqui
+mesmo não sendo um modal de e-mail (o atributo só abre/fecha por ID, não
+tem nada específico de e-mail); evita duplicar JS igual em `base.html`
+para um 3º modal com a mesma mecânica.
+
+Parâmetros: `escolas_elegiveis_lote` (lista de `Escola`), `estado_filtro`,
+`municipio_filtro`, `data_inicial_validacao`, `data_final_validacao`.
+{% endcomment %}
+<div id="modal-criar-lote" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email>
+    <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
+    <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+        <form id="form-criar-lote" method="POST" action="{% url 'mip_lote_criar' %}" class="flex flex-col min-h-0">
+            {% csrf_token %}
+            <input type="hidden" name="estado" value="{{ estado_filtro }}">
+            <input type="hidden" name="municipio" value="{{ municipio_filtro }}">
+            <input type="hidden" name="data_inicial" value="{{ data_inicial_validacao|date:'d/m/Y' }}">
+            <input type="hidden" name="data_final" value="{{ data_final_validacao|date:'d/m/Y' }}">
+
+            <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800 shrink-0">
+                <h2 class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Revisar INEPs do LOTE</h2>
+                <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-800 shrink-0 flex items-center justify-between gap-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                    Desmarque quem não deveria entrar neste LOTE.
+                    <span id="contador-selecionados-lote" class="font-black text-gray-900 dark:text-gray-100">{{ escolas_elegiveis_lote|length }}</span>
+                    de {{ escolas_elegiveis_lote|length }} selecionado(s).
+                </p>
+                <div class="flex gap-3 shrink-0">
+                    <button type="button" id="btn-marcar-todos-lote" class="text-[10px] font-black uppercase text-amber-600 dark:text-amber-400 hover:underline">Marcar todos</button>
+                    <button type="button" id="btn-desmarcar-todos-lote" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 hover:underline">Desmarcar todos</button>
+                </div>
+            </div>
+
+            <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0">
+                <div class="space-y-1">
+                    {% for escola in escolas_elegiveis_lote %}
+                    <label class="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer">
+                        <input type="checkbox" name="escola_ids" value="{{ escola.pk }}" checked
+                               class="checkbox-lote-inep w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-pv-yellow focus:ring-amber-400 shrink-0">
+                        <span class="text-xs font-bold text-gray-800 dark:text-gray-100">{{ escola.inep }}</span>
+                        <span class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ escola.nome }}</span>
+                    </label>
+                    {% empty %}
+                    <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum INEP elegível.</p>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800 shrink-0">
+                <button type="button" data-fechar-modal-email class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                    Cancelar
+                </button>
+                <button type="submit" class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition inline-flex items-center gap-2">
+                    <i data-lucide="package-plus" class="w-3.5 h-3.5"></i>
+                    Criar LOTE
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// FEAT-050: "Marcar/Desmarcar todos" e contador ao vivo — só deste modal
+// (checkboxes com a classe `checkbox-lote-inep`), sem afetar nenhum outro
+// checkbox da página. JS pequeno o bastante para não justificar Alpine.js
+// (CLAUDE.md/dev.md §4).
+(function () {
+    var checkboxes = document.querySelectorAll('#modal-criar-lote .checkbox-lote-inep');
+    var contador = document.getElementById('contador-selecionados-lote');
+
+    function atualizarContador() {
+        if (!contador) return;
+        var marcados = 0;
+        checkboxes.forEach(function (cb) { if (cb.checked) marcados++; });
+        contador.textContent = marcados;
+    }
+
+    checkboxes.forEach(function (cb) {
+        cb.addEventListener('change', atualizarContador);
+    });
+
+    var marcarTodos = document.getElementById('btn-marcar-todos-lote');
+    if (marcarTodos) {
+        marcarTodos.addEventListener('click', function () {
+            checkboxes.forEach(function (cb) { cb.checked = true; });
+            atualizarContador();
+        });
+    }
+
+    var desmarcarTodos = document.getElementById('btn-desmarcar-todos-lote');
+    if (desmarcarTodos) {
+        desmarcarTodos.addEventListener('click', function () {
+            checkboxes.forEach(function (cb) { cb.checked = false; });
+            atualizarContador();
+        });
+    }
+})();
+</script>

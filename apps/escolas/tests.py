@@ -2554,10 +2554,24 @@ class LoteMipElegibilidadeTests(TestCase):
         elegiveis = escolas_elegiveis_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
         self.assertNotIn(escola, elegiveis)
 
-    def test_sem_filtro_obrigatorio_devolve_vazio(self):
+    def test_sem_estado_ou_municipio_devolve_vazio(self):
         _criar_escola_elegivel_lote("10000007")
         self.assertEqual(escolas_elegiveis_lote_mip("", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30)), [])
-        self.assertEqual(escolas_elegiveis_lote_mip("GO", "Abadiânia", None, datetime.date(2026, 9, 30)), [])
+        self.assertEqual(escolas_elegiveis_lote_mip("GO", "", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30)), [])
+
+    def test_sem_nenhuma_data_entra_mesmo_assim(self):
+        """RN-098 (correção, 2026-09-14 — bug real reportado pelo usuário,
+        INEP 52171205): Data início/Data fim são opcionais — só Estado e
+        Município são obrigatórios."""
+        escola, _ri = _criar_escola_elegivel_lote("10000071")
+        self.assertEqual(escolas_elegiveis_lote_mip("GO", "Abadiânia", None, None), [escola])
+
+    def test_so_data_inicio_restringe_so_essa_ponta(self):
+        escola_dentro, _ri1 = _criar_escola_elegivel_lote("10000072", data_ativacao=datetime.date(2026, 9, 15))
+        escola_fora, _ri2 = _criar_escola_elegivel_lote("10000073", data_ativacao=datetime.date(2026, 8, 1))
+        elegiveis = escolas_elegiveis_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), None)
+        self.assertIn(escola_dentro, elegiveis)
+        self.assertNotIn(escola_fora, elegiveis)
 
 
 class CriarLoteMipTests(TestCase):
@@ -2573,15 +2587,27 @@ class CriarLoteMipTests(TestCase):
             valor_equipamento="1000.00", valor_servico="300.00",
         )
 
-    def test_sem_filtro_obrigatorio_levanta_erro_e_nao_cria_lote(self):
+    def test_sem_estado_ou_municipio_levanta_erro_e_nao_cria_lote(self):
         with self.assertRaises(LoteMipError):
             criar_lote_mip("", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        with self.assertRaises(LoteMipError):
+            criar_lote_mip("GO", "", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
         self.assertEqual(Lote.objects.count(), 0)
 
     def test_data_inicial_depois_da_final_levanta_erro(self):
         with self.assertRaises(LoteMipError):
             criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 30), datetime.date(2026, 9, 1), self.usuario)
         self.assertEqual(Lote.objects.count(), 0)
+
+    def test_cria_lote_sem_nenhuma_data(self):
+        """RN-098 (correção, 2026-09-14 — bug real reportado pelo usuário,
+        INEP 52171205): Estado e Município bastam — Data inicial/final
+        ficam `None` no `Lote` quando não informadas."""
+        escola, _ri = _criar_escola_elegivel_lote("10000074")
+        lote = criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
+        self.assertIsNone(lote.data_inicio)
+        self.assertIsNone(lote.data_fim)
+        self.assertEqual(set(lote.escolas.all()), {escola})
 
     def test_sem_elegivel_levanta_erro_e_nao_cria_lote(self):
         with self.assertRaises(LoteMipError):
@@ -2615,6 +2641,28 @@ class CriarLoteMipTests(TestCase):
 
         entrada_lote = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="LOTE")
         self.assertEqual(entrada_lote.valor_novo, str(lote))
+
+    def test_escola_ids_restringe_ao_selecionado(self):
+        """FEAT-050 (pedido do usuário, 2026-09-14): `escola_ids`
+        restringe o LOTE aos INEPs marcados no modal de revisão."""
+        escola1, _ri1 = _criar_escola_elegivel_lote("10000015")
+        escola2, _ri2 = _criar_escola_elegivel_lote("10000016")
+        lote = criar_lote_mip(
+            "GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario,
+            escola_ids=[str(escola1.pk)],
+        )
+        self.assertEqual(set(lote.escolas.all()), {escola1})
+        escola2.refresh_from_db()
+        self.assertEqual(escola2.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_escola_ids_vazio_levanta_erro(self):
+        _criar_escola_elegivel_lote("10000017")
+        with self.assertRaises(LoteMipError):
+            criar_lote_mip(
+                "GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario,
+                escola_ids=[],
+            )
+        self.assertEqual(Lote.objects.count(), 0)
 
     def test_nao_cria_lote_duplicado_ao_tentar_de_novo_sem_elegivel(self):
         """Depois que um INEP entra no LOTE, ele sai de "Aguardando
@@ -2657,7 +2705,32 @@ class MipLoteCriarViewTests(TestCase):
             follow=True,
         )
         self.assertEqual(Lote.objects.count(), 0)
-        self.assertContains(resp, "Informe Estado, Município, Data inicial e Data final")
+        self.assertContains(resp, "Informe Estado e Município")
+
+    def test_sem_data_cria_lote_normalmente(self):
+        """RN-098 (correção, 2026-09-14 — bug real reportado pelo usuário,
+        INEP 52171205)."""
+        escola, _ri = _criar_escola_elegivel_lote("10000021")
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_criar"),
+            {"estado": "GO", "municipio": "Abadiânia", "escola_ids": [str(escola.pk)]},
+        )
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.assertEqual(Lote.objects.count(), 1)
+
+    def test_sem_nenhum_escola_id_marcado_mostra_erro_e_nao_cria(self):
+        """FEAT-050 (pedido do usuário, 2026-09-14): modal de revisão com
+        checkbox por INEP — desmarcar todos não pode criar um LOTE vazio."""
+        _criar_escola_elegivel_lote("10000022")
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_criar"),
+            {"estado": "GO", "municipio": "Abadiânia"},  # sem "escola_ids" - tudo desmarcado
+            follow=True,
+        )
+        self.assertEqual(Lote.objects.count(), 0)
+        self.assertContains(resp, "Nenhum INEP selecionado")
 
     def test_sem_elegivel_mostra_erro_e_preserva_filtro_no_redirecionamento(self):
         self.client.force_login(self.usuario)
@@ -2670,14 +2743,55 @@ class MipLoteCriarViewTests(TestCase):
         self.assertIn("municipio=Abadi", resp.url)
 
     def test_happy_path_cria_lote_e_redireciona_para_lista(self):
-        _criar_escola_elegivel_lote("10000020")
+        escola, _ri = _criar_escola_elegivel_lote("10000020")
         self.client.force_login(self.usuario)
         resp = self.client.post(
             reverse("mip_lote_criar"),
-            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+            {
+                "estado": "GO", "municipio": "Abadiânia",
+                "data_inicial": "01/09/2026", "data_final": "30/09/2026",
+                "escola_ids": [str(escola.pk)],
+            },
         )
         self.assertRedirects(resp, reverse("mip_lote_inep"))
         self.assertEqual(Lote.objects.count(), 1)
+
+    def test_desmarcar_um_inep_no_modal_exclui_ele_do_lote(self):
+        """FEAT-050 (pedido do usuário, 2026-09-14): usuário desmarca 1
+        INEP no modal de revisão — só os marcados entram no LOTE."""
+        escola_marcada, _ri1 = _criar_escola_elegivel_lote("10000023")
+        escola_desmarcada, _ri2 = _criar_escola_elegivel_lote("10000024")
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_criar"),
+            {"estado": "GO", "municipio": "Abadiânia", "escola_ids": [str(escola_marcada.pk)]},
+        )
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        lote = Lote.objects.get()
+        self.assertEqual(set(lote.escolas.all()), {escola_marcada})
+        escola_desmarcada.refresh_from_db()
+        self.assertEqual(escola_desmarcada.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_escola_id_manipulado_fora_dos_elegiveis_e_ignorado(self):
+        """Segurança (CLAUDE.md §6): `escola_ids` vindo do POST nunca é
+        confiado cegamente — um ID de uma Escola que não é elegível de
+        verdade (ex.: POST manipulado) é ignorado, nunca entra no LOTE."""
+        escola_elegivel, _ri = _criar_escola_elegivel_lote("10000025")
+        escola_nao_elegivel = Escola.objects.create(
+            inep="10000026", nome="Escola Não Elegível", estado="GO", municipio="Abadiânia",
+            status_mip=Escola.EM_ANDAMENTO,
+        )
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_criar"),
+            {
+                "estado": "GO", "municipio": "Abadiânia",
+                "escola_ids": [str(escola_elegivel.pk), str(escola_nao_elegivel.pk)],
+            },
+        )
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        lote = Lote.objects.get()
+        self.assertEqual(set(lote.escolas.all()), {escola_elegivel})
 
 
 class MipLoteInepViewTests(TestCase):
@@ -2717,6 +2831,19 @@ class MipLoteInepViewTests(TestCase):
         self.assertContains(resp, escola.inep)
         self.assertContains(resp, "R$ 300,00")
 
+    def test_lote_sem_data_mostra_travessao(self):
+        """RN-098 (correção, 2026-09-14): `Lote` criado sem Data
+        inicial/final não quebra a tela (nem o corpo de e-mail sugerido,
+        `montar_corpo_email_lote`, que também usa essas datas) — mostra
+        "—" nas 2 colunas e "não informado" no corpo do e-mail."""
+        _criar_escola_elegivel_lote("10000032")
+        criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "—")
+        self.assertContains(resp, "Período: não informado")
+
     def test_visualizador_e_bloqueado(self):
         """Pedido do usuário (2026-09-14, revisão): "esse MIP lote não
         pode ser acessado pelo usuario apenas com permissão de
@@ -2732,8 +2859,9 @@ class MipLoteInepViewTests(TestCase):
 
 class MipLoteBotaoGridTests(TestCase):
     """Botão "Criar LOTE" no grid "Projeto > MIP" (`mip_inep.html`) —
-    exige os 4 filtros (Estado, Município, Data inicial, Data final) e
-    mostra a contagem de elegíveis antes de o usuário clicar."""
+    exige Estado e Município (Data inicial/final são opcionais, RN-098
+    revista em 2026-09-14) e mostra a contagem de elegíveis antes de o
+    usuário clicar."""
 
     def setUp(self):
         self.usuario = User.objects.create_user(username="analista-lote-botao", password="senha-teste-123")
@@ -2750,7 +2878,17 @@ class MipLoteBotaoGridTests(TestCase):
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_inep"), {"estado": "GO"})
         self.assertNotContains(resp, "Criar LOTE")
-        self.assertContains(resp, "Preencha Estado, Município, Data inicial e Data final")
+        self.assertContains(resp, "Preencha Estado e Município")
+
+    def test_estado_e_municipio_sem_data_mostra_botao_habilitado(self):
+        """RN-098 (correção, 2026-09-14 — bug real reportado pelo
+        usuário, INEP 52171205): filtrar só Estado/Município (sem data)
+        já mostra o botão "Criar LOTE" habilitado."""
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_inep"), {"estado": "GO", "municipio": "Abadiânia"})
+        self.assertContains(resp, "Criar LOTE")
+        self.assertContains(resp, "1 INEP")
+        self.assertNotContains(resp, 'button" disabled')
 
     def test_filtro_completo_com_elegivel_mostra_botao_habilitado(self):
         self.client.force_login(self.usuario)
@@ -2761,8 +2899,9 @@ class MipLoteBotaoGridTests(TestCase):
         self.assertContains(resp, "Criar LOTE")
         self.assertContains(resp, "1 INEP")
         # `disabled:opacity-40` (classe Tailwind) sempre aparece no HTML —
-        # o que muda é o atributo `disabled` do próprio `<button>`.
-        self.assertNotContains(resp, "submit\" disabled")
+        # o que muda é o atributo `disabled` do próprio `<button>` que
+        # abre o modal de revisão (FEAT-050, `_modal_criar_lote.html`).
+        self.assertNotContains(resp, 'button" disabled')
 
     def test_filtro_completo_sem_elegivel_mostra_botao_desabilitado(self):
         self.escola.status_mip = Escola.EM_ANDAMENTO
@@ -2773,7 +2912,19 @@ class MipLoteBotaoGridTests(TestCase):
             {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026", "status_mip": "em_andamento"},
         )
         self.assertContains(resp, "Nenhum INEP elegível")
-        self.assertContains(resp, "submit\" disabled")
+        self.assertContains(resp, 'button" disabled')
+
+    def test_modal_de_revisao_lista_os_ineps_elegiveis_com_checkbox(self):
+        """FEAT-050 (pedido do usuário, 2026-09-14): modal com 1 checkbox
+        marcado por INEP elegível, pronto pra desmarcar antes de criar."""
+        self.client.force_login(self.usuario)
+        resp = self.client.get(
+            reverse("mip_inep"),
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+        )
+        self.assertContains(resp, "Revisar INEPs do LOTE")
+        self.assertContains(resp, f'value="{self.escola.pk}" checked')
+        self.assertContains(resp, self.escola.inep)
 
     def test_visualizador_nao_ve_botao(self):
         self.client.force_login(self.visualizador)

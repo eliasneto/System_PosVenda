@@ -419,42 +419,47 @@ def _valor_total_itens(itens):
 def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim):
     """Base elegível para um LOTE: mesma combinação de filtros do grid do
     MIP — Estado/Município (RN-079, comparados exatos, iguais ao `<select>`
-    da tela) e Data de Ativação do RI atual (RN-075, `Ri.data_ativacao`,
-    dentro de `[data_inicio, data_fim]`) — restrita aos INEPs com
-    `Escola.status_mip == "Aguardando Validação EACE"` e cujo Valor Total
-    (IXC) e Valor Total (EACE) (RN-076/RN-077, `_valor_total_itens`) sejam
-    os DOIS conhecidos, completos (nenhum item sem Valor de serviço) e
-    iguais entre si — pedido explícito do usuário ("que o Valor Total
-    (IXC) seja igual ao Valor Total (EACE)"). Um total incompleto (algum
-    item sem Valor de serviço no catálogo) não entra: como o total exibido
-    já não reflete todos os itens lançados, comparar IXC × EACE nessa
-    condição arriscaria fechar um LOTE com valor que ainda pode mudar —
-    decisão do Dev (2026-09-14, reversível/baixo risco, CLAUDE.md §9).
+    da tela) e, quando informada, Data de Ativação do RI atual (RN-075,
+    `Ri.data_ativacao`, dentro de `[data_inicio, data_fim]`) — restrita
+    aos INEPs com `Escola.status_mip == "Aguardando Validação EACE"` e
+    cujo Valor Total (IXC) e Valor Total (EACE) (RN-076/RN-077,
+    `_valor_total_itens`) sejam os DOIS conhecidos, completos (nenhum
+    item sem Valor de serviço) e iguais entre si — pedido explícito do
+    usuário ("que o Valor Total (IXC) seja igual ao Valor Total (EACE)").
+    Um total incompleto (algum item sem Valor de serviço no catálogo) não
+    entra: como o total exibido já não reflete todos os itens lançados,
+    comparar IXC × EACE nessa condição arriscaria fechar um LOTE com
+    valor que ainda pode mudar — decisão do Dev (2026-09-14, reversível/
+    baixo risco, CLAUDE.md §9).
 
-    Sem Estado, Município, Data início ou Data fim, devolve lista vazia
-    (nunca assume um filtro que não foi informado, CLAUDE.md §9) — quem
-    chama decide se isso é erro (`criar_lote_mip`) ou só "0 elegíveis"
-    (contador do grid, `apps.escolas.views.mip_inep_view`)."""
+    RN-098 (correção, 2026-09-14 — bug real reportado pelo usuário, INEP
+    52171205: filtrou só Estado/Município, sem data, e o LOTE de 1 INEP
+    elegível não pôde ser criado): Data início/Data fim passam a ser
+    OPCIONAIS e independentes entre si (mesmo critério de "filtro
+    aberto" já usado no grid, RN-075) — informar só uma das duas
+    restringe só aquela ponta; sem nenhuma das duas, não filtra por data
+    nenhuma. Só Estado e Município continuam obrigatórios.
+
+    Sem Estado ou Município, devolve lista vazia (nunca assume um filtro
+    que não foi informado, CLAUDE.md §9) — quem chama decide se isso é
+    erro (`criar_lote_mip`) ou só "0 elegíveis" (contador do grid,
+    `apps.escolas.views.mip_inep_view`)."""
     estado = (estado or "").strip()
     municipio = (municipio or "").strip()
-    if not estado or not municipio or not data_inicio or not data_fim:
+    if not estado or not municipio:
         return []
 
     ri_atual_qs = Ri.objects.filter(escola=OuterRef("pk")).order_by("-criado_em")
     data_ativacao_ri_atual = Subquery(ri_atual_qs.values("data_ativacao")[:1], output_field=DateField())
-    escolas = (
-        Escola.objects.annotate(data_ativacao_ri_atual=data_ativacao_ri_atual)
-        .filter(
-            status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
-            estado=estado,
-            municipio=municipio,
-            data_ativacao_ri_atual__gte=data_inicio,
-            data_ativacao_ri_atual__lte=data_fim,
-        )
-        .order_by("nome")
-        .prefetch_related(
-            Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc"))
-        )
+    escolas = Escola.objects.annotate(data_ativacao_ri_atual=data_ativacao_ri_atual).filter(
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, estado=estado, municipio=municipio,
+    )
+    if data_inicio:
+        escolas = escolas.filter(data_ativacao_ri_atual__gte=data_inicio)
+    if data_fim:
+        escolas = escolas.filter(data_ativacao_ri_atual__lte=data_fim)
+    escolas = escolas.order_by("nome").prefetch_related(
+        Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc"))
     )
 
     catalogo_kits = list(KitPadrao.objects.all())
@@ -507,15 +512,27 @@ def _registrar_log_campo_lote(ri, usuario, campo, valor_anterior, valor_novo):
 
 
 @transaction.atomic
-def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario):
+def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_ids=None):
     """Cria o `Lote` com os INEPs elegíveis (`escolas_elegiveis_lote_mip`,
-    acima) do filtro Estado+Município+Data início/fim informado — chamada
-    pelo botão "Criar LOTE" da tela "Projeto > MIP"
-    (`apps.escolas.views.mip_lote_criar_view`). Os 4 filtros são
-    OBRIGATÓRIOS aqui (o grid do MIP permite Estado sozinho ou nenhuma
-    data — este fluxo não, pedido explícito do usuário: "o usuário vai
-    precisar... filtrar por: um estado e um município, uma data início e
-    uma data final").
+    acima) do filtro Estado+Município (+ Data início/fim, quando
+    informada) — chamada pelo botão "Criar LOTE" da tela "Projeto > MIP"
+    (`apps.escolas.views.mip_lote_criar_view`).
+
+    RN-098 (correção, 2026-09-14 — bug real reportado pelo usuário, INEP
+    52171205): só Estado e Município são OBRIGATÓRIOS aqui — Data
+    início/Data fim viraram opcionais (ver `escolas_elegiveis_lote_mip`),
+    mesmo padrão de "filtro aberto" já usado no grid do MIP (RN-075).
+
+    FEAT-050 (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-14): `escola_ids`, quando informado (não
+    `None`), restringe o LOTE a só os INEPs elegíveis marcados no modal
+    de revisão da tela ("eu possa retirar algum INEP que não deveria
+    está indo") — nunca confia cegamente na lista recebida: sempre
+    interseta com o resultado de `escolas_elegiveis_lote_mip` (nunca cria
+    o LOTE com um INEP que não é de fato elegível, mesmo que o POST tenha
+    sido manipulado). `None` (parâmetro omitido) mantém o comportamento
+    de sempre — todos os elegíveis entram, usado por quem chama esta
+    função fora da tela (ex.: testes).
 
     Cada INEP elegível ganha `Escola.status_mip =
     "aguardando_encerramento_lote"` e 2 entradas no histórico do RI atual
@@ -526,24 +543,34 @@ def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario):
     LOTE inteiro é criado (com todos os INEPs já na nova situação), ou
     nada é gravado.
 
-    Levanta `LoteMipError` sem criar nada quando falta algum dos 4 filtros,
-    quando a data inicial é depois da final, ou quando nenhum INEP é
-    elegível — quem chamar converte em mensagem para o usuário."""
+    Levanta `LoteMipError` sem criar nada quando falta Estado ou
+    Município, quando a data inicial é depois da final (as duas
+    informadas), quando nenhum INEP é elegível, ou quando `escola_ids` é
+    informado mas nenhum dos IDs recebidos bate com um elegível de
+    verdade (ex.: usuário desmarcou todos no modal) — quem chamar
+    converte em mensagem para o usuário."""
     estado = (estado or "").strip()
     municipio = (municipio or "").strip()
-    if not estado or not municipio or not data_inicio or not data_fim:
-        raise LoteMipError(
-            "Informe Estado, Município, Data inicial e Data final para criar o LOTE."
-        )
-    if data_inicio > data_fim:
+    if not estado or not municipio:
+        raise LoteMipError("Informe Estado e Município para criar o LOTE.")
+    if data_inicio and data_fim and data_inicio > data_fim:
         raise LoteMipError("A data inicial não pode ser depois da data final.")
 
-    escolas = escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim)
-    if not escolas:
+    elegiveis = escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim)
+    if not elegiveis:
+        periodo = f" no período informado" if (data_inicio or data_fim) else ""
         raise LoteMipError(
             f"Nenhum INEP elegível (Aguardando Validação EACE, com Valor Total IXC = EACE) "
-            f"para {municipio}/{estado} no período informado."
+            f"para {municipio}/{estado}{periodo}."
         )
+
+    if escola_ids is not None:
+        ids_selecionados = {str(pk) for pk in escola_ids}
+        escolas = [escola for escola in elegiveis if str(escola.pk) in ids_selecionados]
+        if not escolas:
+            raise LoteMipError("Nenhum INEP selecionado para o LOTE — marque ao menos 1 na lista.")
+    else:
+        escolas = elegiveis
 
     lote = Lote.objects.create(
         estado=estado, municipio=municipio, data_inicio=data_inicio, data_fim=data_fim, criado_por=usuario,
@@ -624,10 +651,17 @@ def montar_corpo_email_lote(lote):
     `apps.ri.services.montar_corpo_email_financeiro`, adaptado para
     listar todos os INEPs do lote (o RI lista os itens de 1 RI só)."""
     escolas = list(lote.escolas.order_by("nome"))
+    # RN-098 (correção, 2026-09-14): Data início/fim agora são opcionais
+    # (ver `criar_lote_mip`) - sem as duas, o LOTE não tem período pra
+    # mostrar (nunca formata `None` como data, CLAUDE.md §9).
+    if lote.data_inicio and lote.data_fim:
+        periodo = f"Período: {lote.data_inicio:%d/%m/%Y} a {lote.data_fim:%d/%m/%Y}"
+    else:
+        periodo = "Período: não informado"
     partes = [
         f"LOTE: {lote}",
         f"Município/UF: {lote.municipio}/{lote.estado}",
-        f"Período: {lote.data_inicio:%d/%m/%Y} a {lote.data_fim:%d/%m/%Y}",
+        periodo,
         f"Total de INEPs: {len(escolas)}",
         "",
         "INEPs deste LOTE:",

@@ -325,12 +325,20 @@ class Lote(models.Model):
     Ao entrar aqui, cada INEP ganha `Escola.status_mip =
     "aguardando_encerramento_lote"` e um novo `RiHistorico` (campo "Status
     (MIP)" + campo "LOTE", pedido explícito do usuário) — nenhum outro dado
-    do INEP é alterado."""
+    do INEP é alterado.
+
+    RN-098 (correção, 2026-09-14 — bug real reportado pelo usuário: filtrou
+    só Estado/Município para um LOTE de 1 INEP e o botão "Criar LOTE" não
+    apareceu): Data início/Data fim passam a ser OPCIONAIS — Estado e
+    Município continuam obrigatórios (são eles que dizem "qual grupo"),
+    mas a Data deixou de ser um requisito pra sequer aparecer o botão;
+    quando informada, continua restringindo pela Data de Ativação do RI
+    (RN-075), igual a antes."""
 
     estado = models.CharField("UF", max_length=2)
     municipio = models.CharField("Município", max_length=150)
-    data_inicio = models.DateField("Data início")
-    data_fim = models.DateField("Data fim")
+    data_inicio = models.DateField("Data início", null=True, blank=True)
+    data_fim = models.DateField("Data fim", null=True, blank=True)
     escolas = models.ManyToManyField(Escola, related_name="lotes", verbose_name="INEPs")
     criado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,

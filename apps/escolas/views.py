@@ -366,21 +366,26 @@ def mip_inep_view(request):
     total_geral_lado3_incompleto = any(linha["valor_total_lado3_incompleto"] for linha in linhas)
 
     # FEAT-044/RN-098 (a formalizar pelo Orquestrador em business_rules.md;
-    # pedido do usuário, 2026-09-14): botão "Criar LOTE", ao lado do Total
-    # geral (RN-080) — só aparece com os 4 filtros obrigatórios do LOTE
-    # preenchidos (Estado, Município, Data inicial, Data final; mesmos já
-    # existentes neste grid, RN-079/RN-075) e mostra quantos INEPs do
-    # filtro atual são elegíveis (`escolas_elegiveis_lote_mip`, mesma regra
-    # que `mip_lote_criar_view` usa pra criar de fato — nunca recalculada
-    # 2 vezes com critérios diferentes).
-    total_elegiveis_lote = 0
-    filtro_lote_completo = bool(
-        estado_filtro and municipio_filtro and data_inicial_validacao and data_final_validacao
-    )
+    # pedido do usuário, 2026-09-14; correção 2026-09-14 - bug real
+    # reportado pelo usuário, INEP 52171205): botão "Criar LOTE", ao lado
+    # do Total geral (RN-080) — só aparece com Estado e Município
+    # preenchidos (Data inicial/final são opcionais, ver
+    # `escolas_elegiveis_lote_mip`/`criar_lote_mip`) e mostra quantos
+    # INEPs do filtro atual são elegíveis (`escolas_elegiveis_lote_mip`,
+    # mesma regra que `mip_lote_criar_view` usa pra criar de fato — nunca
+    # recalculada 2 vezes com critérios diferentes).
+    # FEAT-050 (a formalizar pelo Orquestrador em business_rules.md;
+    # pedido do usuário, 2026-09-14): a lista de verdade (não só a
+    # contagem) alimenta o modal de revisão (`_modal_criar_lote.html`) —
+    # 1 checkbox por INEP elegível, todos marcados por padrão, pra o
+    # usuário poder desmarcar quem não deveria entrar antes de confirmar.
+    escolas_elegiveis_lote = []
+    filtro_lote_completo = bool(estado_filtro and municipio_filtro)
     if filtro_lote_completo:
-        total_elegiveis_lote = len(
-            escolas_elegiveis_lote_mip(estado_filtro, municipio_filtro, data_inicial_validacao, data_final_validacao)
+        escolas_elegiveis_lote = escolas_elegiveis_lote_mip(
+            estado_filtro, municipio_filtro, data_inicial_validacao, data_final_validacao
         )
+    total_elegiveis_lote = len(escolas_elegiveis_lote)
 
     # RN-081 (revista pela RN-092): INEPs encontrados na última
     # sincronização do Relatório EACE (MIP), mas cuja Escola não está com
@@ -440,6 +445,7 @@ def mip_inep_view(request):
             "total_geral_lado3_incompleto": total_geral_lado3_incompleto,
             "filtro_lote_completo": filtro_lote_completo,
             "total_elegiveis_lote": total_elegiveis_lote,
+            "escolas_elegiveis_lote": escolas_elegiveis_lote,
             "escolas_fora_da_validacao_eace": escolas_fora_da_validacao_eace,
             "q": q,
         },
@@ -449,14 +455,23 @@ def mip_inep_view(request):
 @login_required
 def mip_lote_criar_view(request):
     """FEAT-044/RN-098 (a formalizar pelo Orquestrador em business_rules.md;
-    pedido do usuário, 2026-09-14): botão "Criar LOTE" da tela "Projeto >
-    MIP" (`mip_inep.html`) — POST com os mesmos 4 filtros já usados no
-    grid (Estado, Município, Data inicial, Data final; RN-079/RN-075),
-    enviados como campos ocultos do próprio `<form>` de filtro (nenhum
-    campo novo na tela, só o botão). Toda a regra (elegibilidade, criação
-    do `Lote`, troca de Status (MIP) e histórico) fica em
-    `apps.escolas.services.criar_lote_mip` — esta view só lê o POST,
-    delega e converte erro de negócio em mensagem."""
+    pedido do usuário, 2026-09-14; correção 2026-09-14 — Data inicial/
+    final viraram opcionais): botão "Criar LOTE" da tela "Projeto > MIP"
+    (`mip_inep.html`) — POST com os mesmos filtros já usados no grid
+    (Estado, Município obrigatórios; Data inicial, Data final opcionais;
+    RN-079/RN-075), enviados como campos ocultos do próprio `<form>` de
+    filtro (nenhum campo novo na tela, só o botão). Toda a regra
+    (elegibilidade, criação do `Lote`, troca de Status (MIP) e histórico)
+    fica em `apps.escolas.services.criar_lote_mip` — esta view só lê o
+    POST, delega e converte erro de negócio em mensagem.
+
+    FEAT-050 (a formalizar pelo Orquestrador em business_rules.md; pedido
+    do usuário, 2026-09-14): o clique em "Criar LOTE" agora abre um modal
+    de revisão (`_modal_criar_lote.html`) com 1 checkbox por INEP
+    elegível, todos marcados por padrão — o usuário pode desmarcar quem
+    não deveria entrar antes de confirmar. `escola_ids` (`getlist`, um
+    valor por checkbox marcado) chega vazio se o usuário desmarcar
+    todos."""
     if request.method != "POST":
         return redirect("mip_inep")
 
@@ -464,6 +479,7 @@ def mip_lote_criar_view(request):
     municipio = (request.POST.get("municipio") or "").strip()
     data_inicial = _parse_data_filtro(request.POST.get("data_inicial"))
     data_final = _parse_data_filtro(request.POST.get("data_final"))
+    escola_ids = request.POST.getlist("escola_ids")
     # Filtros devolvidos pro grid em caso de erro — usuário não perde o
     # que já tinha escolhido (mesmos 4 campos, formato bruto do POST).
     filtros_originais = {
@@ -478,7 +494,7 @@ def mip_lote_criar_view(request):
     }
 
     try:
-        lote = criar_lote_mip(estado, municipio, data_inicial, data_final, request.user)
+        lote = criar_lote_mip(estado, municipio, data_inicial, data_final, request.user, escola_ids=escola_ids)
     except LoteMipError as erro:
         messages.error(request, str(erro))
         return redirect(f"{reverse('mip_inep')}?{urlencode(filtros_originais)}")

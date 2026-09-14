@@ -311,13 +311,15 @@
 
     {% if not request.user.is_visualizador and page_obj.paginator.count %}
     <!-- FEAT-044/RN-098 (a formalizar pelo Orquestrador em business_rules.md;
-         pedido do usuário, 2026-09-14): reaproveita os 4 filtros já
-         preenchidos acima (Estado, Município, Data inicial, Data final,
-         RN-079/RN-075), enviados como campos ocultos deste 2º `<form>`
-         (POST, separado do `<form method="GET">` de cima — não dá pra
-         aninhar `<form>`). Só aparece com os 4 preenchidos; a contagem de
-         elegíveis (`total_elegiveis_lote`) usa a mesma regra que
-         `mip_lote_criar_view` usa pra criar de verdade
+         pedido do usuário, 2026-09-14; correção 2026-09-14 — bug real
+         reportado pelo usuário, INEP 52171205: Data inicial/final viraram
+         OPCIONAIS, só Estado e Município são obrigatórios pro botão
+         aparecer): reaproveita os filtros já preenchidos acima (Estado,
+         Município, Data inicial, Data final, RN-079/RN-075), enviados
+         como campos ocultos deste 2º `<form>` (POST, separado do `<form
+         method="GET">` de cima — não dá pra aninhar `<form>`). A
+         contagem de elegíveis (`total_elegiveis_lote`) usa a mesma regra
+         que `mip_lote_criar_view` usa pra criar de verdade
          (`escolas_elegiveis_lote_mip`). Todo este bloco fica de fora do
          Visualizador — cria dado, não é leitura (RN-096). -->
     {% if filtro_lote_completo %}
@@ -326,7 +328,7 @@
             <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-widest mb-1">Criar LOTE</p>
             {% if total_elegiveis_lote %}
             <p class="text-xs font-bold text-gray-600 dark:text-gray-300">
-                {{ total_elegiveis_lote }} INEP(s) elegível(is) — "Aguardando Validação EACE" com Valor Total (IXC) = Valor Total (EACE) — em {{ municipio_filtro }}/{{ estado_filtro }}, {{ data_inicial_validacao|date:'d/m/Y' }} a {{ data_final_validacao|date:'d/m/Y' }}.
+                {{ total_elegiveis_lote }} INEP(s) elegível(is) — "Aguardando Validação EACE" com Valor Total (IXC) = Valor Total (EACE) — em {{ municipio_filtro }}/{{ estado_filtro }}{% if data_inicial_validacao or data_final_validacao %}, {{ data_inicial_validacao|date:'d/m/Y'|default:"—" }} a {{ data_final_validacao|date:'d/m/Y'|default:"—" }}{% endif %}.
             </p>
             {% else %}
             <p class="text-xs font-bold text-gray-400 dark:text-gray-500">
@@ -334,22 +336,23 @@
             </p>
             {% endif %}
         </div>
-        <form method="POST" action="{% url 'mip_lote_criar' %}">
-            {% csrf_token %}
-            <input type="hidden" name="estado" value="{{ estado_filtro }}">
-            <input type="hidden" name="municipio" value="{{ municipio_filtro }}">
-            <input type="hidden" name="data_inicial" value="{{ data_inicial_validacao|date:'d/m/Y' }}">
-            <input type="hidden" name="data_final" value="{{ data_final_validacao|date:'d/m/Y' }}">
-            <button type="submit" {% if not total_elegiveis_lote %}disabled{% endif %}
-                    class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap w-full sm:w-auto justify-center"
-                    title="Cria um LOTE com os INEPs elegíveis deste filtro">
-                <i data-lucide="package-plus" class="w-4 h-4"></i> Criar LOTE
-            </button>
-        </form>
+        <!-- FEAT-050 (a formalizar pelo Orquestrador em business_rules.md;
+             pedido do usuário, 2026-09-14): o botão deixa de submeter
+             direto — abre o modal de revisão (`_modal_criar_lote.html`,
+             mesmo JS genérico de abrir/fechar modal já usado pelo modal
+             de e-mail do LOTE, `data-abrir-modal-email`), onde o
+             `<form>` de verdade mora, com 1 checkbox por INEP. -->
+        <button type="button" {% if not total_elegiveis_lote %}disabled{% endif %}
+                data-abrir-modal-email="modal-criar-lote"
+                class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap w-full sm:w-auto justify-center"
+                title="Revisar os INEPs antes de criar o LOTE">
+            <i data-lucide="package-plus" class="w-4 h-4"></i> Criar LOTE
+        </button>
     </div>
+    {% include "escolas/_modal_criar_lote.html" %}
     {% else %}
     <div class="px-8 py-4 border-t border-gray-100 dark:border-gray-800 text-[11px] font-bold text-gray-400 dark:text-gray-500">
-        Preencha Estado, Município, Data inicial e Data final acima (e clique em "Filtrar") para criar um LOTE com os INEPs elegíveis.
+        Preencha Estado e Município acima (e clique em "Filtrar") para criar um LOTE com os INEPs elegíveis — Data inicial/final são opcionais.
     </div>
     {% endif %}
     {% endif %}
