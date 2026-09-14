@@ -3695,6 +3695,45 @@ class RiDetailViewTests(TestCase):
         self.assertContains(resp, "R$ 1.200,00")
         self.assertNotContains(resp, "R$ 300,00")
 
+    def test_total_busca_no_catalogo_quando_item_esta_com_valor_zero(self):
+        """RN-097 (correção, 2026-09-12): usuário reportou o INEP 35277423
+        sem total no Lado 2 — os itens tinham sido lançados sem corrigir
+        o Valor Unitário depois (nasce 0, RN-004/RN-011), e o total somava
+        esse 0 direto, virando "R$ 0,00" em vez de refletir o valor real.
+        Confirmado com o usuário: item com Valor Unitário 0 busca o Valor
+        de equipamento atual no catálogo para a soma."""
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 10 Access Points",
+            valor_equipamento=Decimal("20171.96"), valor_servico=Decimal("5000.00"),
+        )
+        KitPadrao.objects.create(
+            descricao="Nobreak", valor_equipamento=Decimal("1551.93"),
+        )
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Kit Cobertura Wi-Fi - 10 Access Points",
+            quantidade=1, valor_unitario="0.00", eh_kit=True,
+        )
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Nobreak", quantidade=1, valor_unitario="0.00",
+        )
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "R$ 21.723,89")
+        self.assertNotContains(resp, "R$ 0,00")
+
+    def test_total_soma_valor_zero_direto_sem_correspondencia_no_catalogo(self):
+        """Item com Valor Unitário 0 e sem correspondência no catálogo
+        continua contribuindo 0 pro total — nunca inventa um valor sem
+        base (CLAUDE.md §9)."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Produto sem catálogo", quantidade=3, valor_unitario="0.00",
+        )
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "R$ 0,00")
+
     def test_totais_dos_3_lados_nao_aparecem_para_visualizador(self):
         ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         RiItemIxc.objects.create(ri=ri, descricao_item="Kit Wi-Fi", quantidade=2, valor_unitario="350.00")

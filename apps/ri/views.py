@@ -225,23 +225,45 @@ def _lado_ixc_editavel(ri):
     return ri.status == Ri.ANDAMENTO
 
 
-def _total_itens_ri(itens):
+def _total_itens_ri(itens, lote=None):
     """RN-097 (nova, a formalizar pelo Orquestrador em business_rules.md;
     pedido do usuário, 2026-09-12): soma Quantidade × Valor Unitário de
     uma lista/queryset de itens de 1 lado do RI (`RiItemEace`/
-    `RiItemIxc`/`RiItemRelatorioEace`, todos com esses 2 campos) — usado
-    para o total exibido abaixo de cada um dos 3 lados na tela do RI
-    (`ri_detail_view`). `None` sem nenhum item lançado — não confundir
-    com um total zero, que sugeriria itens já lançados sem custo (mesmo
-    critério de `apps.escolas.services._valor_total_itens`, que serve o
-    mesmo papel no MIP; não reaproveitado direto por não haver
-    dependência de `apps.ri` sobre `apps.escolas`, e por aqui o valor já
-    vir pronto no item — `valor_unitario` —, sem precisar resolver pelo
-    catálogo)."""
+    `RiItemIxc`/`RiItemRelatorioEace`) — usado para o total exibido
+    abaixo de cada um dos 3 lados na tela do RI (`ri_detail_view`).
+    `None` sem nenhum item lançado — não confundir com um total zero, que
+    sugeriria itens já lançados sem custo (mesmo critério de
+    `apps.escolas.services._valor_total_itens`, que serve o mesmo papel
+    no MIP).
+
+    Correção (bug reportado pelo usuário, INEP 35277423, 2026-09-12):
+    item recém-lançado nasce com Valor Unitário 0 (RN-004/RN-011 — não é
+    mais digitado no lançamento, só corrigido depois editando o item) —
+    somar esse 0 direto fazia o total do lado parecer "sem total" (R$
+    0,00), mesmo com item de verdade lançado. Confirmado com o usuário:
+    item com Valor Unitário 0 busca o Valor de equipamento atual no
+    catálogo (`KitPadrao.valor_faturavel`) para a soma, em vez de somar 0
+    — mesmo critério já usado na referência do Lado 1 sem item lançado e
+    no MIP (nunca soma o valor gravado no item, sempre busca no
+    catálogo). Sem correspondência no catálogo, o item continua
+    contribuindo 0 — só troca a fonte do valor, nunca inventa um valor
+    sem base (CLAUDE.md §9). `RiItemEace` (Lado 1) não tem campo
+    `eh_kit` — é sempre o Kit fechado (RN-010), daí o `getattr(...,
+    True)` abaixo."""
     itens = list(itens)
     if not itens:
         return None
-    return sum((item.quantidade * item.valor_unitario for item in itens), Decimal("0"))
+    total = Decimal("0")
+    for item in itens:
+        valor_unitario = item.valor_unitario
+        if valor_unitario == 0:
+            catalogo_item = KitPadrao.resolver_por_item(
+                item.descricao_item, eh_kit=getattr(item, "eh_kit", True), lote=lote
+            )
+            if catalogo_item:
+                valor_unitario = catalogo_item.valor_faturavel
+        total += item.quantidade * valor_unitario
+    return total
 
 
 def _requisicao_htmx(request):
@@ -1763,7 +1785,7 @@ def ri_detail_view(request, inep):
     # itens (escondido do Visualizador direto no template, RN-093/RN-096
     # — aqui é só o cálculo). `None` sem RI ainda (nenhum item possível).
     if ri and itens_eace_existentes:
-        total_lado1 = _total_itens_ri(itens_eace_existentes)
+        total_lado1 = _total_itens_ri(itens_eace_existentes, lote=escola.lote)
     elif ri and kit_declarado_resolvido:
         # RN-097 (correção, 2026-09-12): usuário reportou que o Lado 1 do
         # RI nunca mostrava total, diferente do MIP — Lado 1 não é lançado
@@ -1778,8 +1800,8 @@ def ri_detail_view(request, inep):
         total_lado1 = kit_declarado_resolvido.valor_faturavel
     else:
         total_lado1 = None
-    total_lado2 = _total_itens_ri(ri.itens_ixc.all()) if ri else None
-    total_lado3 = _total_itens_ri(ri.itens_relatorio_eace.all()) if ri else None
+    total_lado2 = _total_itens_ri(ri.itens_ixc.all(), lote=escola.lote) if ri else None
+    total_lado3 = _total_itens_ri(ri.itens_relatorio_eace.all(), lote=escola.lote) if ri else None
 
     return render(
         request,
