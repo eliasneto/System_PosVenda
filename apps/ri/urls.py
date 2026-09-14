@@ -4,6 +4,7 @@ from . import views
 
 urlpatterns = [
     path("inep/", views.grid_inep_view, name="grid_inep"),
+    path("fila-rpa-eace/", views.fila_rpa_eace_view, name="fila_rpa_eace"),
     path("administrador/planilha-eace/", views.planilha_eace_view, name="planilha_eace"),
     path(
         "administrador/planilha-eace/sincronizar-todas/",

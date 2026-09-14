@@ -60,15 +60,18 @@ depois de um novo registro, sem recarregar a página.
             <div class="flex-1 bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3">
                 <div class="flex items-center justify-between gap-2 mb-1">
                     <span class="text-xs font-bold text-gray-700 dark:text-gray-300">
-                        {% if entrada.tipo == 'log_status' or entrada.tipo == 'log_campo' %}
-                            Sistema
-                        {% elif entrada.tipo == 'email' and not entrada.autor %}
-                            {# FEAT-009: leitura automática da resposta do financeiro, sem usuário logado #}
-                            Sistema
-                        {% elif entrada.autor %}
+                        {% if entrada.autor %}
+                            {# Correção (2026-09-14): antes disto, log_status/log_campo #}
+                            {# sempre mostravam "Sistema", mesmo quando `autor` já vinha #}
+                            {# gravado (troca manual de status, RPA disparada manualmente, #}
+                            {# conclusão manual de Nota Fiscal) - escondia quem agiu de fato. #}
                             {{ entrada.autor.get_full_name|default:entrada.autor.username }}
-                        {% else %}
+                        {% elif entrada.tipo == 'mensagem' or entrada.tipo == 'anexo' %}
                             Usuário removido
+                        {% else %}
+                            {# log_status/log_campo automático (RN-008) ou e-mail lido #}
+                            {# sozinho pela rotina (FEAT-009), sem usuário logado. #}
+                            Sistema
                         {% endif %}
                     </span>
                     <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase shrink-0">{{ entrada.criado_em|date:"d/m/Y H:i" }}</span>

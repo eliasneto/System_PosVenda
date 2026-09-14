@@ -7,6 +7,7 @@ from pathlib import Path
 
 import openpyxl
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -14,10 +15,18 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.escolas.models import Escola, EscolaItemRelatorioEaceMip, PlanilhaRelatorioEaceMip
+from apps.escolas.models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
 from apps.escolas.services import (
+    LoteMipError,
     PlanilhaFaturamentoImplantacaoError,
+    criar_lote_mip,
+    desfazer_lote_mip,
+    enviar_email_lote,
+    escolas_elegiveis_lote_mip,
     gerar_planilha_faturamento_implantacao,
+    gerar_planilha_faturamento_implantacao_lote,
+    montar_assunto_email_lote,
+    nome_arquivo_planilha_faturamento_implantacao,
 )
 from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemEace, RiItemIxc, RiItemRelatorioEace
 
@@ -861,30 +870,62 @@ class MipTotalGeralTests(TestCase):
 
 
 class MipStatusPlanilhaMipTests(TestCase):
-    """RN-081 (a criar): bolinha verde/vermelha no grid do MIP, sobre o
-    resultado da última sincronização do Relatório EACE (MIP)
-    (`Escola.encontrado_relatorio_eace_mip`) — verde quando encontrado e
-    normal do grid (Validação EACE); vermelho quando não encontrado
-    (mas ainda em Validação EACE) OU encontrado mas fora da Validação
-    EACE (lista à parte); sem bolinha quando nunca sincronizou."""
+    """RN-081 (revista em 2026-09-14, pedido do usuário — bug reportado
+    com o INEP 35583972): bolinha verde/vermelha no grid do MIP passa a
+    refletir se o INEP TEM item lançado no Lado Relatório EACE (3º),
+    calculado ao vivo — não mais só o resultado da ÚLTIMA sincronização
+    (`Escola.encontrado_relatorio_eace_mip`, que continua existindo só
+    para a lista separada "fora da Validação EACE", abaixo)."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="analista-status-planilha", password="senha-teste-123")
 
-    def test_encontrado_e_validacao_eace_mostra_bolinha_verde(self):
-        escola = Escola.objects.create(
-            inep="10000060", nome="Escola Verde", lote=9, encontrado_relatorio_eace_mip=True,
-        )
+    def test_com_item_no_lado3_mostra_bolinha_verde(self):
+        escola = Escola.objects.create(inep="10000060", nome="Escola Verde", lote=9)
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        EscolaItemRelatorioEaceMip.objects.create(
+            escola=escola, descricao_item="Kit Cobertura Wi-Fi", quantidade=1, valor_servico=Decimal("100.00"),
+        )
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"))
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "verde")
         self.assertContains(resp, "bg-emerald-500")
 
-    def test_nao_encontrado_e_validacao_eace_mostra_bolinha_vermelha(self):
+    def test_sem_item_no_lado3_mostra_bolinha_vermelha(self):
+        escola = Escola.objects.create(inep="10000061", nome="Escola Vermelha", lote=9)
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_inep"))
+        linha = resp.context["page_obj"][0]
+        self.assertEqual(linha["status_planilha_mip"], "vermelho")
+
+    def test_bug_35583972_item_de_sincronizacao_anterior_mostra_verde(self):
+        """Caso real reportado pelo usuário (INEP 35583972): a última
+        sincronização não trouxe o INEP de novo (`encontrado_relatorio_
+        eace_mip=False`), mas ele já tinha item lançado de uma rodada
+        anterior, com Valor Total (IXC) e (EACE) batendo — antes desta
+        correção isso ficava vermelho, mesmo sem nenhum problema real no
+        dado; agora fica verde, porque o dado existe."""
         escola = Escola.objects.create(
-            inep="10000061", nome="Escola Vermelha", lote=9, encontrado_relatorio_eace_mip=False,
+            inep="35583972", nome="Escola Bug Bolinha", lote=9, encontrado_relatorio_eace_mip=False,
+        )
+        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        EscolaItemRelatorioEaceMip.objects.create(
+            escola=escola, descricao_item="Kit Cobertura Wi-Fi", quantidade=1, valor_servico=Decimal("100.00"),
+        )
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("mip_inep"))
+        linha = resp.context["page_obj"][0]
+        self.assertEqual(linha["status_planilha_mip"], "verde")
+
+    def test_encontrado_na_ultima_sincronizacao_mas_sem_item_lancado_mostra_vermelha(self):
+        """Simétrico ao teste acima: `encontrado_relatorio_eace_mip=True`
+        sozinho não basta mais — sem item de verdade no Lado 3 (ex.: a
+        linha da planilha não casou com nenhum item do catálogo), a
+        bolinha é vermelha."""
+        escola = Escola.objects.create(
+            inep="10000067", nome="Escola Encontrada Sem Item", lote=9, encontrado_relatorio_eace_mip=True,
         )
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
@@ -892,17 +933,17 @@ class MipStatusPlanilhaMipTests(TestCase):
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "vermelho")
 
-    def test_nunca_sincronizado_nao_mostra_bolinha(self):
-        """Sem bolinha no dict de contexto — a legenda no topo da tela
-        sempre mostra as duas cores como referência, então a ausência é
-        conferida pelo dado (`status_planilha_mip`), não pela presença
-        das classes CSS na página inteira."""
+    def test_nunca_sincronizado_mostra_bolinha_vermelha(self):
+        """Sem nenhuma sincronização ainda (`encontrado_relatorio_eace_
+        mip` nulo) e sem item lançado, a bolinha é vermelha — não há
+        estado "sem bolinha" (a bolinha agora só depende de existir ou
+        não item real no Lado 3, sempre calculável)."""
         escola = Escola.objects.create(inep="10000062", nome="Escola Sem Sync", lote=9)
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"))
         linha = resp.context["page_obj"][0]
-        self.assertIsNone(linha["status_planilha_mip"])
+        self.assertEqual(linha["status_planilha_mip"], "vermelho")
 
     def test_encontrado_fora_da_validacao_eace_aparece_na_lista_a_parte(self):
         escola = Escola.objects.create(
@@ -2425,3 +2466,1148 @@ class GerarPlanilhaFaturamentoImplantacaoCommandTests(TestCase):
                 "--estado", "GO", "--municipio", "Abadiânia",
                 "--data-envio", "31/13/2026", "--saida", str(caminho_saida),
             )
+
+
+# ---------------------------------------------------------------------------
+# FEAT-044/RN-098 (a formalizar pelo Orquestrador em business_rules.md;
+# pedido do usuário, 2026-09-14): "Projeto > MIP (LOTE)".
+# ---------------------------------------------------------------------------
+
+
+def _criar_escola_elegivel_lote(inep, *, estado="GO", municipio="Abadiânia", data_ativacao=None):
+    """Fixture comum: 1 INEP "Aguardando Validação EACE", com Valor Total
+    (IXC) == Valor Total (EACE) (os dois = R$ 300,00) — mesmo Lote/catálogo
+    (`Escola.lote`, RN-010) dos demais testes do MIP desta suíte. Não
+    confundir `Escola.lote=9` (número do catálogo) com o `Lote` (LOTE) da
+    FEAT-044 — nomes iguais por coincidência, conceitos diferentes."""
+    escola = Escola.objects.create(
+        inep=inep, nome=f"Escola {inep}", estado=estado, municipio=municipio, lote=9,
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+    )
+    ri = Ri.objects.create(
+        escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE,
+        data_ativacao=data_ativacao or datetime.date(2026, 9, 5),
+    )
+    RiItemIxc.objects.create(
+        ri=ri, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+        quantidade=1, valor_unitario="0.00", eh_kit=True,
+    )
+    EscolaItemRelatorioEaceMip.objects.create(
+        escola=escola, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+        quantidade=1, valor_servico="300.00", eh_kit=True,
+    )
+    return escola, ri
+
+
+class LoteMipElegibilidadeTests(TestCase):
+    """RN-098 (a criar): base elegível para um LOTE — Estado/Município/Data
+    de Ativação do filtro (RN-079/RN-075), restrita a "Aguardando
+    Validação EACE" com Valor Total (IXC) == Valor Total (EACE), os dois
+    conhecidos e completos."""
+
+    def setUp(self):
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+
+    def test_escola_elegivel_entra_na_lista(self):
+        escola, _ri = _criar_escola_elegivel_lote("10000001")
+        elegiveis = escolas_elegiveis_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
+        self.assertEqual(elegiveis, [escola])
+
+    def test_valores_diferentes_nao_entra(self):
+        escola, ri = _criar_escola_elegivel_lote("10000002")
+        item = EscolaItemRelatorioEaceMip.objects.get(escola=escola)
+        item.valor_servico = "250.00"
+        item.save()
+        elegiveis = escolas_elegiveis_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
+        self.assertNotIn(escola, elegiveis)
+
+    def test_status_diferente_de_aguardando_validacao_eace_nao_entra(self):
+        escola, _ri = _criar_escola_elegivel_lote("10000003")
+        escola.status_mip = Escola.EM_ANDAMENTO
+        escola.save()
+        elegiveis = escolas_elegiveis_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
+        self.assertNotIn(escola, elegiveis)
+
+    def test_fora_do_periodo_nao_entra(self):
+        _criar_escola_elegivel_lote("10000004", data_ativacao=datetime.date(2026, 8, 1))
+        elegiveis = escolas_elegiveis_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
+        self.assertEqual(elegiveis, [])
+
+    def test_outro_municipio_nao_entra(self):
+        _criar_escola_elegivel_lote("10000005", municipio="Anápolis")
+        elegiveis = escolas_elegiveis_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
+        self.assertEqual(elegiveis, [])
+
+    def test_total_incompleto_nao_entra_mesmo_com_soma_igual(self):
+        """Item sem correspondência no catálogo deixa o total "incompleto"
+        (RN-076) — mesmo que a soma dos itens conhecidos bata com o outro
+        lado, o LOTE não considera elegível (decisão conservadora do Dev,
+        CLAUDE.md §9)."""
+        escola, ri = _criar_escola_elegivel_lote("10000006")
+        RiItemIxc.objects.create(
+            ri=ri, descricao_item="Produto fora do catálogo", quantidade=1,
+            valor_unitario="0.00", eh_kit=False,
+        )
+        elegiveis = escolas_elegiveis_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
+        self.assertNotIn(escola, elegiveis)
+
+    def test_sem_filtro_obrigatorio_devolve_vazio(self):
+        _criar_escola_elegivel_lote("10000007")
+        self.assertEqual(escolas_elegiveis_lote_mip("", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30)), [])
+        self.assertEqual(escolas_elegiveis_lote_mip("GO", "Abadiânia", None, datetime.date(2026, 9, 30)), [])
+
+
+class CriarLoteMipTests(TestCase):
+    """RN-098 (a criar): `criar_lote_mip` — cria o `Lote`, muda o Status
+    (MIP) de cada INEP elegível para "Aguardando Encerramento LOTE" e
+    grava o histórico (status + número do LOTE), pedido explícito do
+    usuário."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-lote", password="senha-teste-123")
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+
+    def test_sem_filtro_obrigatorio_levanta_erro_e_nao_cria_lote(self):
+        with self.assertRaises(LoteMipError):
+            criar_lote_mip("", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        self.assertEqual(Lote.objects.count(), 0)
+
+    def test_data_inicial_depois_da_final_levanta_erro(self):
+        with self.assertRaises(LoteMipError):
+            criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 30), datetime.date(2026, 9, 1), self.usuario)
+        self.assertEqual(Lote.objects.count(), 0)
+
+    def test_sem_elegivel_levanta_erro_e_nao_cria_lote(self):
+        with self.assertRaises(LoteMipError):
+            criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        self.assertEqual(Lote.objects.count(), 0)
+
+    def test_cria_lote_com_os_ineps_elegiveis(self):
+        escola1, _ri1 = _criar_escola_elegivel_lote("10000010")
+        escola2, _ri2 = _criar_escola_elegivel_lote("10000011")
+        _criar_escola_elegivel_lote("10000012", municipio="Anápolis")  # fora do filtro
+
+        lote = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+
+        self.assertEqual(lote.estado, "GO")
+        self.assertEqual(lote.municipio, "Abadiânia")
+        self.assertEqual(lote.data_inicio, datetime.date(2026, 9, 1))
+        self.assertEqual(lote.data_fim, datetime.date(2026, 9, 30))
+        self.assertEqual(lote.criado_por, self.usuario)
+        self.assertEqual(set(lote.escolas.all()), {escola1, escola2})
+
+    def test_muda_status_mip_e_grava_historico_com_status_e_numero_do_lote(self):
+        escola, ri = _criar_escola_elegivel_lote("10000013")
+        lote = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+
+        escola.refresh_from_db()
+        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
+
+        entrada_status = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)")
+        self.assertEqual(entrada_status.valor_anterior, "Aguardando Validação EACE")
+        self.assertEqual(entrada_status.valor_novo, "Aguardando Encerramento LOTE")
+
+        entrada_lote = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="LOTE")
+        self.assertEqual(entrada_lote.valor_novo, str(lote))
+
+    def test_nao_cria_lote_duplicado_ao_tentar_de_novo_sem_elegivel(self):
+        """Depois que um INEP entra no LOTE, ele sai de "Aguardando
+        Validação EACE" — uma 2ª tentativa com o mesmo filtro não acha
+        mais nenhum elegível."""
+        _criar_escola_elegivel_lote("10000014")
+        criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        with self.assertRaises(LoteMipError):
+            criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        self.assertEqual(Lote.objects.count(), 1)
+
+
+class MipLoteCriarViewTests(TestCase):
+    """View do botão "Criar LOTE" (`mip_lote_criar_view`) — lê o POST,
+    delega para `criar_lote_mip` e converte erro em mensagem."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-lote-view", password="senha-teste-123")
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+
+    def test_exige_login(self):
+        resp = self.client.post(reverse("mip_lote_criar"), {"estado": "GO"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_get_nao_cria_nada(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_criar"))
+        self.assertRedirects(resp, reverse("mip_inep"))
+        self.assertEqual(Lote.objects.count(), 0)
+
+    def test_faltando_municipio_mostra_erro_e_nao_cria(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_criar"),
+            {"estado": "GO", "municipio": "", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+            follow=True,
+        )
+        self.assertEqual(Lote.objects.count(), 0)
+        self.assertContains(resp, "Informe Estado, Município, Data inicial e Data final")
+
+    def test_sem_elegivel_mostra_erro_e_preserva_filtro_no_redirecionamento(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_criar"),
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+        )
+        self.assertEqual(Lote.objects.count(), 0)
+        self.assertIn("estado=GO", resp.url)
+        self.assertIn("municipio=Abadi", resp.url)
+
+    def test_happy_path_cria_lote_e_redireciona_para_lista(self):
+        _criar_escola_elegivel_lote("10000020")
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_criar"),
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+        )
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.assertEqual(Lote.objects.count(), 1)
+
+
+class MipLoteInepViewTests(TestCase):
+    """Projeto > MIP (LOTE) (`mip_lote_inep_view`) — lista os LOTE já
+    criados, com drill-down dos INEPs de cada um."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-lote-lista", password="senha-teste-123")
+        self.visualizador = User.objects.create_user(
+            username="visualizador-lote", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+
+    def test_exige_login(self):
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_sem_lote_mostra_estado_vazio(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, "Nenhum LOTE criado")
+
+    def test_lista_o_lote_criado_com_os_dados_e_os_ineps(self):
+        escola, _ri = _criar_escola_elegivel_lote("10000030")
+        lote = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, str(lote))
+        self.assertContains(resp, "GO")
+        self.assertContains(resp, "Abadiânia")
+        self.assertContains(resp, "01/09/2026")
+        self.assertContains(resp, "30/09/2026")
+        self.assertContains(resp, escola.inep)
+        self.assertContains(resp, "R$ 300,00")
+
+    def test_visualizador_e_bloqueado(self):
+        """Pedido do usuário (2026-09-14, revisão): "esse MIP lote não
+        pode ser acessado pelo usuario apenas com permissão de
+        Visualizador" — diferente do grid "Projeto > MIP" (RN-096), aqui
+        não há nem leitura; `VisualizadorAccessMiddleware` redireciona
+        antes da view rodar."""
+        _criar_escola_elegivel_lote("10000031")
+        criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertRedirects(resp, reverse("grid_inep"))
+
+
+class MipLoteBotaoGridTests(TestCase):
+    """Botão "Criar LOTE" no grid "Projeto > MIP" (`mip_inep.html`) —
+    exige os 4 filtros (Estado, Município, Data inicial, Data final) e
+    mostra a contagem de elegíveis antes de o usuário clicar."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-lote-botao", password="senha-teste-123")
+        self.visualizador = User.objects.create_user(
+            username="visualizador-lote-botao", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        self.escola, _ri = _criar_escola_elegivel_lote("10000040")
+
+    def test_sem_filtro_completo_nao_mostra_botao(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_inep"), {"estado": "GO"})
+        self.assertNotContains(resp, "Criar LOTE")
+        self.assertContains(resp, "Preencha Estado, Município, Data inicial e Data final")
+
+    def test_filtro_completo_com_elegivel_mostra_botao_habilitado(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(
+            reverse("mip_inep"),
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+        )
+        self.assertContains(resp, "Criar LOTE")
+        self.assertContains(resp, "1 INEP")
+        # `disabled:opacity-40` (classe Tailwind) sempre aparece no HTML —
+        # o que muda é o atributo `disabled` do próprio `<button>`.
+        self.assertNotContains(resp, "submit\" disabled")
+
+    def test_filtro_completo_sem_elegivel_mostra_botao_desabilitado(self):
+        self.escola.status_mip = Escola.EM_ANDAMENTO
+        self.escola.save()
+        self.client.force_login(self.usuario)
+        resp = self.client.get(
+            reverse("mip_inep"),
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026", "status_mip": "em_andamento"},
+        )
+        self.assertContains(resp, "Nenhum INEP elegível")
+        self.assertContains(resp, "submit\" disabled")
+
+    def test_visualizador_nao_ve_botao(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(
+            reverse("mip_inep"),
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+        )
+        self.assertNotContains(resp, "Criar LOTE")
+
+
+class MipStatusAguardandoEncerramentoLoteNaoManualTests(TestCase):
+    """FEAT-044/RN-098: "Aguardando Encerramento LOTE" nunca é escolhido
+    manualmente — só `criar_lote_mip` grava esse status."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-lote-manual", password="senha-teste-123")
+        self.escola = Escola.objects.create(
+            inep="10000050", nome="Escola Teste Manual", status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_dropdown_do_detalhe_nao_oferece_a_opcao(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, '<option value="aguardando_encerramento_lote"')
+
+    def test_post_direto_e_rejeitado(self):
+        self.client.force_login(self.usuario)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.AGUARDANDO_ENCERRAMENTO_LOTE},
+        )
+        self.escola.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+
+class GerarPlanilhaFaturamentoImplantacaoLoteTests(TestCase):
+    """`gerar_planilha_faturamento_implantacao_lote` (FEAT-045, a formalizar
+    pelo Orquestrador em business_rules.md) — mesma planilha de
+    `gerar_planilha_faturamento_implantacao` (`GerarPlanilhaFaturamento
+    ImplantacaoTests` acima), mas a partir dos INEPs FIXOS de um `Lote`
+    (`lote.escolas`), nunca de um filtro por Estado/Município/status."""
+
+    def setUp(self):
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        self.escola_a = Escola.objects.create(
+            inep="60171205", nome="Escola A do LOTE", estado="GO", municipio="Abadiânia",
+            lote=9, cod_fornecedor="52598",
+        )
+        self.escola_b = Escola.objects.create(
+            inep="60171206", nome="Escola B do LOTE", estado="GO", municipio="Abadiânia",
+            lote=9, cod_fornecedor="52599",
+        )
+        self.ri_a = Ri.objects.create(escola=self.escola_a, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.ri_b = Ri.objects.create(escola=self.escola_b, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        RiItemIxc.objects.create(
+            ri=self.ri_a, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+            quantidade=1, valor_unitario="0.00", eh_kit=True,
+        )
+        RiItemIxc.objects.create(
+            ri=self.ri_b, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+            quantidade=2, valor_unitario="0.00", eh_kit=True,
+        )
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+        )
+        self.lote.escolas.set([self.escola_a, self.escola_b])
+        self.data_envio = datetime.date(2026, 9, 8)
+
+    def test_soma_valor_total_ixc_dos_ineps_do_lote(self):
+        """RN-076: 1 x 300,00 (Escola A) + 2 x 300,00 (Escola B) = 900,00."""
+        workbook = gerar_planilha_faturamento_implantacao_lote(self.lote, self.data_envio)
+        self.assertEqual(workbook.worksheets[0]["H10"].value, 900.00)
+
+    def test_codigo_ineps_e_aba_usam_so_os_ineps_do_lote(self):
+        workbook = gerar_planilha_faturamento_implantacao_lote(self.lote, self.data_envio)
+        aba = workbook.worksheets[0]
+        self.assertEqual(aba.title, "Abadiânia")
+        self.assertIn("CÓDIGO INEPS: 60171205/52598;60171206/52599", aba["F10"].value)
+
+    def test_vencimento_e10_e_data_envio_mais_30_dias(self):
+        workbook = gerar_planilha_faturamento_implantacao_lote(self.lote, self.data_envio)
+        self.assertEqual(workbook.worksheets[0]["E10"].value, datetime.date(2026, 10, 8))
+
+    def test_escola_do_mesmo_municipio_fora_do_lote_nao_entra(self):
+        """Diferença chave em relação a `gerar_planilha_faturamento_
+        implantacao` (filtro por Estado/Município): um INEP do MESMO
+        Estado/Município, mas que não foi incluído neste LOTE, nunca entra
+        na soma nem no CÓDIGO INEPS — só quem está de fato em
+        `lote.escolas` conta (pedido do usuário: "a soma de todos os
+        INEPS daquele LOTE")."""
+        escola_fora_do_lote = Escola.objects.create(
+            inep="60171207", nome="Escola Fora do LOTE", estado="GO", municipio="Abadiânia",
+            lote=9, cod_fornecedor="99999",
+        )
+        ri_fora = Ri.objects.create(escola=escola_fora_do_lote, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        RiItemIxc.objects.create(
+            ri=ri_fora, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+            quantidade=5, valor_unitario="0.00", eh_kit=True,
+        )
+        workbook = gerar_planilha_faturamento_implantacao_lote(self.lote, self.data_envio)
+        aba = workbook.worksheets[0]
+        self.assertEqual(aba["H10"].value, 900.00)  # sem mudança — quem não está no LOTE não entra
+        self.assertNotIn("60171207", aba["F10"].value)
+
+    def test_erro_claro_sem_nenhum_inep_no_lote(self):
+        self.lote.escolas.clear()
+        with self.assertRaisesMessage(PlanilhaFaturamentoImplantacaoError, f"{self.lote} não tem nenhum INEP."):
+            gerar_planilha_faturamento_implantacao_lote(self.lote, self.data_envio)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-045 (a formalizar pelo Orquestrador em business_rules.md; pedido do
+# usuário, 2026-09-14): "Enviar e-mail" do LOTE.
+# ---------------------------------------------------------------------------
+
+
+_MEDIA_ROOT_TESTE_EMAIL_LOTE = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_EMAIL_LOTE)
+class EnviarEmailLoteTests(TestCase):
+    """`apps.escolas.services.enviar_email_lote` — envia o e-mail e grava,
+    no histórico do RI atual de cada INEP do LOTE, que o e-mail foi
+    disparado (pedido explícito do usuário). MEDIA_ROOT isolado num
+    diretório temporário para os arquivos de teste não irem para o
+    `media/` real (mesmo padrão de `MipDetailLado2NfRecebidaEmTests`)."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_EMAIL_LOTE, ignore_errors=True)
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-email-lote", password="senha-teste-123")
+        self.escola1 = Escola.objects.create(
+            inep="10000060", nome="Escola Email Lote 1", estado="GO", municipio="Abadiânia",
+            status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
+        )
+        self.escola2 = Escola.objects.create(
+            inep="10000061", nome="Escola Email Lote 2", estado="GO", municipio="Abadiânia",
+            status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
+        )
+        self.ri1 = Ri.objects.create(escola=self.escola1, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.ri2 = Ri.objects.create(escola=self.escola2, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+            criado_por=self.usuario,
+        )
+        self.lote.escolas.set([self.escola1, self.escola2])
+
+    def test_envia_o_email_com_de_fixo_e_para_informado(self):
+        enviar_email_lote(
+            self.lote, para=["financeiro@example.com"], assunto="Assunto teste",
+            mensagem="Corpo teste", anexo_extra=None, usuario=self.usuario,
+        )
+        self.assertEqual(len(mail.outbox), 1)
+        enviado = mail.outbox[0]
+        self.assertEqual(enviado.to, ["financeiro@example.com"])
+        self.assertEqual(enviado.subject, "Assunto teste")
+        self.assertEqual(enviado.body, "Corpo teste")
+        from django.conf import settings
+        self.assertEqual(enviado.from_email, settings.DEFAULT_FROM_EMAIL)
+
+    def test_para_vazio_nao_impede_o_registro_no_historico(self):
+        """Pedido do usuário: "o PARA pode deixar em branco" — sem
+        destinatário, o Django não entrega nada de verdade, mas o
+        histórico de cada INEP é gravado do mesmo jeito."""
+        enviar_email_lote(
+            self.lote, para=[], assunto="Assunto teste", mensagem="Corpo teste",
+            anexo_extra=None, usuario=self.usuario,
+        )
+        self.assertTrue(
+            self.ri1.historico.filter(tipo=RiHistorico.EMAIL, mensagem__contains=str(self.lote)).exists()
+        )
+        self.assertTrue(
+            self.ri2.historico.filter(tipo=RiHistorico.EMAIL, mensagem__contains=str(self.lote)).exists()
+        )
+
+    def test_grava_historico_em_todos_os_ineps_do_lote(self):
+        enviar_email_lote(
+            self.lote, para=["financeiro@example.com"], assunto="Assunto teste",
+            mensagem="Corpo teste", anexo_extra=None, usuario=self.usuario,
+        )
+        entrada1 = self.ri1.historico.get(tipo=RiHistorico.EMAIL)
+        entrada2 = self.ri2.historico.get(tipo=RiHistorico.EMAIL)
+        self.assertIn(str(self.lote), entrada1.mensagem)
+        self.assertIn("Assunto teste", entrada1.mensagem)
+        self.assertIn(str(self.lote), entrada2.mensagem)
+        self.assertEqual(entrada1.autor, self.usuario)
+
+    def test_escola_sem_ri_nao_quebra_o_envio(self):
+        escola_sem_ri = Escola.objects.create(
+            inep="10000062", nome="Escola Sem RI", status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
+        )
+        self.lote.escolas.add(escola_sem_ri)
+        enviar_email_lote(
+            self.lote, para=["fin@example.com"], assunto="Assunto teste", mensagem="Corpo teste",
+            anexo_extra=None, usuario=self.usuario,
+        )
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertTrue(self.ri1.historico.filter(tipo=RiHistorico.EMAIL).exists())
+        self.assertTrue(self.ri2.historico.filter(tipo=RiHistorico.EMAIL).exists())
+
+    def test_atualiza_email_enviado_em_e_por(self):
+        self.assertIsNone(self.lote.email_enviado_em)
+        enviar_email_lote(
+            self.lote, para=[], assunto="Assunto teste", mensagem="Corpo teste",
+            anexo_extra=None, usuario=self.usuario,
+        )
+        self.lote.refresh_from_db()
+        self.assertIsNotNone(self.lote.email_enviado_em)
+        self.assertEqual(self.lote.email_enviado_por, self.usuario)
+
+    def test_avanca_status_do_lote_e_dos_ineps_para_email_enviado(self):
+        """FEAT-046 (a criar): pedido do usuário — depois de enviar o
+        e-mail, o Status do LOTE vira "Email em LOTE enviado" e todo INEP
+        do LOTE ganha o mesmo Status (MIP), registrado no histórico."""
+        enviar_email_lote(
+            self.lote, para=[], assunto="Assunto teste", mensagem="Corpo teste",
+            anexo_extra=None, usuario=self.usuario,
+        )
+        self.lote.refresh_from_db()
+        self.escola1.refresh_from_db()
+        self.escola2.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.EMAIL_ENVIADO)
+        self.assertEqual(self.escola1.status_mip, Escola.EMAIL_LOTE_ENVIADO)
+        self.assertEqual(self.escola2.status_mip, Escola.EMAIL_LOTE_ENVIADO)
+        entrada_status = self.ri1.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)")
+        self.assertEqual(entrada_status.valor_novo, "Email em LOTE enviado")
+
+    def test_escola_sem_ri_tambem_avanca_status_mip(self):
+        escola_sem_ri = Escola.objects.create(
+            inep="10000063", nome="Escola Sem RI 2", status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
+        )
+        self.lote.escolas.add(escola_sem_ri)
+        enviar_email_lote(
+            self.lote, para=[], assunto="Assunto teste", mensagem="Corpo teste",
+            anexo_extra=None, usuario=self.usuario,
+        )
+        escola_sem_ri.refresh_from_db()
+        self.assertEqual(escola_sem_ri.status_mip, Escola.EMAIL_LOTE_ENVIADO)
+
+    def test_reenvio_permitido_enquanto_status_nao_avancou(self):
+        enviar_email_lote(
+            self.lote, para=[], assunto="1º envio", mensagem="Corpo", anexo_extra=None, usuario=self.usuario,
+        )
+        enviar_email_lote(
+            self.lote, para=[], assunto="2º envio", mensagem="Corpo", anexo_extra=None, usuario=self.usuario,
+        )
+        self.assertEqual(self.ri1.historico.filter(tipo=RiHistorico.EMAIL).count(), 2)
+
+    def test_bloqueado_depois_que_lote_avanca_para_em_andamento(self):
+        self.lote.status = Lote.EM_ANDAMENTO
+        self.lote.save()
+        with self.assertRaises(LoteMipError):
+            enviar_email_lote(
+                self.lote, para=[], assunto="Teste", mensagem="Corpo", anexo_extra=None, usuario=self.usuario,
+            )
+
+    def test_bloqueado_depois_que_lote_avanca_para_faturamento_concluido(self):
+        self.lote.status = Lote.FATURAMENTO_CONCLUIDO
+        self.lote.save()
+        with self.assertRaises(LoteMipError):
+            enviar_email_lote(
+                self.lote, para=[], assunto="Teste", mensagem="Corpo", anexo_extra=None, usuario=self.usuario,
+            )
+
+    def test_planilha_de_faturamento_e_sempre_anexada_ao_email(self):
+        """FEAT-045 (pedido do usuário, 2026-09-14): o anexo OFICIAL do
+        e-mail do LOTE passa a ser gerado automaticamente — mesmo sem
+        nenhum `anexo_extra` informado — a partir dos INEPs deste LOTE
+        (`gerar_planilha_faturamento_implantacao_lote`)."""
+        self.escola1.cod_fornecedor = "1111"
+        self.escola1.save(update_fields=["cod_fornecedor"])
+        self.escola2.cod_fornecedor = "2222"
+        self.escola2.save(update_fields=["cod_fornecedor"])
+
+        enviar_email_lote(
+            self.lote, para=["fin@example.com"], assunto="Assunto teste", mensagem="Corpo teste",
+            anexo_extra=None, usuario=self.usuario,
+        )
+
+        self.assertEqual(len(mail.outbox[0].attachments), 1)
+        nome_email, conteudo_email, mime_email = mail.outbox[0].attachments[0]
+        self.assertEqual(nome_email, nome_arquivo_planilha_faturamento_implantacao(self.lote))
+        self.assertEqual(mime_email, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        workbook_recebido = openpyxl.load_workbook(io.BytesIO(conteudo_email))
+        aba = workbook_recebido.worksheets[0]
+        self.assertEqual(aba.title, "Abadiânia")
+        self.assertIn("CÓDIGO INEPS: 10000060/1111;10000061/2222", aba["F10"].value)
+
+    def test_planilha_gerada_e_salva_no_historico_de_cada_inep(self):
+        enviar_email_lote(
+            self.lote, para=["fin@example.com"], assunto="Assunto teste", mensagem="Corpo teste",
+            anexo_extra=None, usuario=self.usuario,
+        )
+        entrada1 = self.ri1.historico.get(tipo=RiHistorico.EMAIL)
+        entrada2 = self.ri2.historico.get(tipo=RiHistorico.EMAIL)
+        # 2 INEPs recebem a MESMA planilha salva 2x — o storage evita
+        # sobrescrever o 1º arquivo, então o nome do 2º ganha um sufixo
+        # (comportamento padrão do Django); por isso conferir só a
+        # extensão, não o nome exato, e o CONTEÚDO (uma planilha válida).
+        for entrada in (entrada1, entrada2):
+            self.assertTrue(entrada.anexo.name.endswith(".xlsx"))
+            entrada.anexo.open("rb")
+            conteudo_historico = entrada.anexo.read()
+            entrada.anexo.close()
+            workbook_historico = openpyxl.load_workbook(io.BytesIO(conteudo_historico))
+            self.assertEqual(workbook_historico.worksheets[0].title, "Abadiânia")
+
+    def test_anexo_extra_soma_no_email_mas_nao_substitui_a_planilha_no_historico(self):
+        anexo_extra = SimpleUploadedFile("comprovante.pdf", b"conteudo-pdf", content_type="application/pdf")
+        enviar_email_lote(
+            self.lote, para=["fin@example.com"], assunto="Assunto teste", mensagem="Corpo teste",
+            anexo_extra=anexo_extra, usuario=self.usuario,
+        )
+        self.assertEqual(len(mail.outbox[0].attachments), 2)
+        nome_extra, conteudo_extra, mime_extra = mail.outbox[0].attachments[1]
+        self.assertEqual(nome_extra, "comprovante.pdf")
+        self.assertEqual(conteudo_extra, b"conteudo-pdf")
+
+        entrada1 = self.ri1.historico.get(tipo=RiHistorico.EMAIL)
+        self.assertTrue(entrada1.anexo.name.endswith(".xlsx"))
+        entrada1.anexo.open("rb")
+        conteudo_historico = entrada1.anexo.read()
+        entrada1.anexo.close()
+        self.assertNotEqual(conteudo_historico, b"conteudo-pdf")
+
+    def test_lote_sem_nenhum_inep_levanta_erro_sem_enviar_nada(self):
+        self.lote.escolas.clear()
+        with self.assertRaises(PlanilhaFaturamentoImplantacaoError):
+            enviar_email_lote(
+                self.lote, para=[], assunto="Teste", mensagem="Corpo",
+                anexo_extra=None, usuario=self.usuario,
+            )
+        self.assertEqual(len(mail.outbox), 0)
+        self.lote.refresh_from_db()
+        self.assertIsNone(self.lote.email_enviado_em)
+
+    def test_montar_assunto_email_lote_usa_lote_municipio_estado(self):
+        assunto = montar_assunto_email_lote(self.lote)
+        self.assertIn(str(self.lote), assunto)
+        self.assertIn("Abadiânia/GO", assunto)
+
+
+class MipLoteEnviarEmailViewTests(TestCase):
+    """`mip_lote_enviar_email_view` — recebe o POST do modal de composição
+    e delega para `enviar_email_lote`."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-email-lote-view", password="senha-teste-123")
+        self.visualizador = User.objects.create_user(
+            username="visualizador-email-lote", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.escola = Escola.objects.create(
+            inep="10000070", nome="Escola Email Lote View", status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
+        )
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+        )
+        self.lote.escolas.add(self.escola)
+
+    def test_exige_login(self):
+        resp = self.client.post(
+            reverse("mip_lote_enviar_email", kwargs={"pk": self.lote.pk}), {"assunto": "Teste"},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_get_nao_envia_nada(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_enviar_email", kwargs={"pk": self.lote.pk}))
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_sem_assunto_mostra_erro_e_nao_envia(self):
+        self.client.force_login(self.usuario)
+        self.client.post(
+            reverse("mip_lote_enviar_email", kwargs={"pk": self.lote.pk}), {"assunto": "", "para": ""},
+        )
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_para_com_email_invalido_mostra_erro_e_nao_envia(self):
+        self.client.force_login(self.usuario)
+        self.client.post(
+            reverse("mip_lote_enviar_email", kwargs={"pk": self.lote.pk}),
+            {"assunto": "Teste", "para": "nao-e-email"},
+        )
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_para_em_branco_e_aceito(self):
+        """Pedido do usuário: "o PARA pode deixar em branco" — o form
+        aceita (sem erro de validação) e o histórico do INEP é gravado.
+        `EmailMessage.send()` do Django não entrega nada sem nenhum
+        destinatário (nem `mail.outbox` recebe a mensagem) — comportamento
+        padrão do Django, documentado em `enviar_email_lote`."""
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_enviar_email", kwargs={"pk": self.lote.pk}),
+            {"assunto": "Teste", "para": "", "mensagem": "Corpo"},
+        )
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertTrue(self.ri.historico.filter(tipo=RiHistorico.EMAIL).exists())
+
+    def test_visualizador_nao_consegue_enviar(self):
+        self.client.force_login(self.visualizador)
+        resp = self.client.post(
+            reverse("mip_lote_enviar_email", kwargs={"pk": self.lote.pk}),
+            {"assunto": "Teste", "para": ""},
+        )
+        self.assertEqual(len(mail.outbox), 0)
+        self.escola.refresh_from_db()
+        self.assertFalse(self.ri.historico.filter(tipo=RiHistorico.EMAIL).exists())
+
+
+class MipLoteBaixarPlanilhaViewTests(TestCase):
+    """`mip_lote_baixar_planilha_view` (FEAT-045) — baixa a mesma planilha
+    que seria anexada ao e-mail do LOTE, sem enviar nada (botão "Baixar
+    planilha" do modal), mesmo padrão de
+    `apps.ri.views.ri_baixar_planilha_financeiro_view`."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-baixar-planilha-lote", password="senha-teste-123")
+        self.escola = Escola.objects.create(
+            inep="10000075", nome="Escola Baixar Planilha Lote", status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
+        )
+        Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+        )
+        self.lote.escolas.add(self.escola)
+
+    def test_exige_login(self):
+        resp = self.client.get(reverse("mip_lote_baixar_planilha", kwargs={"pk": self.lote.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_baixa_o_xlsx_sem_enviar_email(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_baixar_planilha", kwargs={"pk": self.lote.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn("attachment;", resp["Content-Disposition"])
+        self.assertEqual(len(mail.outbox), 0)
+
+        workbook = openpyxl.load_workbook(io.BytesIO(resp.content))
+        self.assertEqual(workbook.worksheets[0].title, "Abadiânia")
+
+    def test_lote_sem_nenhum_inep_mostra_erro_e_redireciona(self):
+        self.lote.escolas.clear()
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_baixar_planilha", kwargs={"pk": self.lote.pk}))
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+
+
+class MipLoteEmailBotaoListaTests(TestCase):
+    """Botão "Enviar e-mail" na tela "Projeto > MIP (LOTE)"
+    (`mip_lote_inep.html`)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-email-lote-botao", password="senha-teste-123")
+        self.visualizador = User.objects.create_user(
+            username="visualizador-email-lote-botao", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.escola = Escola.objects.create(
+            inep="10000080", nome="Escola Email Lote Botao", status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
+        )
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+        )
+        self.lote.escolas.add(self.escola)
+
+    def test_botao_aparece_para_quem_nao_e_visualizador(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, "Enviar e-mail")
+        self.assertContains(resp, reverse("mip_lote_enviar_email", kwargs={"pk": self.lote.pk}))
+
+    def test_visualizador_nem_chega_a_ver_o_botao(self):
+        """Pedido do usuário (2026-09-14, revisão): Visualizador não
+        acessa "Projeto > MIP (LOTE)" de jeito nenhum — o middleware
+        redireciona antes da página (e o botão) renderizar."""
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertRedirects(resp, reverse("grid_inep"))
+
+    def test_indicador_de_envio_aparece_depois_de_enviar(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertNotContains(resp, "Enviado em")
+
+        enviar_email_lote(
+            self.lote, para=[], assunto="Teste", mensagem="Corpo",
+            anexo_extra=None, usuario=self.usuario,
+        )
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, "Enviado em")
+
+
+# ---------------------------------------------------------------------------
+# FEAT-046 (a formalizar pelo Orquestrador em business_rules.md; pedido do
+# usuário, 2026-09-14): Status do LOTE — "Email em LOTE enviado" libera
+# "Em Andamento" (vai para o RI) e "Faturamento Concluído" (encerra).
+# ---------------------------------------------------------------------------
+
+
+class MipLoteStatusUpdateViewTests(TestCase):
+    """`mip_lote_status_update_view` — troca o Status do LOTE para "Em
+    Andamento" ou "Faturamento Concluído", só depois de "Email em LOTE
+    enviado", aplicando a mudança a todos os INEPs do LOTE de uma vez."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-status-lote", password="senha-teste-123")
+        self.admin = User.objects.create_user(
+            username="admin-status-lote", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.visualizador = User.objects.create_user(
+            username="visualizador-status-lote", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.escola1 = Escola.objects.create(inep="10000090", nome="Escola Status Lote 1")
+        self.escola2 = Escola.objects.create(inep="10000091", nome="Escola Status Lote 2")
+        # `Ri.save()` sincroniza `Escola.status_mip` sempre que o RI está
+        # "Aguardando validação EACE"/"Faturamento Concluído" (RN-092) —
+        # por isso o `status_mip` de "Email em LOTE enviado" só é
+        # atribuído DEPOIS de criar o RI, senão o save() do RI sobrescreve.
+        self.ri1 = Ri.objects.create(escola=self.escola1, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.ri2 = Ri.objects.create(escola=self.escola2, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.escola1.status_mip = Escola.EMAIL_LOTE_ENVIADO
+        self.escola1.save(update_fields=["status_mip"])
+        self.escola2.status_mip = Escola.EMAIL_LOTE_ENVIADO
+        self.escola2.save(update_fields=["status_mip"])
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+            status=Lote.EMAIL_ENVIADO,
+        )
+        self.lote.escolas.set([self.escola1, self.escola2])
+
+    def test_exige_login(self):
+        resp = self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": Lote.FATURAMENTO_CONCLUIDO},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_get_nao_altera_nada(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}))
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.lote.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.EMAIL_ENVIADO)
+
+    def test_status_invalido_nao_altera_nada(self):
+        self.client.force_login(self.usuario)
+        self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": "valor-invalido"},
+        )
+        self.lote.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.EMAIL_ENVIADO)
+
+    def test_bloqueado_fora_de_email_enviado(self):
+        self.lote.status = Lote.AGUARDANDO_ENCERRAMENTO
+        self.lote.save()
+        self.client.force_login(self.usuario)
+        self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}),
+            {"status": Lote.FATURAMENTO_CONCLUIDO},
+        )
+        self.lote.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.AGUARDANDO_ENCERRAMENTO)
+
+    def test_faturamento_concluido_muda_lote_e_todos_os_ineps_com_historico(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}),
+            {"status": Lote.FATURAMENTO_CONCLUIDO},
+        )
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.lote.refresh_from_db()
+        self.escola1.refresh_from_db()
+        self.escola2.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(self.escola1.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(self.escola2.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+        for ri in (self.ri1, self.ri2):
+            entrada = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)")
+            self.assertEqual(entrada.valor_novo, "Faturamento Concluído")
+        # Faturamento Concluído nunca mexe no Ri.status (mesmo critério do
+        # Status (MIP) individual, RN-092).
+        self.ri1.refresh_from_db()
+        self.assertEqual(self.ri1.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_em_andamento_reabre_o_ri_de_cada_inep(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": Lote.EM_ANDAMENTO},
+        )
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.lote.refresh_from_db()
+        self.escola1.refresh_from_db()
+        self.escola2.refresh_from_db()
+        self.ri1.refresh_from_db()
+        self.ri2.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.EM_ANDAMENTO)
+        self.assertEqual(self.escola1.status_mip, Escola.EM_ANDAMENTO)
+        self.assertEqual(self.escola2.status_mip, Escola.EM_ANDAMENTO)
+        self.assertEqual(self.ri1.status, Ri.ANDAMENTO)
+        self.assertEqual(self.ri2.status, Ri.ANDAMENTO)
+        # Mesmo log automático de troca de status do RI (RN-008) — igual
+        # ao Status (MIP) individual, `trocar_status_com_log` já grava.
+        self.assertTrue(self.ri1.historico.filter(tipo=RiHistorico.LOG_STATUS, campo="Status do RI").exists())
+
+    def test_em_andamento_tudo_ou_nada_quando_um_ri_bloqueia(self):
+        """RN-020: RI em "Faturamento Concluído" só muda com Administrador
+        — se 1 INEP do LOTE estiver bloqueado, NENHUM dos dois é alterado
+        (mesmo critério de `criar_lote_mip`)."""
+        self.ri2.status = Ri.FATURAMENTO_CONCLUIDO
+        # `Ri.save()` já sincroniza `escola2.status_mip` pra
+        # "faturamento_concluido" aqui mesmo, de propósito (RN-092,
+        # comportamento existente, não é o que este teste está checando)
+        # — só pra montar o cenário de bloqueio do RN-020.
+        self.ri2.save()
+        self.client.force_login(self.usuario)
+        self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": Lote.EM_ANDAMENTO},
+        )
+        self.lote.refresh_from_db()
+        self.escola1.refresh_from_db()
+        self.ri1.refresh_from_db()
+        # O que este teste confere de verdade: nada avançou por causa do
+        # bloqueio — nem o LOTE, nem o INEP que NÃO estava bloqueado.
+        self.assertEqual(self.lote.status, Lote.EMAIL_ENVIADO)
+        self.assertEqual(self.escola1.status_mip, Escola.EMAIL_LOTE_ENVIADO)
+        self.assertEqual(self.ri1.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_em_andamento_administrador_consegue_com_ri_faturamento_concluido(self):
+        self.ri2.status = Ri.FATURAMENTO_CONCLUIDO
+        self.ri2.save()
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": Lote.EM_ANDAMENTO},
+        )
+        self.lote.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.EM_ANDAMENTO)
+
+    def test_visualizador_nao_consegue_alterar(self):
+        self.client.force_login(self.visualizador)
+        self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}),
+            {"status": Lote.FATURAMENTO_CONCLUIDO},
+        )
+        self.lote.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.EMAIL_ENVIADO)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-049 (a formalizar pelo Orquestrador em business_rules.md; pedido do
+# usuário, 2026-09-14): "Desfazer LOTE" — os INEPs voltam para "Aguardando
+# Validação EACE" e o LOTE deixa de existir; histórico de cada INEP registra
+# a troca e quem desfez.
+# ---------------------------------------------------------------------------
+
+
+class DesfazerLoteMipServiceTests(TestCase):
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-desfazer-lote", password="senha-teste-123")
+        self.escola1 = Escola.objects.create(inep="10000092", nome="Escola Desfazer Lote 1")
+        self.escola2 = Escola.objects.create(inep="10000093", nome="Escola Desfazer Lote 2")
+        # Mesmo cuidado de `MipLoteStatusUpdateViewTests.setUp` — `Ri.save()`
+        # sincroniza `Escola.status_mip` pra "aguardando_validacao_eace"
+        # (RN-092), então o valor de "dentro do LOTE" só é atribuído DEPOIS.
+        self.ri1 = Ri.objects.create(escola=self.escola1, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.ri2 = Ri.objects.create(escola=self.escola2, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.escola1.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        self.escola1.save(update_fields=["status_mip"])
+        self.escola2.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        self.escola2.save(update_fields=["status_mip"])
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+        )
+        self.lote.escolas.set([self.escola1, self.escola2])
+
+    def test_volta_status_mip_de_cada_inep_para_aguardando_validacao_eace(self):
+        desfazer_lote_mip(self.lote, self.usuario)
+        self.escola1.refresh_from_db()
+        self.escola2.refresh_from_db()
+        self.assertEqual(self.escola1.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(self.escola2.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_exclui_o_lote(self):
+        lote_pk = self.lote.pk
+        desfazer_lote_mip(self.lote, self.usuario)
+        self.assertFalse(Lote.objects.filter(pk=lote_pk).exists())
+
+    def test_grava_historico_com_status_lote_e_autor(self):
+        identificacao_lote = str(self.lote)
+        desfazer_lote_mip(self.lote, self.usuario)
+
+        for ri in (self.ri1, self.ri2):
+            entrada_status = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)")
+            self.assertEqual(entrada_status.valor_novo, "Aguardando Validação EACE")
+            self.assertEqual(entrada_status.autor, self.usuario)
+
+            entrada_lote = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="LOTE")
+            self.assertEqual(entrada_lote.valor_anterior, identificacao_lote)
+            self.assertEqual(entrada_lote.valor_novo, "Desfeito")
+            self.assertEqual(entrada_lote.autor, self.usuario)
+
+    def test_bloqueado_a_partir_de_em_andamento(self):
+        self.lote.status = Lote.EM_ANDAMENTO
+        self.lote.save()
+        with self.assertRaises(LoteMipError):
+            desfazer_lote_mip(self.lote, self.usuario)
+        self.escola1.refresh_from_db()
+        self.assertEqual(self.escola1.status_mip, Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
+        self.assertTrue(Lote.objects.filter(pk=self.lote.pk).exists())
+
+    def test_bloqueado_a_partir_de_faturamento_concluido(self):
+        self.lote.status = Lote.FATURAMENTO_CONCLUIDO
+        self.lote.save()
+        with self.assertRaises(LoteMipError):
+            desfazer_lote_mip(self.lote, self.usuario)
+
+    def test_permitido_com_email_ja_enviado(self):
+        self.lote.status = Lote.EMAIL_ENVIADO
+        self.lote.save()
+        desfazer_lote_mip(self.lote, self.usuario)
+        self.assertFalse(Lote.objects.filter(pk=self.lote.pk).exists())
+
+
+class MipLoteDesfazerViewTests(TestCase):
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-desfazer-lote-view", password="senha-teste-123")
+        self.visualizador = User.objects.create_user(
+            username="visualizador-desfazer-lote", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.escola = Escola.objects.create(inep="10000094", nome="Escola Desfazer Lote View")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.escola.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        self.escola.save(update_fields=["status_mip"])
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+        )
+        self.lote.escolas.set([self.escola])
+
+    def test_exige_login(self):
+        resp = self.client.post(reverse("mip_lote_desfazer", kwargs={"pk": self.lote.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_get_nao_altera_nada(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_desfazer", kwargs={"pk": self.lote.pk}))
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.assertTrue(Lote.objects.filter(pk=self.lote.pk).exists())
+
+    def test_post_desfaz_o_lote(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_desfazer", kwargs={"pk": self.lote.pk}), {"next": ""},
+        )
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        self.assertFalse(Lote.objects.filter(pk=self.lote.pk).exists())
+        self.escola.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_bloqueado_a_partir_de_em_andamento_mostra_mensagem(self):
+        self.lote.status = Lote.EM_ANDAMENTO
+        self.lote.save()
+        self.client.force_login(self.usuario)
+        resp = self.client.post(
+            reverse("mip_lote_desfazer", kwargs={"pk": self.lote.pk}), {"next": ""}, follow=True,
+        )
+        self.assertTrue(Lote.objects.filter(pk=self.lote.pk).exists())
+        mensagens = [str(m) for m in resp.context["messages"]]
+        self.assertTrue(any("Não é possível desfazer" in m for m in mensagens))
+
+    def test_visualizador_nao_consegue_desfazer(self):
+        self.client.force_login(self.visualizador)
+        self.client.post(reverse("mip_lote_desfazer", kwargs={"pk": self.lote.pk}), {"next": ""})
+        self.assertTrue(Lote.objects.filter(pk=self.lote.pk).exists())
+
+
+class MipLoteStatusColunaListaTests(TestCase):
+    """Coluna "Status" e o `<select>` de troca (Em Andamento/Faturamento
+    Concluído) na tela "Projeto > MIP (LOTE)"."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-status-lote-coluna", password="senha-teste-123")
+        self.escola = Escola.objects.create(
+            inep="10000095", nome="Escola Status Coluna", status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
+        )
+        self.lote = Lote.objects.create(
+            estado="GO", municipio="Abadiânia",
+            data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+        )
+        self.lote.escolas.add(self.escola)
+
+    def test_status_inicial_nao_mostra_select_de_em_andamento_faturamento(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, "Aguardando Encerramento LOTE")
+        self.assertNotContains(resp, "Mudar status...")
+
+    def test_status_email_enviado_mostra_select(self):
+        self.lote.status = Lote.EMAIL_ENVIADO
+        self.lote.save()
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, "Email em LOTE enviado")
+        self.assertContains(resp, "Mudar status...")
+        self.assertContains(resp, reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}))
+
+    def test_status_em_andamento_esconde_botao_de_email_e_select(self):
+        self.lote.status = Lote.EM_ANDAMENTO
+        self.lote.save()
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, "Em Andamento")
+        self.assertNotContains(resp, "Mudar status...")
+        self.assertNotContains(resp, reverse("mip_lote_enviar_email", kwargs={"pk": self.lote.pk}))

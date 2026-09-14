@@ -16,6 +16,7 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError, transaction
+from django.template.loader import render_to_string
 from django.test import TestCase, override_settings
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
@@ -438,6 +439,33 @@ class RiStatusUpdateViewTests(TestCase):
         self.assertEqual(entrada.valor_novo, "Envio de Email para faturamento")
         self.assertEqual(entrada.autor, self.user)
 
+    def test_historico_mostra_autor_real_em_vez_de_sistema(self):
+        """Correção (2026-09-14): usuário reportou (INEP 35203185) não achar,
+        na linha do tempo, quem de fato agiu — investigação mostrou que o
+        template mostrava sempre "Sistema" para log_status/log_campo, mesmo
+        quando `RiHistorico.autor` já vinha gravado com o usuário real
+        (ex.: troca manual de status). Corrigido para só usar "Sistema"
+        quando não há autor (transição automática, RN-008)."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        entrada = RiHistorico.objects.create(
+            ri=ri, tipo=RiHistorico.LOG_STATUS, autor=self.user,
+            campo="Status do RI", valor_anterior="Em Andamento",
+            valor_novo="Envio de Email para faturamento",
+        )
+        html = render_to_string("ri/_historico_panel.html", {"ri": ri, "historico": [entrada]})
+        self.assertIn(self.user.username, html)
+        self.assertNotIn("Sistema", html)
+
+    def test_historico_mostra_sistema_quando_transicao_e_automatica(self):
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        entrada = RiHistorico.objects.create(
+            ri=ri, tipo=RiHistorico.LOG_STATUS, autor=None,
+            campo="Status do RI", valor_anterior="Envio de Email para faturamento",
+            valor_novo="Aguardando financeiro",
+        )
+        html = render_to_string("ri/_historico_panel.html", {"ri": ri, "historico": [entrada]})
+        self.assertIn("Sistema", html)
+
     def test_transicao_bloqueada_nao_gera_entrada_no_historico(self):
         ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
         self.client.force_login(self.user)
@@ -791,6 +819,50 @@ class RiStatusUpdateViewTests(TestCase):
         ri.refresh_from_db()
         self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
 
+    def test_marca_anexo_eace_bloqueada_com_log_rpa_pendente(self):
+        """RN-099 (2026-09-14): a marcação manual do anexo (RN-001) exige
+        o mesmo critério do avanço automático (RN-056) — bloqueada se
+        sobrar log de RPA EACE fora de "Sucesso" (aqui, "Na fila"), mesmo
+        que o usuário tenha certeza de ter anexado por fora."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.NA_FILA)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_marca_anexo_eace_bloqueada_com_log_rpa_com_erro(self):
+        """RN-099: mesmo bloqueio com log "Erro" — caso relatado pelo
+        usuário (INEP 53005015 entrou no MIP com 1 log de RPA em erro)."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.SUCESSO)
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.ERRO, motivo_erro="valor_divergente")
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_marca_anexo_eace_permitida_com_todos_os_logs_com_sucesso(self):
+        """RN-099: com todos os logs "Sucesso" (ou nenhum log ainda), a
+        marcação manual continua liberada — não é uma trava nova sobre o
+        caminho já validado por `test_marca_anexo_eace_a_partir_de_
+        resposta_financeiro` (sem log nenhum), só um caso a mais."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.SUCESSO)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": ri.pk}),
+            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+
     def test_marca_anexo_eace_bloqueada_fora_de_resposta_financeiro(self):
         """FEAT-010/RF-10: fora de "Resposta Financeiro", a marcação é
         rejeitada — mesmo para o Administrador (não é uma exceção dele,
@@ -921,6 +993,30 @@ class RiLogRpaEaceDispararViewTests(TestCase):
         self.assertEqual(self.log.documento_pdf_id, self.pdf.pk)
         self.assertEqual(self.log.documento_xml_id, self.xml.pk)
 
+    def test_disparo_grava_entrada_no_historico_com_autor_real(self):
+        """Correção (2026-09-14): usuário reportou (INEP 35203185) não haver
+        registro de que a RPA foi usada nem de quem a disparou — só o
+        resultado final (`_registrar_execucao_rpa_eace`, RN-059) ficava
+        gravado, e só depois do consumidor processar. O disparo manual em
+        si (único passo com usuário logado) passa a gravar sua própria
+        entrada, com o autor real."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
+        )
+        self.client.force_login(self.user)
+
+        self._disparar()
+
+        entrada = RiHistorico.objects.get(ri=self.ri, campo=f"RPA EACE (Nota Fiscal #{self.log.pk})")
+        self.assertEqual(entrada.autor, self.user)
+        self.assertEqual(entrada.tipo, RiHistorico.LOG_CAMPO)
+        self.assertIn("Disparo manual", entrada.valor_novo)
+        self.assertTrue(
+            Auditoria.objects.filter(
+                usuario=self.user, acao=Auditoria.EXECUCAO_RPA_EACE, entidade_id=self.log.pk,
+            ).exists()
+        )
+
     def test_tentar_novamente_reseta_tentativas_e_reenfileira(self):
         RiItemRelatorioEace.objects.create(
             ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
@@ -937,6 +1033,22 @@ class RiLogRpaEaceDispararViewTests(TestCase):
         self.assertEqual(self.log.resultado, LogRpaEace.NA_FILA)
         self.assertEqual(self.log.tentativas, 0)
         self.assertEqual(self.log.motivo_erro, "")
+
+    def test_tentar_novamente_grava_entrada_de_reprocessamento_no_historico(self):
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929",
+        )
+        self.log.resultado = LogRpaEace.ERRO
+        self.log.motivo_erro = "valor_divergente"
+        self.log.tentativas = 1
+        self.log.save()
+        self.client.force_login(self.user)
+
+        self._disparar()
+
+        entrada = RiHistorico.objects.get(ri=self.ri, campo=f"RPA EACE (Nota Fiscal #{self.log.pk})")
+        self.assertEqual(entrada.autor, self.user)
+        self.assertIn("tentar novamente", entrada.valor_novo)
 
     def test_log_ja_com_sucesso_nao_pode_ser_reenviado(self):
         """Pedido do usuário (2026-09-03): depois de "Sucesso" os inputs
@@ -1076,6 +1188,128 @@ class RiLogRpaEaceMarcarManualViewTests(TestCase):
 
         self.log.refresh_from_db()
         self.assertEqual(self.log.resultado, LogRpaEace.NA_FILA, "não pode atropelar o consumidor da fila")
+
+
+class FilaRpaEaceViewTests(TestCase):
+    """FEAT-048 (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-14): "Projeto > Fila" - grid único com
+    todos os logs do RPA EACE do sistema, com filtros (INEP, Status, Data
+    processamento) e paginação de 10 resolvida no banco (RN-058)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-fila-rpa", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="35083938", nome="Escola Fila RPA")
+        self.outra_escola = Escola.objects.create(inep="17057590", nome="Outra Escola Fila RPA")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.outro_ri = Ri.objects.create(escola=self.outra_escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.log_pendente = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.PENDENTE)
+        self.log_na_fila = LogRpaEace.objects.create(
+            ri=self.ri, resultado=LogRpaEace.NA_FILA, enfileirado_em=timezone.now(),
+        )
+        self.log_processando = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.PROCESSANDO)
+        self.log_sucesso = LogRpaEace.objects.create(
+            ri=self.ri, resultado=LogRpaEace.SUCESSO, executado_em=timezone.now(),
+        )
+        self.log_erro = LogRpaEace.objects.create(
+            ri=self.outro_ri, resultado=LogRpaEace.ERRO, motivo_erro="valor_divergente",
+            executado_em=timezone.now(),
+        )
+
+    def test_exige_login(self):
+        resp = self.client.get(reverse("fila_rpa_eace"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_filtro_padrao_mostra_so_na_fila_e_processando(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("fila_rpa_eace"))
+        logs_pagina = list(resp.context["page_obj"])
+        self.assertCountEqual(logs_pagina, [self.log_na_fila, self.log_processando])
+
+    def test_filtro_status_invalido_cai_no_padrao(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("fila_rpa_eace"), {"status": "isso-nao-existe"})
+        logs_pagina = list(resp.context["page_obj"])
+        self.assertCountEqual(logs_pagina, [self.log_na_fila, self.log_processando])
+
+    def test_filtro_todos_nunca_mostra_pendente(self):
+        """"Pendente" (log criado, RPA ainda não disparada) não é fila -
+        fica de fora mesmo com "Todos" (pedido do usuário: só os 4 estados
+        Na fila/Processando/Processado/Erro)."""
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("fila_rpa_eace"), {"status": "todos"})
+        logs_pagina = list(resp.context["page_obj"])
+        self.assertNotIn(self.log_pendente, logs_pagina)
+
+    def test_filtro_todos_acrescenta_sucesso_e_erro(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("fila_rpa_eace"), {"status": "todos"})
+        logs_pagina = list(resp.context["page_obj"])
+        self.assertCountEqual(
+            logs_pagina, [self.log_na_fila, self.log_processando, self.log_sucesso, self.log_erro],
+        )
+        self.assertContains(resp, "valor_divergente")
+
+    def test_filtro_status_especifico_mostra_so_ele(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("fila_rpa_eace"), {"status": LogRpaEace.ERRO})
+        logs_pagina = list(resp.context["page_obj"])
+        self.assertCountEqual(logs_pagina, [self.log_erro])
+
+    def test_filtro_por_inep(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("fila_rpa_eace"), {"status": "todos", "inep": "17057590"})
+        logs_pagina = list(resp.context["page_obj"])
+        self.assertCountEqual(logs_pagina, [self.log_erro])
+
+    def test_filtro_por_data_processamento(self):
+        self.client.force_login(self.user)
+        ontem = (timezone.now() - timedelta(days=1)).date()
+        resp = self.client.get(
+            reverse("fila_rpa_eace"), {"status": "todos", "data_processamento": ontem.isoformat()},
+        )
+        logs_pagina = list(resp.context["page_obj"])
+        self.assertEqual(logs_pagina, [], "nenhum log foi processado ontem neste teste")
+
+        hoje = timezone.now().date()
+        resp = self.client.get(
+            reverse("fila_rpa_eace"), {"status": "todos", "data_processamento": hoje.isoformat()},
+        )
+        logs_pagina = list(resp.context["page_obj"])
+        self.assertCountEqual(
+            logs_pagina, [self.log_na_fila, self.log_processando, self.log_sucesso, self.log_erro],
+        )
+
+    def test_data_processamento_invalida_e_ignorada(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("fila_rpa_eace"), {"data_processamento": "nao-e-uma-data"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pagina_apenas_10_por_vez(self):
+        """Pedido do usuário (2026-09-14): mostrar só os 10 primeiros -
+        os demais só aparecem se o usuário mudar de página."""
+        for _ in range(12):
+            LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO, executado_em=timezone.now())
+        self.client.force_login(self.user)
+
+        resp = self.client.get(reverse("fila_rpa_eace"), {"status": "todos"})
+        page_obj = resp.context["page_obj"]
+        self.assertEqual(page_obj.paginator.per_page, 10)
+        self.assertEqual(len(list(page_obj)), 10)
+        self.assertTrue(page_obj.has_next())
+
+        resp_pagina_2 = self.client.get(reverse("fila_rpa_eace"), {"status": "todos", "page": 2})
+        self.assertEqual(len(list(resp_pagina_2.context["page_obj"])), 6)
+
+    def test_visualizador_nao_acessa(self):
+        visualizador = User.objects.create_user(
+            username="visualizador-fila-rpa", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.client.force_login(visualizador)
+        resp = self.client.get(reverse("fila_rpa_eace"))
+        self.assertRedirects(resp, reverse("grid_inep"))
 
 
 class RotularDocumentosPdfTests(TestCase):

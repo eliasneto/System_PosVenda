@@ -111,14 +111,14 @@
             {% endif %}
 
             <div class="mb-1 relative">
-                <button onclick="toggleSubmenu('submenu-projeto', 'seta-projeto')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'grid_inep' or request.resolver_match.url_name == 'mip_inep' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
+                <button onclick="toggleSubmenu('submenu-projeto', 'seta-projeto')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'grid_inep' or request.resolver_match.url_name == 'mip_inep' or request.resolver_match.url_name == 'mip_lote_inep' or request.resolver_match.url_name == 'fila_rpa_eace' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
                     <div class="flex items-center gap-3">
                         <i data-lucide="folder-kanban" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
                         <span class="text-sm font-semibold">Projeto</span>
                     </div>
-                    <i data-lucide="chevron-down" id="seta-projeto" class="w-4 h-4 transition-transform duration-300 {% if request.resolver_match.url_name == 'grid_inep' or request.resolver_match.url_name == 'mip_inep' %} rotate-180 {% endif %}"></i>
+                    <i data-lucide="chevron-down" id="seta-projeto" class="w-4 h-4 transition-transform duration-300 {% if request.resolver_match.url_name == 'grid_inep' or request.resolver_match.url_name == 'mip_inep' or request.resolver_match.url_name == 'mip_lote_inep' or request.resolver_match.url_name == 'fila_rpa_eace' %} rotate-180 {% endif %}"></i>
                 </button>
-                <div id="submenu-projeto" class="{% if request.resolver_match.url_name != 'grid_inep' and request.resolver_match.url_name != 'mip_inep' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
+                <div id="submenu-projeto" class="{% if request.resolver_match.url_name != 'grid_inep' and request.resolver_match.url_name != 'mip_inep' and request.resolver_match.url_name != 'mip_lote_inep' and request.resolver_match.url_name != 'fila_rpa_eace' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
                     <a href="{% url 'grid_inep' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'grid_inep' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
                         <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'grid_inep' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Equipamentos
                     </a>
@@ -127,6 +127,33 @@
                     <a href="{% url 'mip_inep' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'mip_inep' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
                         <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'mip_inep' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> MIP
                     </a>
+                    <!-- FEAT-044/FEAT-046 (a formalizar pelo Orquestrador
+                         em business_rules.md; pedido do usuário,
+                         2026-09-14; revisto 2026-09-14): lista os LOTE já
+                         criados a partir do grid do MIP — Visualizador NÃO
+                         vê este link (pedido explícito do usuário, revoga
+                         a extensão anterior da RN-096 pra esta tela); o
+                         middleware (`VisualizadorAccessMiddleware`) já
+                         bloqueia o acesso mesmo por URL direta. -->
+                    {% if not user.is_visualizador %}
+                    <a href="{% url 'mip_lote_inep' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'mip_lote_inep' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'mip_lote_inep' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> MIP (LOTE)
+                    </a>
+                    {% endif %}
+                    <!-- FEAT-048 (a formalizar pelo Orquestrador em
+                         business_rules.md; pedido do usuário,
+                         2026-09-14): grid único da fila do RPA EACE
+                         (RN-058) - tela operacional/interna, mesmo
+                         critério já usado pra "MIP (LOTE)" acima:
+                         Visualizador não vê este link, e o middleware
+                         (`VisualizadorAccessMiddleware`) já bloqueia o
+                         acesso mesmo por URL direta (rota não está na
+                         lista liberada). -->
+                    {% if not user.is_visualizador %}
+                    <a href="{% url 'fila_rpa_eace' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'fila_rpa_eace' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'fila_rpa_eace' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Fila
+                    </a>
+                    {% endif %}
                 </div>
             </div>
 

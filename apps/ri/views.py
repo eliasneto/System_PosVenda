@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from urllib.parse import quote
 
@@ -10,7 +10,8 @@ from django.contrib.auth.decorators import login_required
 from django.core.files.base import ContentFile
 from django.core.mail import EmailMessage
 from django.core.paginator import Paginator
-from django.db.models import Prefetch, Q
+from django.db.models import Case, IntegerField, Prefetch, Q, Value, When
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
@@ -338,6 +339,22 @@ def _validar_transicao_status_ri(ri, novo_status, usuario):
         Ri.FATURAMENTO_CONCLUIDO,
     ):
         return 'Só é possível marcar o anexo feito no EACE a partir de "Resposta Financeiro" (RN-001).'
+    # RN-099 (2026-09-14): a troca manual acima (RN-001) é o mesmo destino
+    # do avanço automático do RPA EACE (RN-056) — mas, sem esta checagem,
+    # ela era aceita mesmo com log de RPA ainda pendente/na fila/erro
+    # (usuário reportou INEP 53005015 entrando no MIP com RPA sem terminar
+    # de rodar). Mesmo critério do avanço automático
+    # (`_avancar_status_se_todos_os_logs_sucesso`): só libera quando não
+    # sobra nenhum log fora de "Sucesso" — cobre também "Faturamento
+    # Concluído" como origem (RN-020, correção do Administrador).
+    if (
+        novo_status == Ri.AGUARDANDO_VALIDACAO_EACE
+        and ri.logs_rpa_eace.exclude(resultado=LogRpaEace.SUCESSO).exists()
+    ):
+        return (
+            'Bloqueado: há log de RPA EACE ainda pendente ou com erro para este RI '
+            '(RN-056/RN-099) — resolva ou reprocesse antes de marcar o anexo manualmente.'
+        )
     # FEAT-010/RF-11: conclusão manual só depois da marcação de anexo —
     # "Botão de conclusão só habilitado depois da marcação de anexo"
     # (checklist.md), aqui aplicado como bloqueio de origem, mesmo padrão
@@ -916,6 +933,7 @@ def ri_log_rpa_eace_disparar_view(request, pk):
                 # RN-058 (Fase 3): só enfileira - reseta tentativas (disparo
                 # novo/"Tentar novamente" é um ciclo novo de reprocessamento,
                 # não continuação do anterior) e manda pro final da fila.
+                era_reprocessamento = log.resultado == LogRpaEace.ERRO
                 log.documento_pdf = documento_pdf
                 log.documento_xml = documento_xml
                 log.resultado = LogRpaEace.NA_FILA
@@ -923,6 +941,32 @@ def ri_log_rpa_eace_disparar_view(request, pk):
                 log.tentativas = 0
                 log.enfileirado_em = timezone.now()
                 log.save()
+                # Correção (2026-09-14): usuário reportou (INEP 35203185) não
+                # existir, na linha do tempo do RI, nenhum registro de que a
+                # RPA foi acionada nem de quem acionou - só o resultado final
+                # (`_registrar_execucao_rpa_eace`, RN-059) ficava gravado, e
+                # só depois de o consumidor processar. Este disparo manual (o
+                # único passo desse fluxo com usuário logado de fato) passa a
+                # gravar sua própria entrada, com autor real.
+                RiHistorico.objects.create(
+                    ri=ri,
+                    tipo=RiHistorico.LOG_CAMPO,
+                    autor=request.user,
+                    campo=f"RPA EACE (Nota Fiscal #{log.pk})",
+                    valor_novo=(
+                        "Reenviado manualmente para a fila do RPA EACE (tentar novamente)."
+                        if era_reprocessamento
+                        else "Disparo manual: enviado para a fila do RPA EACE."
+                    ),
+                )
+                auditar(
+                    request.user,
+                    Auditoria.EXECUCAO_RPA_EACE,
+                    entidade="LogRpaEace",
+                    entidade_id=log.pk,
+                    campo="resultado",
+                    valor_novo=LogRpaEace.NA_FILA,
+                )
                 messages.success(request, "Nota Fiscal enviada para a fila do RPA EACE.")
 
     if _requisicao_htmx(request):
@@ -1096,6 +1140,127 @@ def _fragmento_logs_rpa_eace_htmx(request, ri, next_url, incluir_mensagens=True,
     if incluir_mensagens:
         html += render_to_string("core/_messages.html", request=request)
     return HttpResponse(html)
+
+
+# FEAT-048: valores aceitos pelo filtro "Status" da tela "Projeto > Fila"
+# - "andamento" (padrão, pedido explícito do usuário) e "todos" não são
+# `resultado` de verdade, só atalhos pra um grupo deles; os 4 do meio são
+# o próprio `LogRpaEace.resultado`. "Pendente" fica fora de propósito -
+# log criado mas ainda não disparado (RN-058) não chegou a entrar na
+# fila, não é o que esta tela se propõe a mostrar (nem com "Todos").
+STATUS_FILTRO_FILA_RPA_EACE_ANDAMENTO = "andamento"
+STATUS_FILTRO_FILA_RPA_EACE_TODOS = "todos"
+STATUS_FILTRO_FILA_RPA_EACE_CHOICES = [
+    (STATUS_FILTRO_FILA_RPA_EACE_ANDAMENTO, "Em andamento (Na fila + Processando)"),
+    (LogRpaEace.NA_FILA, "Na fila"),
+    (LogRpaEace.PROCESSANDO, "Processando"),
+    (LogRpaEace.SUCESSO, "Processado"),
+    (LogRpaEace.ERRO, "Erro"),
+    (STATUS_FILTRO_FILA_RPA_EACE_TODOS, "Todos"),
+]
+
+
+def _parse_data_processamento_filtro(valor):
+    """`<input type="date">` manda sempre `AAAA-MM-DD` (ISO, padrão do
+    HTML5) quando preenchido - `None` (filtro ignorado) pra qualquer outra
+    coisa, nunca erro 500 (CLAUDE.md §9)."""
+    try:
+        return date.fromisoformat((valor or "").strip())
+    except ValueError:
+        return None
+
+
+@login_required
+def fila_rpa_eace_view(request):
+    """FEAT-048 (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-14): "Projeto > Fila" - grid único com
+    TODOS os logs do RPA EACE do sistema (não mais por RI), pra
+    acompanhar de um só lugar a fila serializada (RN-058). Filtros: INEP,
+    Status e Data Processamento.
+
+    Por padrão (`?status` ausente/"andamento") mostra só o que está em
+    andamento - "Na fila" e "Processando" - pedido explícito do usuário;
+    "Todos" acrescenta o que já terminou ("Sucesso"/"Erro"); um status
+    específico (ex.: "Erro") filtra só ele.
+
+    RN (pedido do usuário, 2026-09-14): a tela nunca carrega tudo do
+    banco pra paginar em Python - `Paginator` recebe a `QuerySet` já
+    filtrada (não uma lista), então cada página vira 1 `SELECT ... LIMIT
+    10 OFFSET N` (+ 1 `COUNT` pro total de páginas) - só os 10 registros
+    da página atual saem do banco, mesmo com milhares de logs finalizados
+    acumulados ("Todos"/"Processado"/"Erro").
+
+    Ordenado por prioridade (Processando > Na fila > finalizados) só nas
+    2 visões que misturam mais de 1 `resultado` ("Em andamento"/"Todos");
+    com um status específico escolhido, ordena só por ele (fila em ordem
+    de chegada - RN-058 -, finalizados do mais recente pro mais antigo).
+    Reaproveita `_posicoes_na_fila` (já usado no card por RI) pra a
+    posição de cada "Na fila" na página atual - a fila é única pro
+    sistema todo, a posição não muda ao olhar daqui em vez de dentro do
+    RI."""
+    inep_filtro = (request.GET.get("inep") or "").strip()
+    status_filtro = request.GET.get("status") or STATUS_FILTRO_FILA_RPA_EACE_ANDAMENTO
+    if status_filtro not in dict(STATUS_FILTRO_FILA_RPA_EACE_CHOICES):
+        status_filtro = STATUS_FILTRO_FILA_RPA_EACE_ANDAMENTO
+    data_processamento_filtro = _parse_data_processamento_filtro(request.GET.get("data_processamento"))
+
+    qs = LogRpaEace.objects.select_related("ri", "ri__escola", "documento_pdf")
+
+    if status_filtro == STATUS_FILTRO_FILA_RPA_EACE_TODOS:
+        qs = qs.filter(resultado__in=(LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO, LogRpaEace.SUCESSO, LogRpaEace.ERRO))
+    elif status_filtro == STATUS_FILTRO_FILA_RPA_EACE_ANDAMENTO:
+        qs = qs.filter(resultado__in=(LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO))
+    else:
+        qs = qs.filter(resultado=status_filtro)
+
+    if inep_filtro:
+        qs = qs.filter(ri__escola__inep__icontains=inep_filtro)
+
+    if data_processamento_filtro:
+        # RN-058: sem 1 único campo "data de processamento" pra todo
+        # `resultado` (finalizado usa `executado_em`; "Na fila" só tem
+        # `enfileirado_em`; nunca disparado só tem `criado_em`) - filtra
+        # pela mesma data que a coluna "Quando" da tabela mostra pra
+        # aquela linha (`COALESCE`, resolvido no banco).
+        qs = qs.annotate(
+            data_efetiva=Coalesce("executado_em", "enfileirado_em", "criado_em")
+        ).filter(data_efetiva__date=data_processamento_filtro)
+
+    if status_filtro in (STATUS_FILTRO_FILA_RPA_EACE_ANDAMENTO, STATUS_FILTRO_FILA_RPA_EACE_TODOS):
+        qs = qs.annotate(
+            prioridade=Case(
+                When(resultado=LogRpaEace.PROCESSANDO, then=Value(0)),
+                When(resultado=LogRpaEace.NA_FILA, then=Value(1)),
+                default=Value(2),
+                output_field=IntegerField(),
+            )
+        ).order_by("prioridade", "enfileirado_em", "criado_em")
+    elif status_filtro in (LogRpaEace.SUCESSO, LogRpaEace.ERRO):
+        qs = qs.order_by("-executado_em", "-criado_em")
+    else:
+        qs = qs.order_by("enfileirado_em", "criado_em")
+
+    paginator = Paginator(qs, 10)
+    page_obj = paginator.get_page(request.GET.get("page"))
+
+    posicoes = _posicoes_na_fila()
+    for log in page_obj:
+        if log.resultado == LogRpaEace.NA_FILA:
+            log.posicao_na_fila = posicoes.get(log.pk)
+
+    return render(
+        request,
+        "ri/fila_rpa_eace.html",
+        {
+            "page_obj": page_obj,
+            "status_filtro": status_filtro,
+            "status_opcoes": STATUS_FILTRO_FILA_RPA_EACE_CHOICES,
+            "inep_filtro": inep_filtro,
+            "data_processamento_filtro": data_processamento_filtro,
+            "total_na_fila": LogRpaEace.objects.filter(resultado=LogRpaEace.NA_FILA).count(),
+            "total_processando": LogRpaEace.objects.filter(resultado=LogRpaEace.PROCESSANDO).count(),
+        },
+    )
 
 
 @login_required

@@ -1,0 +1,112 @@
+{% comment %}
+FEAT-045 (a formalizar pelo Orquestrador em business_rules.md; pedido do
+usuário, 2026-09-14): modal "Enviar e-mail do LOTE" — mesmo padrão visual
+e de interação do modal de e-mail do RI (`ri/_modal_enviar_email.html`,
+FEAT-008/RN-051), incluído por `mip_lote_inep.html` uma vez por linha do
+LOTE. JS genérico já existente em `core/base.html`
+(`data-abrir-modal-email`/`data-fechar-modal-email`/`data-mostrar-painel`/
+`data-esconder-painel`/`data-validar-form`) — nada novo em JS.
+
+Diferenças pedidas pelo usuário em relação ao modal do RI: "Para" é
+OPCIONAL aqui (sem `required`); sem campo "Cc" (não pedido). "Anexo"
+(campo `anexo_extra`) segue o mesmo padrão do RI: a planilha de
+faturamento de implantação por Município (`gerar_planilha_faturamento_
+implantacao_lote`) é gerada e anexada automaticamente — este campo é só
+para somar mais um arquivo, e "Baixar planilha" confere o conteúdo antes
+do envio. Parâmetros: `lote`, `escolas` (lista de INEPs, para o resumo no
+painel de confirmação), `assunto_sugerido`, `corpo_sugerido`,
+`remetente_lote`, `next_url`.
+{% endcomment %}
+<div id="modal-email-lote-{{ lote.pk }}" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email>
+    <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
+    <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <form id="form-enviar-email-lote-{{ lote.pk }}" method="POST" action="{% url 'mip_lote_enviar_email' pk=lote.pk %}" enctype="multipart/form-data">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next_url }}">
+            <div id="painel-compor-lote-{{ lote.pk }}" data-painel-principal>
+                <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800">
+                    <h2 class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Enviar e-mail — {{ lote }}</h2>
+                    <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                <div class="px-6 py-5 space-y-4">
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">De</label>
+                        <input type="text" value="{{ remetente_lote }}" disabled
+                               class="w-full mt-1 px-3 py-2 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-500 dark:text-gray-400 cursor-not-allowed">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Para</label>
+                        <input type="text" name="para" placeholder="Pode deixar em branco por enquanto"
+                               class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Assunto</label>
+                        <input type="text" name="assunto" value="{{ assunto_sugerido }}" required
+                               class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Anexo</label>
+                        <p class="text-[10px] text-gray-400 dark:text-gray-500 mb-1">A planilha de faturamento de implantação deste Município é gerada e anexada automaticamente (use "Baixar planilha" para conferir antes). Este campo é opcional, para anexar mais um arquivo.</p>
+                        <input type="file" name="anexo_extra" class="w-full text-xs font-bold text-gray-500 dark:text-gray-400 cursor-pointer file:mr-3 file:px-4 file:py-2 file:rounded-lg file:border-0 file:bg-[#0F0F0F] file:text-[#FFC107] file:font-black file:uppercase file:text-[10px] file:cursor-pointer">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Mensagem</label>
+                        <textarea name="mensagem" rows="6"
+                                  class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300 resize-none">{{ corpo_sugerido }}</textarea>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800">
+                    <button type="button" data-fechar-modal-email class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                        Cancelar
+                    </button>
+                    {# FEAT-045: baixa a mesma planilha que seria anexada, sem enviar nada — para validar antes de confirmar o envio. #}
+                    <a href="{% url 'mip_lote_baixar_planilha' pk=lote.pk %}?next={{ next_url|urlencode }}"
+                       target="_blank"
+                       class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition inline-flex items-center gap-1.5">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        Baixar planilha
+                    </a>
+                    <button type="button"
+                            data-validar-form="form-enviar-email-lote-{{ lote.pk }}"
+                            data-esconder-painel="painel-compor-lote-{{ lote.pk }}"
+                            data-mostrar-painel="painel-confirmar-lote-{{ lote.pk }}"
+                            class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                        Enviar e-mail
+                    </button>
+                </div>
+            </div>
+            <div id="painel-confirmar-lote-{{ lote.pk }}" class="hidden" data-painel-secundario>
+                <div class="px-6 py-6">
+                    <div class="flex items-start gap-4">
+                        <div class="shrink-0 w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
+                            <i data-lucide="send" class="w-5 h-5 text-amber-600 dark:text-amber-400"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Confirmar envio do {{ lote }}</h3>
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mt-2 leading-relaxed">
+                                O e-mail será enviado com a planilha de faturamento de implantação deste Município anexada. Todos os {{ escolas|length }} INEP(s) deste LOTE vão receber, no próprio histórico, o registro de que este e-mail foi disparado.
+                            </p>
+                            <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-3">
+                                Revise os campos antes de confirmar.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800">
+                    <button type="button"
+                            data-esconder-painel="painel-confirmar-lote-{{ lote.pk }}"
+                            data-mostrar-painel="painel-compor-lote-{{ lote.pk }}"
+                            class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                        Voltar
+                    </button>
+                    <button type="submit" class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition inline-flex items-center gap-2">
+                        <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                        Confirmar envio
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>

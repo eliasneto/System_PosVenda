@@ -1155,7 +1155,11 @@ class VisualizadorAccessMiddlewareTests(TestCase):
     mesma lista, também só leitura (GET) — o Visualizador ganha acesso ao
     MIP, mas as telas escondem os valores financeiros e os controles de
     edição (Status (MIP), lançamento de equipamento só valor de serviço),
-    testado à parte em `apps.escolas.tests`."""
+    testado à parte em `apps.escolas.tests`.
+
+    FEAT-044/FEAT-046 (2026-09-14): "Projeto > MIP (LOTE)" NÃO segue essa
+    mesma extensão — pedido explícito do usuário para ficar de fora do
+    Visualizador por completo, nem leitura."""
 
     def setUp(self):
         self.visualizador = User.objects.create_user(
@@ -1190,6 +1194,16 @@ class VisualizadorAccessMiddlewareTests(TestCase):
         self.client.force_login(self.visualizador)
         resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
         self.assertEqual(resp.status_code, 200)
+
+    def test_mip_lote_e_bloqueado(self):
+        """FEAT-044/FEAT-046 (pedido do usuário, 2026-09-14): diferente do
+        MIP individual (RN-096, acima), "Projeto > MIP (LOTE)" fica de
+        fora do Visualizador por completo — nem leitura (pedido explícito:
+        "esse MIP lote não pode ser acessado pelo usuario apenas com
+        permissão de Visualizador")."""
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("mip_lote_inep"), follow=True)
+        self.assertRedirects(resp, reverse("grid_inep"))
 
     def test_post_no_status_mip_e_bloqueado(self):
         """RN-096: acesso de leitura ao MIP não abre as ações de escrita

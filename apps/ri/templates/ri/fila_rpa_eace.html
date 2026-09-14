@@ -1,0 +1,192 @@
+{% extends "core/base.html" %}
+
+{% block title %}Gerenciador Pós Venda | Fila{% endblock %}
+
+{% comment %}
+FEAT-048 (a formalizar pelo Orquestrador em business_rules.md; pedido do
+usuário, 2026-09-14): "Projeto > Fila" - grid único com todos os logs do
+RPA EACE do sistema (RN-058), sem precisar abrir RI por RI. Badges e
+textos por status reaproveitam o mesmo padrão visual já usado no card por
+RI (`ri/_log_rpa_eace_card.html`), pra a mesma "Na fila"/"Processando"/
+"Sucesso"/"Erro" parecer sempre igual em qualquer tela do sistema.
+
+Paginação de 10 (pedido do usuário) sobre a `QuerySet` já filtrada
+(`views.fila_rpa_eace_view`) - o banco só devolve a página atual, nunca a
+lista inteira de logs.
+{% endcomment %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li class="text-gray-900 dark:text-gray-100">Projeto</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            Fila
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal/XML no portal EACE, RN-058) — todas as escolas de uma vez</p>
+    </div>
+
+    <div class="flex gap-4">
+        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Na fila</p>
+            <p class="text-xl font-black italic text-pv-yellow">{{ total_na_fila }}</p>
+        </div>
+        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Processando</p>
+            <p class="text-xl font-black italic text-pv-yellow">{{ total_processando }}</p>
+        </div>
+    </div>
+</div>
+
+<!-- Filtro (pedido do usuário, 2026-09-14): INEP, Status (padrão "Em
+     andamento" - só Na fila/Processando) e Data Processamento. GET
+     simples, sem HTMX/JS: recarrega a página com a `QuerySet` já
+     filtrada no banco (`views.fila_rpa_eace_view`) - opção mais simples
+     e reversível (CLAUDE.md §9), mesmo padrão de filtro já usado no MIP
+     (`escolas/mip_inep.html`). -->
+<form method="GET" class="bg-white dark:bg-gray-900 p-4 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-8 flex flex-col lg:flex-row lg:flex-wrap gap-3 lg:items-end">
+    <div class="flex flex-col gap-1.5 w-full lg:flex-1 lg:min-w-[12rem]">
+        <label for="fila-inep" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">INEP</label>
+        <div class="relative">
+            <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 dark:text-gray-600"></i>
+            <input id="fila-inep" type="text" name="inep" value="{{ inep_filtro }}" placeholder="Número do INEP..."
+                   class="w-full pl-12 pr-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 dark:text-gray-100 uppercase placeholder:text-gray-400 dark:placeholder:text-gray-500">
+        </div>
+    </div>
+
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="fila-status" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Status</label>
+        <select id="fila-status" name="status"
+                class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase">
+            {% for valor, rotulo in status_opcoes %}
+            <option value="{{ valor }}" {% if valor == status_filtro %}selected{% endif %}>{{ rotulo }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="fila-data" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Data processamento</label>
+        <input id="fila-data" type="date" name="data_processamento" value="{{ data_processamento_filtro|date:'Y-m-d' }}"
+               class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-500 dark:text-gray-400">
+    </div>
+
+    <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
+        Filtrar
+    </button>
+    {% if inep_filtro or data_processamento_filtro or status_filtro != "andamento" %}
+    <a href="{% url 'fila_rpa_eace' %}" class="px-4 py-3 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-2xl hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 dark:hover:text-red-400 transition flex items-center justify-center" title="Limpar filtro">
+        <i data-lucide="x" class="w-5 h-5"></i>
+    </a>
+    {% endif %}
+</form>
+
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    <th class="px-4 py-2">Status</th>
+                    <th class="px-4 py-2">Escola</th>
+                    <th class="px-4 py-2">Nota fiscal</th>
+                    <th class="px-4 py-2">Detalhe</th>
+                    <th class="px-4 py-2">Quando</th>
+                    <th class="px-4 py-2">Ação</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
+                {% for log in page_obj %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all divide-x divide-gray-300 dark:divide-gray-700">
+                    <td class="px-4 py-2">
+                        {% if log.resultado == 'processando' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-purple-600 text-purple-700 dark:text-purple-400 dark:border-purple-500 animate-pulse whitespace-nowrap">⚙ Processando</span>
+                        {% elif log.resultado == 'na_fila' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-blue-600 text-blue-700 dark:text-blue-400 dark:border-blue-500 whitespace-nowrap">⏳ Na fila</span>
+                        {% elif log.resultado == 'sucesso' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-green-600 text-green-700 dark:text-green-400 dark:border-green-500 whitespace-nowrap">✓ Processado</span>
+                        {% elif log.resultado == 'erro' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-red-600 text-red-700 dark:text-red-400 dark:border-red-500 whitespace-nowrap">✗ Erro</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2">
+                        <span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">{{ log.ri.escola.nome }}</span>
+                        <span class="block text-[10px] text-gray-400 dark:text-gray-500 font-bold">INEP {{ log.ri.escola.inep }}</span>
+                    </td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">
+                        {% if log.documento_pdf %}{{ log.documento_pdf.arquivo.name|slice:"-30:" }}{% else %}—{% endif %}
+                    </td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold max-w-xs">
+                        {% if log.resultado == 'processando' %}
+                        <div class="flex flex-col gap-1">
+                            <div class="w-32 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                                <div class="h-full bg-purple-600 dark:bg-purple-500" style="width: {{ log.progresso_pct }}%"></div>
+                            </div>
+                            <span>{{ log.progresso_pct }}%{% if log.etapa_atual %} — {{ log.etapa_atual }}{% endif %}</span>
+                        </div>
+                        {% elif log.resultado == 'na_fila' %}
+                        {% if log.posicao_na_fila == 1 %}Próxima a ser processada{% elif log.posicao_na_fila %}Posição {{ log.posicao_na_fila }} na fila{% else %}Aguardando a vez{% endif %}
+                        {% elif log.resultado == 'sucesso' %}
+                        {% if log.concluido_manualmente %}Concluído manualmente{% else %}{{ log.produto_pdf|default:"—" }}{% endif %}
+                        {% elif log.resultado == 'erro' %}
+                        <span class="text-red-500 dark:text-red-400">{{ log.motivo_erro|default:"—" }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold whitespace-nowrap">
+                        {% if log.resultado == 'na_fila' %}{{ log.enfileirado_em|date:"d/m/Y H:i" }}
+                        {% elif log.executado_em %}{{ log.executado_em|date:"d/m/Y H:i" }}
+                        {% else %}{{ log.criado_em|date:"d/m/Y H:i" }}{% endif %}
+                    </td>
+                    <td class="px-4 py-2">
+                        <a href="{% url 'ri_detail' inep=log.ri.escola.inep %}" class="text-[11px] font-black uppercase text-gray-500 dark:text-gray-400 hover:text-pv-yellow transition whitespace-nowrap">
+                            Ver RI →
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="px-8 py-20 text-center">
+                        <div class="flex flex-col items-center gap-4 opacity-40">
+                            <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
+                                <i data-lucide="list-checks" class="w-8 h-8"></i>
+                            </div>
+                            <div>
+                                <p class="font-black italic uppercase text-gray-600 dark:text-gray-400">Nenhum log encontrado</p>
+                                <p class="text-xs font-bold text-gray-400 dark:text-gray-500 mt-1">
+                                    {% if status_filtro == "andamento" and not inep_filtro and not data_processamento_filtro %}
+                                    Sem nada "Na fila" ou "Processando" no momento — ajuste o Status para ver o que já foi processado.
+                                    {% else %}
+                                    Ajuste os filtros acima.
+                                    {% endif %}
+                                </p>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if page_obj.has_other_pages %}
+    <div class="bg-gray-50/50 dark:bg-gray-800/40 px-8 py-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest">
+            Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}
+        </span>
+        <div class="flex gap-2">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}{% if inep_filtro %}&inep={{ inep_filtro|urlencode }}{% endif %}&status={{ status_filtro|urlencode }}{% if data_processamento_filtro %}&data_processamento={{ data_processamento_filtro|date:'Y-m-d' }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}{% if inep_filtro %}&inep={{ inep_filtro|urlencode }}{% endif %}&status={{ status_filtro|urlencode }}{% if data_processamento_filtro %}&data_processamento={{ data_processamento_filtro|date:'Y-m-d' }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -3324,6 +3324,24 @@ RN-065). Risco em aberto: capacidade de disco do servidor de produção
 (~86% em uso). Feature segue `🔄 Em andamento`; QA-033 ainda não foi
 criado nem acionado.
 
+**Entrega do Dev (2026-09-14, correção — disparo da RPA sem "quem" nem "quando" na linha do tempo):**
+- Usuário reportou (INEP 35203185, produção): o histórico do INEP mostra
+  o e-mail recebido e as trocas de status, mas não mostra se a RPA foi
+  usada, quem disparou, nem se foi manual ou automático.
+- Encontradas 2 causas reais: (1) o clique em "Disparar RPA"/"Tentar
+  novamente" nunca gravava nada na linha do tempo — só o resultado final
+  ficava registrado, e só depois do processo automático rodar (RN-059);
+  (2) mesmo quando o autor real já estava gravado (troca manual de
+  status, conclusão manual de Nota Fiscal — RN-065), o template sempre
+  mostrava "Sistema" no lugar do nome.
+- Corrigido: disparo manual passa a gravar sua própria entrada (autor =
+  quem clicou); template mostra o autor real sempre que ele existir,
+  "Sistema" só quando a ação for mesmo automática.
+- Formalizado pelo Orquestrador em `business_rules.md`: RN-100 (disparo
+  manual do RPA EACE grava quem acionou; template corrigido pra mostrar
+  o autor real em vez de sempre "Sistema").
+- 4 testes novos, suíte de `apps.ri`/`apps.escolas` sem regressão.
+
 ---
 
 ### FEAT-034 — Submenu MIP (Projeto > MIP): grid de INEPs em Validação EACE com os 3 lados do RI
@@ -3661,9 +3679,206 @@ adiciona rota de escrita nova no MIP.
 
 ---
 
+### FEAT-040 — Perfil Visualizador (Projeto > Equipamentos e Projeto > MIP, só leitura)
+
+**Descrição:** Novo perfil fixo de usuário "Visualizador", com acesso
+só de leitura (GET) a Projeto > Equipamentos (`grid_inep`/`ri_detail`)
+e Projeto > MIP (`mip_inep`/`mip_detail`) — qualquer outra rota, ou um
+POST/PUT/DELETE nessas quatro, é bloqueado por middleware antes da view
+rodar. Nas telas de Equipamentos, os itens e valores aparecem
+normalmente, sem nenhum controle de edição. Nas telas do MIP, os itens
+aparecem sem nenhum valor financeiro (RN-096).
+**Revisão:** acesso ao MIP (RN-096) veio numa 2ª rodada, depois de o
+Visualizador já ter acesso só a Equipamentos (RN-093).
+**Tipo:** backend-only (com frontend funcional embutido)
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média.
+**Critérios de aceite:**
+- 3 perfis fixos (Administrador, Analista, Visualizador), trocados pela
+  tela "Administrador > Usuários" ou pelo `/admin/`. ✅
+- Visualizador acessa só `grid_inep`/`ri_detail`/`mip_inep`/
+  `mip_detail`, só por GET — qualquer outra rota (ou POST/PUT/DELETE
+  nessas 4) redireciona com aviso. ✅
+- Login de Visualizador vai direto para Projeto > Equipamentos, não
+  para o Dashboard. ✅
+- Telas de Equipamentos: itens e valores aparecem, sem nenhum controle
+  de edição (Status do RI, Responsável, e-mail, RPA, formulários,
+  histórico). ✅
+- Telas do MIP: itens aparecem (Descrição/Quantidade/Status), sem
+  nenhum "R$ ..." (itens, totais RN-097, colunas do grid) nem controle
+  de edição (Status (MIP), lançamento/exclusão de equipamento só valor
+  de serviço). ✅
+**Regras relacionadas:** RN-093, RN-096.
+**Dependências:** FEAT-007 (Grid de Equipamentos), FEAT-004 (RI),
+FEAT-034/FEAT-035/FEAT-039 (MIP) — todas `✅ Concluída`/`🔍 Aguardando QA`.
+**Tipo de validação:** QA — restrição de acesso e permissão.
+**Entrega do Dev:**
+- Perfil e middleware já implementados numa sessão anterior (RN-093),
+  nunca commitados nem documentados até agora.
+- Extensão ao MIP (RN-096) nesta sessão: middleware, menu, grid e
+  detalhe do MIP escondendo valor financeiro e controles de edição do
+  Visualizador.
+- 760 testes (suíte completa de `apps.core`/`apps.ri`/`apps.escolas`)
+  sem regressão.
+**Pendência atual:** aguardando QA; nunca deployado em produção.
+
+---
+
+### FEAT-041 — Bug: Sincronizador do Relatório EACE não lançava 2 produtos iguais com Num OSP diferente
+
+**Descrição:** No Sincronizador do Lado Relatório EACE do RI, a chave
+de casamento do Produto avulso passa a incluir o Num OSP da linha da
+planilha — antes, 2 linhas com a mesma Descrição para o mesmo INEP,
+vindas de Num OSP diferentes, colidiam e a 2ª nunca era lançada.
+**Tipo:** backend-only
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta — bug de dado real em produção (equipamento
+comprado, nunca lançado no sistema).
+**Critérios de aceite:**
+- 2 linhas da Planilha EACE com a mesma Descrição e Num OSP diferentes,
+  no mesmo INEP, geram 2 itens (não 1). ✅
+- Item lançado manualmente (Num OSP em branco) continua sendo
+  confirmado pela 1ª linha real da mesma Descrição, sem duplicar. ✅
+- Modo "substituir pela última planilha" (RN-062) não remove 1 dos 2
+  itens de mesma Descrição só porque o outro confirmou a Descrição. ✅
+- Re-sincronizar um INEP já afetado pelo bug recupera o item que
+  faltava, sem ajuste manual no banco. ✅
+**Regras relacionadas:** RN-094, RN-022, RN-046, RN-062, RN-015.
+**Dependências:** FEAT-024 (Sincronizador do Lado Relatório EACE) —
+`🔍 Aguardando QA`.
+**Tipo de validação:** QA — corrige dado gerado por rotina automática.
+**Entrega do Dev:**
+- Caso real reportado: INEP 53005015, 2 Nobreak de Num OSP diferentes
+  (4626/4867), só 1 importado.
+- Corrigido `apps.ri.services.sincronizar_relatorio_eace_da_planilha`;
+  659 testes sem regressão.
+- Deploy em produção: backup do banco feito e validado; atualização de
+  código (`git reset`/rebuild) delegada ao usuário — bloqueio técnico
+  do agente para rodar comandos direto no servidor.
+**Pendência atual:** aguardando QA; confirmar se o deploy em produção
+foi concluído (rodar o Sincronizador de novo no INEP 53005015 recupera
+o item sozinho, sem ajuste manual).
+
+---
+
+### FEAT-042 — Lado 3 do MIP mostra também os dados do Relatório EACE da própria RI
+
+**Descrição:** Tela de detalhe do MIP, com o INEP em "Aguardando
+Validação EACE": o card do Lado 3 (Relatório EACE) ganha, acima de uma
+linha divisória, os dados do Relatório EACE da própria RI — só para o
+usuário bater visualmente se os 2 relatórios (RI × planilha do MIP)
+coincidem. Puramente de leitura, sem gravar nada.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média.
+**Critérios de aceite:**
+- Bloco "Dados Relatório RI" aparece só com `Escola.status_mip ==
+  "Aguardando Validação EACE"`; fora desse status, o card do Lado 3
+  continua idêntico a antes. ✅
+- Valor de cada item do bloco usa o Valor de serviço do catálogo
+  (mesmo critério do resto do MIP), nunca o Valor de equipamento
+  gravado no item da RI. ✅
+- Dados do MIP continuam aparecendo do jeito de sempre, abaixo da linha
+  — nenhum Sincronizador (RI ou MIP) foi alterado. ✅
+**Regras relacionadas:** RN-095, RN-067, RN-022.
+**Dependências:** FEAT-034/FEAT-035/FEAT-039 (MIP), FEAT-022 (Lado 3 do
+RI) — todas `✅ Concluída`/`🔍 Aguardando QA`.
+**Tipo de validação:** QA — leitura cruzada entre RI e MIP, sem
+gravação.
+**Entrega do Dev:**
+- `apps.escolas.services._resolver_lado3_relatorio_eace_ri`;
+  `mip_detail_view`; template `escolas/mip_detail.html`.
+- Testes novos; suíte completa sem regressão.
+**Pendência atual:** aguardando QA.
+
+---
+
+### FEAT-043 — Total de cada lado (RI e MIP)
+
+**Descrição:** Abaixo da lista de itens de cada um dos 3 lados, na tela
+do RI e na tela do MIP, aparece o total (Quantidade × Valor) daquele
+lado — escondido do Visualizador (FEAT-040). RI soma pelo Valor de
+equipamento; MIP, pelo Valor de serviço — cada tela com sua própria
+métrica, já existente.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média.
+**Critérios de aceite:**
+- Total aparece abaixo dos 3 lados, nas 2 telas (RI e MIP), somando
+  Quantidade × Valor dos itens lançados. ✅
+- Escondido do Visualizador nas 2 telas. ✅
+- Lado 1 do RI sem item lançado usa a mesma referência de catálogo já
+  usada para a Descrição — deixa de mostrar sempre "nenhum item
+  lançado" quando o MIP já mostra um valor pro mesmo Kit. ✅
+- Item de qualquer lado do RI com Valor Unitário 0 busca o Valor de
+  equipamento atual no catálogo para a soma, em vez de somar 0 — item
+  sem correspondência no catálogo continua contribuindo 0. ✅
+- Sem nenhum item lançado, mostra "nenhum item lançado", nunca zero. ✅
+**Regras relacionadas:** RN-097, RN-067, RN-076, RN-077, RN-093,
+RN-096.
+**Dependências:** FEAT-004 (RI), FEAT-034/FEAT-039 (MIP), FEAT-040
+(Visualizador) — todas `🔍 Aguardando QA`.
+**Tipo de validação:** QA — cálculo financeiro exibido nas 2 telas
+principais do projeto.
+**Entrega do Dev:**
+- `apps.ri.views._total_itens_ri`; `apps.escolas.views.mip_detail_view`
+  (reaproveita `_valor_total_itens`); templates `ri/ri_detail.html`,
+  `escolas/mip_detail.html`.
+- 2 bugs reais corrigidos no mesmo dia, depois de o usuário testar
+  contra INEPs reais do banco: Lado 1 do RI sem total (INEP 35007725) e
+  Lado 2 mostrando "R$ 0,00" com item lançado, mas não corrigido depois
+  do lançamento (INEP 35277423).
+- 760 testes (suíte completa) sem regressão.
+**Pendência atual:** aguardando QA.
+
+---
+
+### FEAT-047 — Bug: RI avança manualmente para "Aguardando validação EACE" sem os logs de RPA EACE concluídos
+
+**Descrição:** A troca manual de status do RI de "Resposta Financeiro"
+para "Aguardando validação EACE" (RN-001, mesmo destino da marcação
+manual de anexo no portal EACE) não conferia se os logs de RPA EACE
+daquele RI (RN-056) já tinham terminado com "Sucesso" — permitia levar o
+RI, e por tabela o INEP pro MIP (RN-092), mesmo com log ainda pendente,
+na fila, processando ou já com erro.
+**Tipo:** backend-only
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta — bug de regra de negócio, com caso real em
+produção.
+**Critérios de aceite:**
+- Troca manual para "Aguardando validação EACE" bloqueada se existir log
+  de RPA EACE do RI fora de "Sucesso" (Pendente/Na fila/Processando/
+  Erro). ✅
+- Com todos os logs "Sucesso" (ou nenhum log ainda), a troca manual
+  continua liberada normalmente — nenhuma trava nova sobre o caminho já
+  validado (RN-001/FEAT-010). ✅
+- Exceção do Administrador a partir de "Faturamento Concluído" (RN-020)
+  continua sujeita à mesma checagem de logs. ✅
+**Regras relacionadas:** RN-099 (nova), RN-001, RN-056, RN-020, RN-092.
+**Dependências:** FEAT-033 (RPA EACE), FEAT-010 (Anexo manual/Conclusão),
+FEAT-039 (MIP) — todas `🔍 Aguardando QA`.
+**Tipo de validação:** QA — regra de negócio sobre transição de status
+que também controla o handoff automático pro MIP (RN-092).
+**Entrega do Dev:**
+- Caso real reportado pelo usuário: INEP 53005015, RI marcado
+  manualmente para "Aguardando validação EACE" antes de qualquer RPA
+  rodar; 2 dos 6 logs terminaram em erro (`valor_divergente`,
+  `documento_ja_enviado`) só depois.
+- Corrigido `apps.ri.views._validar_transicao_status_ri`; 3 testes novos.
+- Suíte completa `apps.ri` + `apps.escolas` sem regressão.
+**Pendência atual:** aguardando QA; o RI do INEP 53005015 em si não foi
+alterado — decisão sobre o que fazer com os 2 logs em erro desse caso
+específico continua em aberto. Deploy em produção não realizado
+(bloqueio técnico do agente para rodar comandos direto no servidor).
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-14 | `FEAT-047` criada, `🔍 Aguardando QA` — corrige bug real de regra de negócio (RN-099 nova): troca manual do RI para "Aguardando validação EACE" não conferia log de RPA EACE pendente/erro, deixando o INEP entrar no MIP sem o anexo de verdade confirmado (INEP 53005015 em produção); 3 testes novos, suíte completa `apps.ri`+`apps.escolas` sem regressão | Usuário reportou o INEP no servidor de produção (autorizou acesso via SSH); Dev investigou os dados reais e achou a causa raiz; Orquestrador formaliza RN-099 e esta feature, já corrigida e testada pelo Dev nesta mesma sessão; nenhum deploy em produção desta correção ainda; caso específico do INEP 53005015 (2 logs em erro) segue sem decisão do usuário |
+| 2026-09-12 | `FEAT-042` criada, `🔍 Aguardando QA` — Lado 3 do MIP mostra também os dados do Relatório EACE da própria RI, para comparação visual (RN-095 nova); `FEAT-040` ganha revisão — Visualizador também acessa Projeto > MIP, sem valor financeiro (RN-096 nova); `FEAT-043` criada, `🔍 Aguardando QA` — total de cada lado no RI e no MIP (RN-097 nova), corrigida no mesmo dia depois de 2 bugs reais encontrados testando contra INEPs reais (Lado 1 do RI sem total; Lado 2 com "R$ 0,00" mesmo com item lançado, INEP 35277423); 758 a 760 testes em rodadas sucessivas, sem regressão | Usuário pediu, em sequência, os 3 itens acima; testou o total contra INEPs reais do próprio banco e reportou os 2 bugs, corrigidos no mesmo dia; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão; nenhum deploy em produção desta rodada |
+| 2026-09-11 | `FEAT-040` criada, `🔍 Aguardando QA` — perfil fixo "Visualizador", só leitura em Projeto > Equipamentos (RN-093 nova); `FEAT-041` criada, `🔍 Aguardando QA` — corrige bug real do Sincronizador do Relatório EACE (RN-094 nova): 2 produtos iguais com Num OSP diferente, o 2º nunca era lançado (INEP 53005015); 659 testes sem regressão | Usuário reportou o bug do Sincronizador e pediu a correção; perfil Visualizador (RN-093) já estava implementado e testado pelo Dev numa sessão anterior, mas nunca tinha sido commitado nem documentado — Orquestrador formaliza os dois nesta sessão; backup do banco de produção feito e validado para o deploy da correção do Sincronizador, atualização de código no servidor pendente (bloqueio técnico do agente para rodar comandos direto lá) |
 | 2026-09-10 | `FEAT-039` criada, `🔍 Aguardando QA` — Status próprio do MIP (RN-092 nova: `Escola.status_mip`, "Em Andamento"/"Aguardando Validação EACE"/"Faturamento Concluído"; RN-074 substituída); `FEAT-038` ganha revisão — flag `--incluir-com-progresso` estende a importação aos 550 INEPs "ATIVO" inteiros, cor do destaque trocada para amarelo; 651 testes sem regressão; aplicado e validado no servidor local | Usuário pediu, em sequência: que "Em Andamento" voltasse a ser o próprio `Ri.status` (não um valor novo e duplicado); que a importação valesse pros 550 INEPs inteiros, não só os 100% intocados (536 já tinham progresso real, inclusive 472 "Faturamento Concluído" — revertidos, efeito assumido); e a exceção do equipamento só-serviço no MIP, depois de notar que sem ela não haveria mais forma de lançar esse item fora de "Em Andamento"; usuário pediu explicitamente para NÃO fazer o deploy em produção ainda; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |
 | 2026-09-10 | `FEAT-038` criada, `🔍 Aguardando QA` — comando `importar_ri_legado_eace` traz para o sistema, como histórico, os INEPs "ATIVO" do `CONSOLIDADO EACE Atualizado.xlsx` cujo RI ainda estava 100% intocado (RN-091 nova); 617 testes sem regressão; aplicado e validado no servidor local (14 INEPs) | Usuário pediu a importação e, questionado (CLAUDE.md §9), confirmou não mexer em RI com progresso real, usar o valor real da LPU por Lote e não lançar Switch/Rack sem modelo definido; depois reportou que os INEPs recém-criados ficaram sem a bolinha do grid do MIP — Dev corrigiu fazendo o comando também rodar a sincronização já existente (RN-081); Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão |
 | 2026-09-08 | Dev implementou, fora do fluxo Orquestrador→Dev (autorizado pelo usuário), a geração da planilha de faturamento de implantação a partir do filtro Estado+Município do grid Projeto > MIP — 1 arquivo por Município, somando o Valor Total (IXC) das escolas do filtro (RN-076) e listando os INEPs/Cód. Fornecedor no texto da Nota Fiscal; ainda sem tela própria (só um comando de gestão provisório, para gerar/testar o arquivo); testes novos passando, suíte completa de `apps.escolas` e `apps.ri` sem regressão | Usuário pediu a geração automática dessa planilha a partir do filtro do MIP; falta ao Orquestrador formalizar a RN desta feature em `business_rules.md` e criar a `FEAT-XXX` correspondente, e ao usuário/Orquestrador decidir onde o arquivo fica disponível na tela e como/quando informar a "Data de envio" (por ora é só parâmetro da função) |

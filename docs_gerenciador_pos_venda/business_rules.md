@@ -1232,6 +1232,50 @@ de dupla gravação já usado por RN-008/RN-006.
 
 **Status:** Ativa
 
+### RN-100 — Disparo manual do RPA EACE grava quem acionou, e a linha do tempo mostra o autor real
+
+**Descrição:** O clique em "Disparar RPA"/"Tentar novamente" (RN-056)
+passa a gravar sua própria entrada na linha do tempo do RI (RN-008) e em
+Auditoria (RN-006), com o usuário que clicou como autor — antes disso, só
+o resultado final da execução (RN-059, autor sempre "Sistema") ficava
+registrado, e só depois de o processo consumidor rodar; não havia
+nenhum rastro de que alguém tinha disparado a RPA, nem de quem. Corrigido
+também um bug de exibição: o template da linha do tempo mostrava
+"Sistema" para toda entrada de mudança de status/campo, mesmo quando
+`RiHistorico.autor` já vinha gravado com o usuário real (troca manual de
+status, conclusão manual de Nota Fiscal — RN-065) — escondia quem agiu
+de verdade nesses casos.
+
+**Contexto:** Usuário reportou, em produção (INEP 35203185): a linha do
+tempo do RI mostra o e-mail recebido e as trocas de status, mas não
+mostra se a RPA foi usada, quem disparou, nem se foi manual ou
+automático. Investigação encontrou as 2 causas acima.
+
+**Critérios:**
+- Disparo manual (1º disparo ou "Tentar novamente") grava 1 entrada tipo
+  "Mudança de campo" (`RiHistorico`) com autor = usuário que clicou,
+  descrevendo "Disparo manual" ou "Reenviado manualmente", distinta da
+  entrada de resultado que RN-059 grava depois, quando o consumidor
+  processa.
+- Template da linha do tempo (`_historico_panel.html`) mostra o nome do
+  autor real sempre que `RiHistorico.autor` existir — "Sistema" só para
+  entrada automática de verdade (sem autor: transição automática do RI,
+  execução da fila do RPA, e-mail lido sozinho pela rotina).
+- Não muda RN-059 (registro da execução em si, sempre autor "Sistema",
+  por ser o processo consumidor quem executa) nem RN-065 (conclusão
+  manual por Nota Fiscal, que já gravava o autor certo — só o template
+  escondia).
+
+**Exceções:** nenhuma.
+
+**Impacto técnico:** `apps.ri.views.ri_log_rpa_eace_disparar_view` (nova
+entrada de histórico/auditoria no disparo); `apps/ri/templates/ri/
+_historico_panel.html` (lógica de exibição do autor corrigida).
+
+**Features relacionadas:** FEAT-033, RN-008, RN-056, RN-059, RN-065.
+
+**Status:** Ativa
+
 ### RN-060 — Log de Nota Fiscal "Sucesso" é imutável
 
 **Descrição:** Uma vez que um log de Nota Fiscal (RN-056) tem resultado
@@ -1435,6 +1479,51 @@ caminhos); `apps/ri/views.py` (`ri_log_rpa_eace_marcar_manual_view`);
 `_logs_rpa_eace_detail.html`.
 
 **Features relacionadas:** FEAT-033.
+
+**Status:** Ativa
+
+### RN-099 — Log de RPA EACE pendente ou com erro bloqueia a marcação manual do anexo no EACE
+
+**Descrição:** A troca manual de status do RI para "Aguardando validação
+EACE" — usada quando alguém confirma que anexou a Nota Fiscal direto no
+portal EACE, por fora da automação (RN-001) — passa a exigir o mesmo
+critério do avanço automático (RN-056): só é aceita se nenhum log de RPA
+EACE (`LogRpaEace`) daquele RI estiver fora de "Sucesso" (Pendente, Na
+fila, Processando ou Erro). Sem essa checagem, a marcação manual
+entregava o RI — e, junto, o INEP pro MIP (RN-092) — numa etapa que
+pressupõe o anexo confirmado, mesmo com o anexo de verdade ainda
+pendente ou já tendo dado erro.
+
+**Contexto:** Usuário reportou, em produção (2026-09-14), o INEP
+53005015: o RI foi levado manualmente para "Aguardando validação EACE"
+antes de qualquer RPA ter rodado; quando os logs de fato rodaram, depois,
+2 deram erro (`valor_divergente`, `documento_ja_enviado`) — mas o INEP já
+estava no MIP havia horas. Dev investigou os dados reais do servidor
+(autorização explícita do usuário para acesso a produção) e confirmou a
+causa: a validação da transição manual (`_validar_transicao_status_ri`)
+nunca conferia os logs de RPA — só o caminho automático (RN-056) fazia
+isso.
+
+**Critérios:**
+- Bloqueia a transição para "Aguardando validação EACE" (a partir de
+  "Resposta Financeiro" ou, na exceção do Administrador, de "Faturamento
+  Concluído", RN-020) sempre que existir log de RPA EACE do RI fora de
+  "Sucesso".
+- Sem nenhum log de RPA ainda criado para o RI, a transição continua
+  liberada normalmente — mesmo critério "vazio conta como sucesso" já
+  usado no avanço automático (RN-056).
+- Mensagem de bloqueio orienta a resolver ou reprocessar o log antes de
+  marcar o anexo manualmente.
+- Não altera o avanço automático (RN-056) nem a marcação manual por Nota
+  Fiscal (RN-065) — mexe só na transição manual de status do RI inteiro.
+
+**Exceções:** Nenhuma — nem o Administrador (RN-020) pula essa checagem.
+
+**Impacto técnico:** `apps.ri.views._validar_transicao_status_ri` (nova
+condição); reaproveita `LogRpaEace`/`resultado` já existentes
+(RN-056/RN-058), sem migração nova.
+
+**Features relacionadas:** FEAT-047, RN-001, RN-020, RN-056, RN-092.
 
 **Status:** Ativa
 
@@ -3249,9 +3338,213 @@ RN-089, RN-091.
 
 **Status:** Ativa.
 
+## Perfil Visualizador
+
+### RN-093 — Perfil Visualizador (só leitura, Projeto > Equipamentos)
+
+**Descrição:** Novo perfil fixo de usuário, "Visualizador"
+(`User.PERFIL_VISUALIZADOR`), somando aos já existentes (Administrador/
+Analista). Acesso restrito, por padrão, a Projeto > Equipamentos
+(`grid_inep` + `ri_detail`), somente leitura (GET) — qualquer outra
+rota, ou um POST/PUT/DELETE nessas duas, é bloqueado por middleware
+antes da view rodar. As telas escondem os controles de edição (Status
+do RI, Responsável, ação de e-mail, notas fiscais/RPA, formulários de
+lançamento/edição/exclusão, histórico de comunicação) — só os itens já
+lançados dos 3 lados aparecem, incluindo os valores.
+
+**Contexto:** Usuário pediu um perfil de consulta, sem nenhuma
+capacidade de edição, para quem só precisa acompanhar o andamento sem
+risco de alterar dado.
+
+**Critérios:**
+- 3 perfis fixos: Administrador, Analista, Visualizador — trocados pela
+  tela "Administrador > Usuários" (RN-004 ampliada) ou pelo `/admin/`.
+- Login de Visualizador redireciona direto para Projeto > Equipamentos,
+  em vez do Dashboard — evita a mensagem de bloqueio já na 1ª tela.
+- Middleware bloqueia qualquer rota fora de `grid_inep`/`ri_detail`, e
+  qualquer método diferente de GET nessas duas — reforço técnico atrás
+  do que a tela já esconde.
+- `is_visualizador` nunca é `True` para quem também é Administrador.
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.core.models.User` (`PERFIL_VISUALIZADOR`/
+`is_visualizador`, migration `0003_user_perfil_visualizador`);
+`apps.core.middleware.VisualizadorAccessMiddleware`; `apps.core.views`
+(redirecionamento pós-login e do Dashboard); templates `ri/grid_inep.html`,
+`ri/ri_detail.html`, `core/base.html`, `core/usuarios.html`.
+
+**Features relacionadas:** FEAT-040.
+
+**Status:** Ativa.
+
+### RN-096 — Perfil Visualizador ganha acesso a Projeto > MIP (só leitura, sem valor financeiro)
+
+**Descrição:** Extensão da RN-093 — Visualizador ganha acesso de
+leitura também a Projeto > MIP (`mip_inep` + `mip_detail`), mesma regra
+de só GET. Nas duas telas do MIP, os itens continuam aparecendo
+(Descrição, Quantidade, Status), mas nenhum valor financeiro ("R$ ...",
+inclusive os totais da RN-097) é mostrado, e nenhum controle de edição
+(Status (MIP), lançamento/exclusão de equipamento só valor de serviço)
+aparece — "Status (MIP)" passa a aparecer só como texto.
+
+**Contexto:** Usuário pediu, depois de o MIP já existir, que o
+Visualizador também acompanhasse essa tela, sem ver valor financeiro
+nenhum.
+
+**Critérios:**
+- Middleware libera GET em `mip_inep`/`mip_detail` para Visualizador;
+  POST continua bloqueado em qualquer rota do MIP.
+- Link "MIP" do menu lateral deixa de ser escondido do Visualizador.
+- Grid do MIP: colunas "Valor Total (IXC)"/"Valor Total (EACE)" e a
+  linha de "Total geral" somem para o Visualizador; nos cards de
+  drill-down, cada item mostra Descrição/Quantidade sem o valor.
+- Detalhe do MIP: "Status (MIP)" aparece como texto (sem `<select>`);
+  bloco "Equipamento (só valor de serviço)" nunca aparece; nenhum
+  "R$ ..." aparece em nenhum dos 3 lados, nem no bloco de comparação com
+  a RI (RN-095).
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.core.middleware.VisualizadorAccessMiddleware`
+(`_URL_NAMES_VISUALIZADOR` ampliado); templates `core/base.html`,
+`escolas/mip_inep.html`, `escolas/mip_detail.html`.
+
+**Features relacionadas:** FEAT-040 (revisão), RN-093, RN-076, RN-077,
+RN-097.
+
+**Status:** Ativa.
+
+## Correção do Sincronizador — Relatório EACE (RI)
+
+### RN-094 — Sincronizador do Relatório EACE: Num OSP entra na chave de casamento do Produto avulso
+
+**Descrição:** No Sincronizador do Lado Relatório EACE do RI (RN-022),
+a chave usada para reconhecer "item já lançado" (e não duplicar ao
+sincronizar de novo) passa a incluir o Num OSP da linha, para Produto
+avulso — KIT continua casando só por Descrição (RN-015: no máximo 1 por
+INEP, independente do OSP). Item lançado manualmente (Num OSP em
+branco) continua sendo "confirmado" pela 1ª linha real da mesma
+Descrição, sem virar item novo ao lado.
+
+**Contexto:** Usuário reportou (INEP 53005015) 2 linhas "Nobreak" na
+Planilha EACE, vindas de 2 Num OSP diferentes (2 Ordens de Serviço
+Provisórias distintas comprando o mesmo equipamento) — antes desta
+correção, a 2ª linha colidia com a 1ª (mesma Descrição + Quantidade) e
+virava "duplicado" dela: o 2º Nobreak nunca era lançado, e o Num OSP já
+gravado no 1º item era sobrescrito pelo da 2ª linha.
+
+**Critérios:**
+- Chave de casamento do Produto avulso: Descrição + Num OSP (mais
+  Quantidade, fora do modo RN-062). 2 linhas com a mesma Descrição e Num
+  OSP diferentes no mesmo INEP passam a virar 2 itens.
+- Item lançado manualmente (Num OSP em branco) casa pela 1ª linha real
+  com a mesma Descrição, preenchendo o Num OSP nele em vez de criar um
+  item novo ao lado — mesmo comportamento de antes da correção.
+- Modo "substituir pela última planilha" (RN-062): a lista de remoção
+  de item que não veio mais na planilha passa a considerar cada item
+  por identidade própria, não mais só pela Descrição — 2 itens com a
+  mesma Descrição (Num OSP diferente) não descartam um ao outro na
+  decisão de remover.
+- Re-sincronizar um INEP que já tinha o bug (1 item só, com o Num OSP do
+  2º sobrescrevendo o do 1º) recupera o item que faltava sozinho, sem
+  precisar de ajuste manual no banco.
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.ri.services.sincronizar_relatorio_eace_da_planilha`.
+
+**Features relacionadas:** FEAT-041, RN-022, RN-046, RN-062, RN-015.
+
+**Status:** Ativa.
+
+## Comparação Visual e Totais — MIP × RI
+
+### RN-095 — Lado 3 do MIP mostra também os dados do Relatório EACE da própria RI (comparação visual)
+
+**Descrição:** Na tela de detalhe do MIP, com `Escola.status_mip` em
+"Aguardando Validação EACE", o card do Lado 3 (Relatório EACE) ganha,
+acima de uma linha divisória, os dados do Relatório EACE da própria RI
+(`RiItemRelatorioEace`) — só para o usuário bater visualmente se os 2
+relatórios (o que a RI já lançou e o que a planilha do MIP trouxe)
+coincidem. Os dados do MIP continuam aparecendo do jeito de sempre,
+abaixo da linha. Puramente de leitura: não grava nada em nenhuma
+tabela, não altera nenhum Sincronizador — RN-067 continua valendo (as 2
+fontes nunca se misturam de fato).
+
+**Contexto:** Usuário pediu para os equipamentos do Relatório EACE da
+RI aparecerem também no Lado 3 do MIP quando o INEP entra em
+"Aguardando Validação EACE", só para bater os 2 relatórios — sem
+alterar nenhuma regra existente nem os valores dos 2 lados.
+
+**Critérios:**
+- Bloco "Dados Relatório RI" aparece só com `Escola.status_mip ==
+  "Aguardando Validação EACE"`; fora desse status, o card do Lado 3
+  continua idêntico a antes.
+- Valor de cada item do bloco "Dados Relatório RI" é o Valor de serviço
+  resolvido pelo catálogo (mesmo critério do restante do MIP) — nunca o
+  Valor de equipamento gravado no item da RI.
+- Nenhum dado é copiado para `EscolaItemRelatorioEaceMip`; a lista é
+  computada ao vivo a cada carregamento da tela.
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.escolas.services._resolver_lado3_relatorio_eace_ri`;
+`apps.escolas.views.mip_detail_view`; template `escolas/mip_detail.html`.
+
+**Features relacionadas:** FEAT-042, RN-067, RN-022.
+
+**Status:** Ativa.
+
+### RN-097 — Total de cada lado (RI e MIP)
+
+**Descrição:** Abaixo da lista de itens de cada um dos 3 lados, tanto
+na tela do RI quanto na tela do MIP, aparece o total (soma de
+Quantidade × Valor) daquele lado — escondido do Visualizador (RN-093/
+RN-096). No RI, o total usa o Valor de equipamento (RN-067); no MIP, o
+Valor de serviço — cada tela com sua própria métrica, sem mudar o
+critério já existente de nenhuma das duas.
+
+**Contexto:** Usuário pediu o total por lado, "igual ao MIP", também na
+RI. Depois de implementado, reportou 2 problemas reais: o Lado 1 da RI
+nunca mostrava total (raramente tem item lançado nessa tela, RN-010) e
+o Lado 2 de um INEP real (35277423) mostrava "R$ 0,00" mesmo com item
+lançado.
+
+**Critérios:**
+- Lado 1 (RI) sem `RiItemEace` lançado usa a mesma referência do
+  catálogo já usada para a Descrição (Kit declarado × `Escola.
+  kit_inicial`), em Valor de equipamento.
+- Item de qualquer lado do RI com Valor Unitário `0` (nasce assim no
+  lançamento — RN-004/RN-011, corrigido depois editando o item) busca o
+  Valor de equipamento atual no catálogo para a soma, em vez de somar 0
+  — mesmo critério da referência do Lado 1 e do MIP (que nunca soma o
+  valor gravado no item, sempre busca no catálogo). Sem correspondência
+  no catálogo, o item continua contribuindo 0 — nunca inventa valor sem
+  base.
+- Sem nenhum item lançado (e sem referência de catálogo, no caso do
+  Lado 1), o total mostra "nenhum item lançado" — nunca zero, que
+  sugeriria itens conferidos sem custo.
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.ri.views._total_itens_ri`/`ri_detail_view`;
+`apps.escolas.services._valor_total_itens` (reaproveitado, sem
+alteração); `apps.escolas.views.mip_detail_view`; templates
+`ri/ri_detail.html`, `escolas/mip_detail.html`.
+
+**Features relacionadas:** FEAT-043, RN-067, RN-076, RN-077, RN-093,
+RN-096.
+
+**Status:** Ativa.
+
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-14 | RN-100 criada (disparo manual do RPA EACE — "Disparar RPA"/"Tentar novamente" — passa a gravar quem clicou na linha do tempo/Auditoria; corrigido bug de exibição que mostrava sempre "Sistema" mesmo com autor real gravado; caso reportado: INEP 35203185) | Usuário pediu para aparecer quem iniciou o robô; achado que a correção já estava implementada e testada pelo Dev antes desta sessão (não commitada nem documentada) — Orquestrador formaliza a regra; ainda sem deploy em produção |
+| 2026-09-14 | RN-099 criada (troca manual do RI para "Aguardando validação EACE" passa a exigir o mesmo critério do avanço automático, RN-056 — bloqueada se sobrar log de RPA EACE fora de "Sucesso" — corrige bug real reportado pelo usuário em produção, INEP 53005015: RI levado manualmente pra esse status antes de qualquer RPA rodar, 2 logs deram erro só depois) | Usuário reportou o INEP no servidor de produção; Dev investigou os dados reais (autorização explícita do usuário para acesso via SSH) e confirmou a causa raiz; Orquestrador formaliza a regra e cria `FEAT-047` para o bug já corrigido e testado pelo Dev nesta mesma sessão (suíte completa `apps.ri`+`apps.escolas`, sem regressão); nenhum deploy em produção desta correção ainda |
+| 2026-09-12 | RN-095 criada (Lado 3 do MIP mostra também os dados do Relatório EACE da própria RI, acima de uma linha divisória, só para comparação visual — não grava nada, RN-067 continua valendo); RN-096 criada (Visualizador ganha acesso a Projeto > MIP, só leitura e sem valor financeiro nenhum, incluindo os totais da RN-097); RN-097 criada (total de cada um dos 3 lados, RI e MIP, escondido do Visualizador) e corrigida no mesmo dia — Lado 1 do RI sem item lançado passa a usar a referência do catálogo (antes nunca mostrava total); item de qualquer lado com Valor Unitário 0 passa a buscar o Valor de equipamento atual no catálogo em vez de somar 0 (corrige bug real reportado pelo usuário, INEP 35277423, total do Lado 2 aparecendo "R$ 0,00") | Usuário pediu, em sequência: mostrar o Relatório EACE da RI no Lado 3 do MIP, para bater os 2 relatórios; o Visualizador também acompanhar o MIP, sem valor financeiro; e o total por lado "igual ao MIP" também na RI; testado o total, reportou os 2 bugs reais acima, corrigidos no mesmo dia depois de investigação contra INEPs reais do banco; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (758 a 760 testes em rodadas sucessivas, sem regressão) |
+| 2026-09-11 | RN-093 criada (novo perfil fixo "Visualizador" — só leitura em Projeto > Equipamentos, reforçado por `VisualizadorAccessMiddleware`; gera FEAT-040); RN-094 criada (Sincronizador do Relatório EACE do RI: Num OSP entra na chave de casamento do Produto avulso — corrige bug real reportado pelo usuário, INEP 53005015, 2 Nobreak de Num OSP diferentes em que o 2º nunca era lançado) | Usuário reportou o bug do Sincronizador e pediu a correção; RN-093/FEAT-040 já estava implementada e testada pelo Dev numa sessão anterior, mas nunca tinha sido commitada nem documentada — Orquestrador formaliza as duas nesta sessão (659 testes, sem regressão; correção do Sincronizador aplicada e validada em produção) |
 | 2026-09-10 | RN-092 criada (Status próprio do MIP — `Escola.status_mip`, independente do `Ri.status`: "Em Andamento"/"Aguardando Validação EACE"/"Faturamento Concluído"; grid de Equipamentos passa a excluir os 2 últimos; "Em Andamento" é o mesmo `Ri.status`, reabre o acesso normal da tela de Equipamentos; equipamento "só valor de serviço", RN-089, ganha lançamento/exclusão próprio no MIP em "Aguardando Validação EACE"); RN-074 marcada como substituída por esta; RN-091 ganha revisão (`--incluir-com-progresso`, estende a importação aos 550 INEPs "ATIVO" inteiros, cor do destaque trocada para amarelo) | Usuário pediu, ao longo do dia, várias correções em sequência sobre o mesmo desenho inicial (MIP com status independente): primeiro que "Em Andamento" voltasse a ser o próprio RI (não um valor novo, duplicado); depois, que a importação valesse pros 550 INEPs inteiros, não só os 100% intocados; por fim, a exceção do equipamento só-serviço, depois de notar que sem ela não haveria mais nenhuma forma de lançar esse item com o INEP fora de "Em Andamento"; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (651 testes, sem regressão; aplicado e validado no servidor local) |
 | 2026-09-10 | RN-091 criada (comando `importar_ri_legado_eace` traz para o sistema, como histórico, os INEPs "ATIVO" do `CONSOLIDADO EACE Atualizado.xlsx` cujo RI ainda estava 100% intocado — equipamento no Lado IXC com valor real da LPU por Lote, status "Aguardando validação EACE", `Escola.legado` para o nome em negrito/branco no Grid de INEPs, histórico do RI e sincronização automática da bolinha do MIP, RN-081) | Usuário pediu a importação; Orquestrador perguntou (CLAUDE.md §9) e usuário confirmou 3 pontos antes da implementação: nunca mexer em RI com progresso real (só 14 de 550 INEPs "ATIVO" eram 100% intocados), usar o valor real da LPU por Lote (não o R$ 0,00 padrão do lançamento manual), e não lançar Switch/Rack sem modelo definido; usuário reportou depois que os INEPs recém-criados ficaram sem a bolinha do grid do MIP — Dev corrigiu rodando a sincronização já existente (RN-081) automaticamente ao final do comando; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (617 testes, sem regressão; aplicado e validado no servidor local) |
 | 2026-09-08 | RN-081 criada (bolinha verde/vermelha no grid do MIP sobre o resultado da última sincronização do Relatório EACE (MIP) — `Escola.encontrado_relatorio_eace_mip`, campo novo; INEP encontrado na planilha mas fora da "Validação EACE" ganha lista própria, "Fora da Validação EACE") | Usuário pediu a bolinha com as combinações planilha×sistema; Orquestrador perguntou (CLAUDE.md §9) e usuário confirmou 2 pontos antes da implementação: o caso "fora da Validação EACE" vira linha nova na lista à parte, e a cor só atualiza depois de "Sincronizar todos os INEPs" rodar, não ao vivo; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (530 testes, sem regressão, validado com dado real de produção) |

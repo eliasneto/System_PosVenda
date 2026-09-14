@@ -1,0 +1,273 @@
+{% extends "core/base.html" %}
+{% load humanize %}
+
+{% block title %}Gerenciador Pós Venda | MIP (LOTE){% endblock %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li class="text-gray-900 dark:text-gray-100">Projeto</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            MIP (LOTE)
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">LOTEs criados a partir do filtro Estado/Município/Data no grid do MIP</p>
+    </div>
+
+    <div class="flex gap-4">
+        <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Total de LOTEs</p>
+            <p class="text-xl font-black italic text-pv-yellow">{{ page_obj.paginator.count }}</p>
+        </div>
+    </div>
+</div>
+
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    <th class="px-4 py-2">ID do LOTE</th>
+                    <th class="px-4 py-2">Estado</th>
+                    <th class="px-4 py-2">Município</th>
+                    <th class="px-4 py-2">Data Início</th>
+                    <th class="px-4 py-2">Data Fim</th>
+                    <th class="px-4 py-2">INEPs</th>
+                    <th class="px-4 py-2">Status</th>
+                    {% if not request.user.is_visualizador %}
+                    <th class="px-4 py-2">Ações</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
+                {% for linha in linhas_lote %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all group cursor-pointer divide-x divide-gray-300 dark:divide-gray-700"
+                    data-lote-toggle title="Clique para ver os INEPs deste LOTE">
+                    <td class="px-4 py-2">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-gray-300 dark:text-gray-600 shrink-0 transition-transform" data-lote-chevron></i>
+                            <span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[12px] leading-none">{{ linha.lote }}</span>
+                        </div>
+                    </td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.estado }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.municipio }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.data_inicio|date:"d/m/Y" }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.data_fim|date:"d/m/Y" }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.escolas|length }}</span></td>
+                    <td class="px-4 py-2">
+                        <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
+                            {% if linha.lote.status == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
+                            {% elif linha.lote.status == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
+                            {% elif linha.lote.status == 'email_enviado' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
+                            {% else %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400{% endif %}">
+                            {{ linha.lote.get_status_display }}
+                        </span>
+                    </td>
+                    {% if not request.user.is_visualizador %}
+                    <td class="px-4 py-2" data-no-toggle>
+                        <div class="flex flex-col items-start gap-1.5">
+                            {% if linha.lote.status == 'aguardando_encerramento' or linha.lote.status == 'email_enviado' %}
+                            <button type="button" data-abrir-modal-email="modal-email-lote-{{ linha.lote.pk }}"
+                                    class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                                <i data-lucide="mail" class="w-3.5 h-3.5"></i> Enviar e-mail
+                            </button>
+                            <!-- FEAT-049 (a formalizar pelo Orquestrador em
+                                 business_rules.md; pedido do usuário,
+                                 2026-09-14): "Desfazer LOTE" — mesma
+                                 confirmação simples (`onsubmit="return
+                                 confirm(...)"`) já usada nos botões de
+                                 excluir do RI/MIP. Só aparece nos mesmos 2
+                                 status em que ainda dá pra reenviar o
+                                 e-mail (`services.desfazer_lote_mip`) — a
+                                 partir de "Em Andamento"/"Faturamento
+                                 Concluído" o RI de cada INEP já foi
+                                 reaberto/encerrado de verdade. -->
+                            <form method="POST" action="{% url 'mip_lote_desfazer' pk=linha.lote.pk %}"
+                                  onsubmit="return confirm('Desfazer {{ linha.lote|escapejs }}? Os {{ linha.escolas|length }} INEP(s) voltam para \'Aguardando Validação EACE\' no MIP e o LOTE deixa de existir.');">
+                                {% csrf_token %}
+                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 border-2 border-red-200 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition">
+                                    <i data-lucide="undo-2" class="w-3.5 h-3.5"></i> Desfazer LOTE
+                                </button>
+                            </form>
+                            {% endif %}
+                            {% if linha.lote.email_enviado_em %}
+                            <span class="text-[9px] font-bold text-gray-400 dark:text-gray-500">Enviado em {{ linha.lote.email_enviado_em|date:"d/m/Y H:i" }}</span>
+                            {% endif %}
+                            {% if linha.lote.status == 'email_enviado' %}
+                            <form method="POST" action="{% url 'mip_lote_status_update' pk=linha.lote.pk %}" data-salvar-ao-trocar class="mt-1">
+                                {% csrf_token %}
+                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                <select name="status" class="px-2 py-1 bg-gray-50 dark:bg-gray-800 border-none rounded-lg outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer font-black text-[10px] text-gray-700 dark:text-gray-300 uppercase">
+                                    <option value="">Mudar status...</option>
+                                    <option value="em_andamento">Em Andamento</option>
+                                    <option value="faturamento_concluido">Faturamento Concluído</option>
+                                </select>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                    {% endif %}
+                </tr>
+                <tr class="hidden" data-lote-detalhe>
+                    <td colspan="8" class="px-8 py-6 bg-gray-50/60 dark:bg-gray-800/40">
+                        <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 mb-3">INEPs deste LOTE</p>
+                        <div class="overflow-x-auto contain-layout rounded-2xl border border-gray-200 dark:border-gray-700">
+                            <table class="min-w-full text-left border-collapse bg-white dark:bg-gray-900">
+                                <thead>
+                                    <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                                        <th class="px-4 py-2">INEP</th>
+                                        <th class="px-4 py-2">Nome da Escola</th>
+                                        <th class="px-4 py-2">Estado</th>
+                                        <th class="px-4 py-2">Município</th>
+                                        <th class="px-4 py-2">Status</th>
+                                        {% if not request.user.is_visualizador %}
+                                        <th class="px-4 py-2">Valor Total (IXC)</th>
+                                        <th class="px-4 py-2">Valor Total (EACE)</th>
+                                        {% endif %}
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
+                                    {% for item in linha.escolas %}
+                                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all cursor-pointer divide-x divide-gray-300 dark:divide-gray-700"
+                                        data-inep-navegar="{% url 'mip_detail' inep=item.escola.inep %}" title="Ver os 3 lados e o histórico">
+                                        <td class="px-4 py-2">
+                                            {% if item.escola.legado %}
+                                            <span class="font-black italic uppercase text-[12px] leading-none text-pv-yellow bg-pv-black px-1.5 py-0.5 rounded"
+                                                  title="INEP legado — dados de equipamento vieram do histórico do pós-venda, anterior a este sistema">{{ item.escola.inep }}</span>
+                                            {% else %}
+                                            <span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[12px] leading-none">{{ item.escola.inep }}</span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="px-4 py-2"><span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">{{ item.escola.nome }}</span></td>
+                                        <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ item.escola.estado|default:"—" }}</span></td>
+                                        <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ item.escola.municipio|default:"—" }}</span></td>
+                                        <td class="px-4 py-2">
+                                            <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
+                                                {% if item.escola.status_mip == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
+                                                {% elif item.escola.status_mip == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
+                                                {% elif item.escola.status_mip == 'email_lote_enviado' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
+                                                {% else %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400{% endif %}">
+                                                {{ item.escola.get_status_mip_display }}
+                                            </span>
+                                        </td>
+                                        {% if not request.user.is_visualizador %}
+                                        <td class="px-4 py-2">
+                                            {% if item.valor_total_lado2 is not None %}
+                                            <span class="text-[11px] text-gray-700 dark:text-gray-300 font-bold">R$ {{ item.valor_total_lado2|intcomma }}</span>
+                                            {% else %}
+                                            <span class="text-[11px] text-gray-400 dark:text-gray-500">—</span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="px-4 py-2">
+                                            {% if item.valor_total_lado3 is not None %}
+                                            <span class="text-[11px] text-gray-700 dark:text-gray-300 font-bold">R$ {{ item.valor_total_lado3|intcomma }}</span>
+                                            {% else %}
+                                            <span class="text-[11px] text-gray-400 dark:text-gray-500">—</span>
+                                            {% endif %}
+                                        </td>
+                                        {% endif %}
+                                    </tr>
+                                    {% empty %}
+                                    <tr>
+                                        <td colspan="7" class="px-4 py-6 text-center text-[11px] text-gray-400 dark:text-gray-500 italic">Nenhum INEP neste LOTE.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8" class="px-8 py-20 text-center">
+                        <div class="flex flex-col items-center gap-4 opacity-40">
+                            <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
+                                <i data-lucide="package-search" class="w-8 h-8"></i>
+                            </div>
+                            <div>
+                                <p class="font-black italic uppercase text-gray-600 dark:text-gray-400">Nenhum LOTE criado</p>
+                                <p class="text-xs font-bold text-gray-400 dark:text-gray-500 mt-1">Crie um LOTE filtrando por Estado, Município e período em Projeto &gt; MIP.</p>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if page_obj.has_other_pages %}
+    <div class="bg-gray-50/50 dark:bg-gray-800/40 px-8 py-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest">
+            Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}
+        </span>
+        <div class="flex gap-2">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{% comment %}
+FEAT-045 (2026-09-14): modais de e-mail do LOTE ficam FORA do container
+"overflow-x-auto contain-layout" da tabela acima — mesmo motivo já
+documentado em `ri/grid_inep.html` (FEAT-008): `contain: layout` vira
+containing block de `position: fixed`, o que faria o modal ancorar só na
+área visível da tabela em vez de cobrir a viewport inteira. 2º laço só
+para renderizar os modais — nenhuma consulta nova (mesmo `linhas_lote` já
+calculado na view).
+{% endcomment %}
+{% if not request.user.is_visualizador %}
+{% for linha in linhas_lote %}
+{% if linha.lote.status == 'aguardando_encerramento' or linha.lote.status == 'email_enviado' %}
+{% include "escolas/_modal_enviar_email_lote.html" with lote=linha.lote escolas=linha.escolas assunto_sugerido=linha.assunto_sugerido corpo_sugerido=linha.corpo_sugerido remetente_lote=remetente_lote next_url=request.get_full_path %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Drill-down: clique na linha do LOTE expande/recolhe a linha de detalhe
+// imediatamente abaixo (mesmo padrão do grid do MIP, `mip_inep.html`).
+// `data-no-toggle` (célula "Ações", FEAT-045): clique no botão "Enviar
+// e-mail" não pode expandir/recolher a linha por baixo dele — sem
+// `stopPropagation` (isso impediria o clique de chegar no listener
+// delegado de `data-abrir-modal-email` em `core/base.html`), só ignora o
+// toggle quando o alvo do clique está dentro dessa célula.
+document.querySelectorAll('[data-lote-toggle]').forEach(function (linha) {
+    linha.addEventListener('click', function (evento) {
+        if (evento.target.closest('[data-no-toggle]')) return;
+        var detalhe = linha.nextElementSibling;
+        if (!detalhe || !detalhe.hasAttribute('data-lote-detalhe')) return;
+        var expandido = !detalhe.classList.contains('hidden');
+        detalhe.classList.toggle('hidden', expandido);
+        var chevron = linha.querySelector('[data-lote-chevron]');
+        if (chevron) chevron.classList.toggle('rotate-90', !expandido);
+    });
+});
+
+// Clique numa linha de INEP dentro do LOTE abre o detalhe daquele INEP
+// (mesmo padrão de `data-inep-navegar` do grid do MIP) — `<tr>` não pode
+// ser filho direto de um `<a>` (HTML inválido).
+document.querySelectorAll('[data-inep-navegar]').forEach(function (linha) {
+    linha.addEventListener('click', function (evento) {
+        evento.stopPropagation();
+        window.location.href = linha.getAttribute('data-inep-navegar');
+    });
+});
+</script>
+{% endblock %}

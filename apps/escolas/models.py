@@ -28,10 +28,25 @@ class Escola(models.Model):
     # continua no grid de Equipamentos normalmente.
     EM_ANDAMENTO = "em_andamento"
     AGUARDANDO_VALIDACAO_EACE = "aguardando_validacao_eace"
+    # FEAT-044/RN-098 (a formalizar pelo Orquestrador em business_rules.md;
+    # pedido do usuário, 2026-09-14): status próprio do MIP (LOTE) — gravado
+    # automaticamente em todo INEP incluído num `Lote` (`escolas/views.
+    # mip_lote_criar_view`), nunca escolhido manualmente pelo `<select>` de
+    # Status (MIP) da tela de detalhe (só o resultado da criação de um
+    # LOTE) — ver `status_mip_opcoes_editavel` em `mip_detail_view`.
+    AGUARDANDO_ENCERRAMENTO_LOTE = "aguardando_encerramento_lote"
+    # FEAT-046 (a formalizar pelo Orquestrador em business_rules.md; pedido
+    # do usuário, 2026-09-14): gravado automaticamente em todo INEP do LOTE
+    # quando o e-mail do LOTE é enviado (`apps.escolas.services.
+    # enviar_email_lote`) — também nunca escolhido manualmente (mesmo
+    # critério do valor acima).
+    EMAIL_LOTE_ENVIADO = "email_lote_enviado"
     FATURAMENTO_CONCLUIDO = "faturamento_concluido"
     STATUS_MIP_CHOICES = [
         (EM_ANDAMENTO, "Em Andamento"),
         (AGUARDANDO_VALIDACAO_EACE, "Aguardando Validação EACE"),
+        (AGUARDANDO_ENCERRAMENTO_LOTE, "Aguardando Encerramento LOTE"),
+        (EMAIL_LOTE_ENVIADO, "Email em LOTE enviado"),
         (FATURAMENTO_CONCLUIDO, "Faturamento Concluído"),
     ]
 
@@ -287,3 +302,90 @@ class EscolaItemRelatorioEaceMip(models.Model):
 
     def __str__(self):
         return f"{self.escola.inep} — {self.descricao_item}"
+
+
+class Lote(models.Model):
+    """FEAT-044/RN-098 (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-14): agrupa, num "LOTE", os INEPs do MIP que
+    estavam em "Aguardando Validação EACE" e com Valor Total (IXC) == Valor
+    Total (EACE) (RN-076/RN-077) — criado a partir do filtro Estado +
+    Município + Data inicial/final já existente no grid "Projeto > MIP"
+    (RN-079/RN-075), pelo botão "Criar LOTE" ao lado do Total geral
+    (RN-080, `apps.escolas.views.mip_lote_criar_view`/
+    `apps.escolas.services.escolas_elegiveis_lote_mip`).
+
+    Não confundir com `Escola.lote` (acima) — campo antigo e sem relação
+    com este, é só o número do "Lote" do catálogo EACE (`KitPadrao.lote`)
+    usado para casar cada Escola com a faixa de preço certa do catálogo
+    (RN-010); nomes iguais por coincidência de vocabulário do negócio.
+
+    Estado/Município/Data início/Data fim gravados aqui são só o "rótulo"
+    do lote (o filtro usado na hora da criação, exibido na tela "Projeto >
+    MIP (LOTE)") — quem de fato compõe o lote são os INEPs em `escolas`.
+    Ao entrar aqui, cada INEP ganha `Escola.status_mip =
+    "aguardando_encerramento_lote"` e um novo `RiHistorico` (campo "Status
+    (MIP)" + campo "LOTE", pedido explícito do usuário) — nenhum outro dado
+    do INEP é alterado."""
+
+    estado = models.CharField("UF", max_length=2)
+    municipio = models.CharField("Município", max_length=150)
+    data_inicio = models.DateField("Data início")
+    data_fim = models.DateField("Data fim")
+    escolas = models.ManyToManyField(Escola, related_name="lotes", verbose_name="INEPs")
+    criado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Criado por",
+    )
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    # FEAT-045 (a formalizar pelo Orquestrador em business_rules.md; pedido
+    # do usuário, 2026-09-14): e-mail do LOTE (`apps.escolas.services.
+    # enviar_email_lote`) — registro de "quando" (e "por quem") foi
+    # disparado pela última vez; reenvio permitido enquanto `status` ainda
+    # estiver em `AGUARDANDO_ENCERRAMENTO`/`EMAIL_ENVIADO` (bloqueado depois
+    # que o LOTE avança para "Em Andamento"/"Faturamento Concluído" —
+    # RN a formalizar, pedido do usuário 2026-09-14, ver `enviar_email_lote`).
+    email_enviado_em = models.DateTimeField("E-mail enviado em", null=True, blank=True)
+    email_enviado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="E-mail enviado por",
+    )
+    # FEAT-046 (a formalizar pelo Orquestrador em business_rules.md; pedido
+    # do usuário, 2026-09-14): ciclo de vida próprio do LOTE — nasce em
+    # AGUARDANDO_ENCERRAMENTO (mesmo instante da criação, espelha o
+    # `Escola.status_mip = "aguardando_encerramento_lote"` que cada INEP já
+    # ganha); `enviar_email_lote` avança para EMAIL_ENVIADO; a partir daí a
+    # tela "Projeto > MIP (LOTE)" libera a troca manual para EM_ANDAMENTO
+    # ("vai para o RI como é hoje", pedido do usuário) ou
+    # FATURAMENTO_CONCLUIDO ("encerra o processo completo") —
+    # `apps.escolas.views.mip_lote_status_update_view`. Cada transição muda
+    # também o `Escola.status_mip` de todos os INEPs do LOTE e grava no
+    # histórico de cada um (pedido explícito do usuário).
+    AGUARDANDO_ENCERRAMENTO = "aguardando_encerramento"
+    EMAIL_ENVIADO = "email_enviado"
+    EM_ANDAMENTO = "em_andamento"
+    FATURAMENTO_CONCLUIDO = "faturamento_concluido"
+    STATUS_CHOICES = [
+        (AGUARDANDO_ENCERRAMENTO, "Aguardando Encerramento LOTE"),
+        (EMAIL_ENVIADO, "Email em LOTE enviado"),
+        (EM_ANDAMENTO, "Em Andamento"),
+        (FATURAMENTO_CONCLUIDO, "Faturamento Concluído"),
+    ]
+    status = models.CharField(
+        "Status", max_length=30, choices=STATUS_CHOICES, default=AGUARDANDO_ENCERRAMENTO
+    )
+
+    class Meta:
+        verbose_name = "Lote"
+        verbose_name_plural = "Lotes"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"LOTE-{self.pk:04d}"

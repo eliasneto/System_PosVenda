@@ -1,4 +1,7 @@
+import re
+
 from django import forms
+from django.core.validators import validate_email
 
 try:
     import openpyxl
@@ -63,3 +66,38 @@ class PlanilhaRelatorioEaceMipUploadForm(forms.Form):
                 + ", ".join(PlanilhaRelatorioEaceMip.COLUNAS_OBRIGATORIAS) + "."
             )
         return arquivo
+
+
+def _limpar_lista_emails_lote(valor):
+    """Mesmo padrão de `apps.ri.forms._limpar_lista_emails` (FEAT-008) —
+    duplicada aqui (função pequena, evita importar símbolo privado de
+    outro módulo, mesmo critério já usado por `apps.escolas.views.
+    _registrar_log_campo_mip`) para o campo "Para" do e-mail do LOTE
+    (FEAT-045). Diferença do RI: nunca obrigatório aqui — pedido explícito
+    do usuário ("o PARA pode deixar em branco")."""
+    enderecos = [endereco.strip() for endereco in re.split(r"[,;]", valor or "") if endereco.strip()]
+    for endereco in enderecos:
+        validate_email(endereco)
+    return enderecos
+
+
+class LoteEmailForm(forms.Form):
+    """FEAT-045 (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-14): composição do e-mail do LOTE — mesmo
+    padrão da tela de e-mail do RI (`apps.ri.forms.RiEmailFinanceiroForm`,
+    FEAT-008), com as diferenças pedidas pelo usuário: "De" é automático
+    (não entra neste form, igual ao RI); "Para" é OPCIONAL aqui (no RI é
+    obrigatório); sem "Cc" (não pedido para o LOTE); "anexo_extra" é
+    opcional — mesmo nome/papel do `RiEmailFinanceiroForm.anexo_extra`: o
+    anexo OFICIAL (planilha de faturamento de implantação por Município,
+    `apps.escolas.services.gerar_planilha_faturamento_implantacao_lote`) é
+    sempre gerado e anexado automaticamente por `enviar_email_lote`; este
+    campo só serve para somar mais um arquivo ao e-mail."""
+
+    para = forms.CharField(label="Para", required=False)
+    assunto = forms.CharField(label="Assunto", max_length=255)
+    mensagem = forms.CharField(label="Mensagem", required=False, widget=forms.Textarea)
+    anexo_extra = forms.FileField(label="Anexo extra", required=False)
+
+    def clean_para(self):
+        return _limpar_lista_emails_lote(self.cleaned_data.get("para"))

@@ -49,6 +49,15 @@ class AcessoLiberadoMiddleware:
 # edição (Status (MIP), lançamento de equipamento só valor de serviço)
 # para esse perfil; aqui é só o reforço técnico de acesso, igual ao
 # padrão já usado para grid_inep/ri_detail.
+#
+# FEAT-044/FEAT-046 (a formalizar pelo Orquestrador em business_rules.md;
+# pedido do usuário, 2026-09-14; revisto 2026-09-14): "Projeto > MIP
+# (LOTE)" inteiro (`mip_lote_inep` incluída) fica de fora do Visualizador
+# — pedido explícito do usuário ("esse MIP lote não pode ser acessado
+# pelo usuario apenas com permissão de Visualizador"), revogando a
+# extensão anterior da RN-096 pra essa tela. `mip_lote_criar`/
+# `mip_lote_enviar_email`/`mip_lote_status_update` já ficavam de fora
+# (mudam dado, nunca foram "visualizar").
 _URL_NAMES_VISUALIZADOR = {"grid_inep", "ri_detail", "mip_inep", "mip_detail"}
 
 

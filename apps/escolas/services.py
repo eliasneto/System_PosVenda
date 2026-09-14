@@ -10,18 +10,24 @@ planilha do MIP (`PlanilhaRelatorioEaceMip`, RN-069) e grava em
 planilha são independentes, RN-067)."""
 
 import datetime
+import io
 import re
 from decimal import Decimal
 
 import openpyxl
 from django.conf import settings
-from django.db.models import OuterRef, Prefetch, Subquery
+from django.core.files.base import ContentFile
+from django.core.mail import EmailMessage
+from django.db import transaction
+from django.db.models import DateField, OuterRef, Prefetch, Subquery
 from django.utils import timezone
 
-from apps.ri.models import KitPadrao, Ri
+from apps.auditoria.models import Auditoria
+from apps.auditoria.services import registrar as auditar
+from apps.ri.models import KitPadrao, Ri, RiHistorico
 from apps.ri.services import casar_planilha_eace_com_catalogo, quantidade_planilha_eace
 
-from .models import Escola, EscolaItemRelatorioEaceMip, PlanilhaRelatorioEaceMip
+from .models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
 
 
 class RelatorioEaceMipSincronizacaoError(Exception):
@@ -351,12 +357,34 @@ def _resolver_lado_ixc(ri, lote, catalogo):
     ]
 
 
+def _resolver_lado3_relatorio_eace_mip(escola):
+    """3º lado (Relatório EACE) do MIP — itens lançados pelo Sincronizador
+    da planilha do MIP (RN-069/RN-070), por Escola; tabela própria
+    (`EscolaItemRelatorioEaceMip`), independente do Lado 3 do RI
+    (RN-067). `pk` incluído para o template destacar em vermelho o
+    produto divergente do confronto com o Lado IXC
+    (`itens_mip_divergentes_pks`, `apps.escolas.views.
+    _comparar_valor_servico_ixc_relatorio_mip`). Movida de `views.py` para
+    cá em 2026-09-14 (FEAT-044) pelo mesmo motivo das outras funções desta
+    seção: passou a ser reaproveitada fora do módulo de views
+    (`escolas_elegiveis_lote_mip`, abaixo)."""
+    return [
+        {
+            "pk": item.pk,
+            "descricao": item.descricao_item,
+            "quantidade": item.quantidade,
+            "valor_servico": item.valor_servico,
+        }
+        for item in escola.itens_relatorio_eace_mip.all()
+    ]
+
+
 def _valor_total_itens(itens):
     """RN-076/RN-077 (a criar): soma quantidade × Valor de serviço de uma
     lista de itens do MIP — mesmo formato de dict usado tanto pelo Lado IXC
     (`_resolver_lado_ixc`, coluna "Valor Total (IXC)") quanto pelo Lado
-    Relatório EACE (`apps.escolas.views._resolver_lado3_relatorio_eace_mip`,
-    coluna "Valor Total (EACE)") — chaves "quantidade"/"valor_servico".
+    Relatório EACE (`_resolver_lado3_relatorio_eace_mip`, acima, coluna
+    "Valor Total (EACE)") — chaves "quantidade"/"valor_servico".
 
     Item sem Valor de serviço (`None` — sem correspondência no catálogo no
     Lado IXC, RN-067; ou não preenchido na planilha de origem no Lado
@@ -378,26 +406,383 @@ def _valor_total_itens(itens):
 
 
 # ---------------------------------------------------------------------------
-# Planilha de faturamento de implantação — a pedido do usuário, gerada a
-# partir do mesmo filtro Estado+Município do grid "Projeto > MIP"
-# (`apps.escolas.views.mip_inep_view`). RN própria desta feature ainda será
-# formalizada pelo Orquestrador em `business_rules.md`/`checklist.md`; aqui
-# ela referencia as regras já existentes que reaproveita: RN-074 (base de
-# escolas — RI atual em "Aguardando validação EACE"), RN-079 (filtro Estado/
-# Município) e RN-076 (Valor Total IXC = quantidade × Valor de serviço dos
-# itens do Lado IXC).
+# FEAT-044/RN-098 (a formalizar pelo Orquestrador em business_rules.md;
+# pedido do usuário, 2026-09-14): "Projeto > MIP (LOTE)" — agrupa, num
+# `Lote`, os INEPs do MIP em "Aguardando Validação EACE" com Valor Total
+# (IXC) == Valor Total (EACE) (RN-076/RN-077) dentro do filtro Estado +
+# Município + Data inicial/final já existente no grid "Projeto > MIP"
+# (RN-079/RN-075) — botão "Criar LOTE" ao lado do Total geral (RN-080,
+# `apps.escolas.views.mip_lote_criar_view`).
+# ---------------------------------------------------------------------------
+
+
+def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim):
+    """Base elegível para um LOTE: mesma combinação de filtros do grid do
+    MIP — Estado/Município (RN-079, comparados exatos, iguais ao `<select>`
+    da tela) e Data de Ativação do RI atual (RN-075, `Ri.data_ativacao`,
+    dentro de `[data_inicio, data_fim]`) — restrita aos INEPs com
+    `Escola.status_mip == "Aguardando Validação EACE"` e cujo Valor Total
+    (IXC) e Valor Total (EACE) (RN-076/RN-077, `_valor_total_itens`) sejam
+    os DOIS conhecidos, completos (nenhum item sem Valor de serviço) e
+    iguais entre si — pedido explícito do usuário ("que o Valor Total
+    (IXC) seja igual ao Valor Total (EACE)"). Um total incompleto (algum
+    item sem Valor de serviço no catálogo) não entra: como o total exibido
+    já não reflete todos os itens lançados, comparar IXC × EACE nessa
+    condição arriscaria fechar um LOTE com valor que ainda pode mudar —
+    decisão do Dev (2026-09-14, reversível/baixo risco, CLAUDE.md §9).
+
+    Sem Estado, Município, Data início ou Data fim, devolve lista vazia
+    (nunca assume um filtro que não foi informado, CLAUDE.md §9) — quem
+    chama decide se isso é erro (`criar_lote_mip`) ou só "0 elegíveis"
+    (contador do grid, `apps.escolas.views.mip_inep_view`)."""
+    estado = (estado or "").strip()
+    municipio = (municipio or "").strip()
+    if not estado or not municipio or not data_inicio or not data_fim:
+        return []
+
+    ri_atual_qs = Ri.objects.filter(escola=OuterRef("pk")).order_by("-criado_em")
+    data_ativacao_ri_atual = Subquery(ri_atual_qs.values("data_ativacao")[:1], output_field=DateField())
+    escolas = (
+        Escola.objects.annotate(data_ativacao_ri_atual=data_ativacao_ri_atual)
+        .filter(
+            status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+            estado=estado,
+            municipio=municipio,
+            data_ativacao_ri_atual__gte=data_inicio,
+            data_ativacao_ri_atual__lte=data_fim,
+        )
+        .order_by("nome")
+        .prefetch_related(
+            Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc"))
+        )
+    )
+
+    catalogo_kits = list(KitPadrao.objects.all())
+    elegiveis = []
+    for escola in escolas:
+        ris_da_escola = list(escola.ris.all())
+        ri_atual = ris_da_escola[0] if ris_da_escola else None
+        lado2_ixc = _resolver_lado_ixc(ri_atual, escola.lote, catalogo_kits)
+        lado3_relatorio_eace_mip = _resolver_lado3_relatorio_eace_mip(escola)
+        valor_total_lado2, incompleto2 = _valor_total_itens(lado2_ixc)
+        valor_total_lado3, incompleto3 = _valor_total_itens(lado3_relatorio_eace_mip)
+        if (
+            valor_total_lado2 is not None
+            and valor_total_lado3 is not None
+            and not incompleto2
+            and not incompleto3
+            and valor_total_lado2 == valor_total_lado3
+        ):
+            elegiveis.append(escola)
+    return elegiveis
+
+
+class LoteMipError(Exception):
+    """Erro de negócio ao criar um LOTE do MIP (`criar_lote_mip`) — a view
+    converte em mensagem para o usuário."""
+
+
+def _registrar_log_campo_lote(ri, usuario, campo, valor_anterior, valor_novo):
+    """Mesmo padrão de `apps.ri.views._registrar_log_campo`/
+    `apps.escolas.views._registrar_log_campo_mip` (RN-008/RN-092) —
+    duplicada aqui (função pequena, evita importar símbolo privado de
+    outro módulo) para o log de criação de LOTE (RN-098)."""
+    RiHistorico.objects.create(
+        ri=ri,
+        tipo=RiHistorico.LOG_CAMPO,
+        autor=usuario,
+        campo=campo,
+        valor_anterior=valor_anterior,
+        valor_novo=valor_novo,
+    )
+    auditar(
+        usuario,
+        Auditoria.ALTERACAO_CAMPO,
+        entidade="Ri",
+        entidade_id=ri.pk,
+        campo=campo,
+        valor_anterior=valor_anterior,
+        valor_novo=valor_novo,
+    )
+
+
+@transaction.atomic
+def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario):
+    """Cria o `Lote` com os INEPs elegíveis (`escolas_elegiveis_lote_mip`,
+    acima) do filtro Estado+Município+Data início/fim informado — chamada
+    pelo botão "Criar LOTE" da tela "Projeto > MIP"
+    (`apps.escolas.views.mip_lote_criar_view`). Os 4 filtros são
+    OBRIGATÓRIOS aqui (o grid do MIP permite Estado sozinho ou nenhuma
+    data — este fluxo não, pedido explícito do usuário: "o usuário vai
+    precisar... filtrar por: um estado e um município, uma data início e
+    uma data final").
+
+    Cada INEP elegível ganha `Escola.status_mip =
+    "aguardando_encerramento_lote"` e 2 entradas no histórico do RI atual
+    (`RiHistorico`, painel reaproveitado do RI/MIP, RN-008): uma com a
+    troca de Status (MIP), outra com o número do LOTE — pedido explícito
+    do usuário ("dentro do histórico de cada INEP dentro do LOTE, deve ter
+    o status e o numero do LOTE"). Tudo dentro de uma transação — ou o
+    LOTE inteiro é criado (com todos os INEPs já na nova situação), ou
+    nada é gravado.
+
+    Levanta `LoteMipError` sem criar nada quando falta algum dos 4 filtros,
+    quando a data inicial é depois da final, ou quando nenhum INEP é
+    elegível — quem chamar converte em mensagem para o usuário."""
+    estado = (estado or "").strip()
+    municipio = (municipio or "").strip()
+    if not estado or not municipio or not data_inicio or not data_fim:
+        raise LoteMipError(
+            "Informe Estado, Município, Data inicial e Data final para criar o LOTE."
+        )
+    if data_inicio > data_fim:
+        raise LoteMipError("A data inicial não pode ser depois da data final.")
+
+    escolas = escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim)
+    if not escolas:
+        raise LoteMipError(
+            f"Nenhum INEP elegível (Aguardando Validação EACE, com Valor Total IXC = EACE) "
+            f"para {municipio}/{estado} no período informado."
+        )
+
+    lote = Lote.objects.create(
+        estado=estado, municipio=municipio, data_inicio=data_inicio, data_fim=data_fim, criado_por=usuario,
+    )
+    lote.escolas.set(escolas)
+    for escola in escolas:
+        status_anterior = escola.get_status_mip_display()
+        escola.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        escola.save(update_fields=["status_mip"])
+        ris_da_escola = list(escola.ris.all())
+        ri_atual = ris_da_escola[0] if ris_da_escola else None
+        if ri_atual:
+            _registrar_log_campo_lote(
+                ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
+            )
+            _registrar_log_campo_lote(ri_atual, usuario, "LOTE", "", str(lote))
+    return lote
+
+
+@transaction.atomic
+def desfazer_lote_mip(lote, usuario):
+    """FEAT-049 (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-14): desfaz um `Lote` — "hoje eu consigo
+    construir um LOTE mas não consigo desfazer". Cada INEP volta para
+    `Escola.status_mip = "aguardando_validacao_eace"` (mesmo status que
+    tinha antes de entrar no LOTE, RN-098) e ganha 2 entradas no histórico
+    do RI atual dele (mesmo padrão de `criar_lote_mip`: Status (MIP) e
+    LOTE) — "fica no histórico de cada um essa alteração e o usuário que
+    alterou" (pedido explícito do usuário). O `Lote` em si é excluído no
+    final — "desfazer" desfaz a própria existência do LOTE (some da tela
+    "Projeto > MIP (LOTE)"), não só o status dos INEPs; a Auditoria e o
+    RiHistorico de cada INEP continuam registrando que ele existiu e foi
+    desfeito, mesmo depois de o registro do `Lote` sumir daqui.
+
+    Só permitido enquanto o LOTE ainda não avançou de verdade -
+    `AGUARDANDO_ENCERRAMENTO` ou `EMAIL_ENVIADO` (mesma dupla que ainda
+    permite reenviar o e-mail, `enviar_email_lote`) - porque a partir de
+    "Em Andamento" o RI de cada INEP já foi REABERTO de verdade
+    (`trocar_status_com_log`, RN-092) e "Faturamento Concluído" já encerra
+    o processo; desfazer dali teria que reverter uma transição real do RI
+    (ou um faturamento já dado como concluído), o que o usuário não pediu
+    - decisão do Dev (2026-09-14, reversível/baixo risco, CLAUDE.md §9).
+    Levanta `LoteMipError` fora desses 2 status - a view converte em
+    mensagem para o usuário."""
+    if lote.status not in (Lote.AGUARDANDO_ENCERRAMENTO, Lote.EMAIL_ENVIADO):
+        raise LoteMipError(
+            f'Não é possível desfazer {lote} — já está em "{lote.get_status_display()}".'
+        )
+
+    identificacao_lote = str(lote)
+    for escola in lote.escolas.all():
+        status_anterior = escola.get_status_mip_display()
+        escola.status_mip = Escola.AGUARDANDO_VALIDACAO_EACE
+        escola.save(update_fields=["status_mip"])
+        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if ri_atual:
+            _registrar_log_campo_lote(
+                ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
+            )
+            _registrar_log_campo_lote(ri_atual, usuario, "LOTE", identificacao_lote, "Desfeito")
+    lote.delete()
+
+
+def montar_assunto_email_lote(lote):
+    """FEAT-045 (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-14): assunto sugerido do e-mail do LOTE —
+    mesmo padrão visual do assunto do e-mail do RI
+    (`apps.ri.views._assunto_sugerido_email`, RN-009/RN-050), mas sem o
+    código de rastreio: aquele mecanismo existe para o financeiro
+    responder e o sistema casar a resposta com o INEP certo (FEAT-009,
+    leitura automática de e-mail) — o LOTE não tem esse fluxo de leitura
+    de resposta, só o envio (pedido do usuário)."""
+    return f"Faturamento EACE — {lote} — {lote.municipio}/{lote.estado}"
+
+
+def montar_corpo_email_lote(lote):
+    """Texto simples do corpo do e-mail do LOTE — mesmo espírito de
+    `apps.ri.services.montar_corpo_email_financeiro`, adaptado para
+    listar todos os INEPs do lote (o RI lista os itens de 1 RI só)."""
+    escolas = list(lote.escolas.order_by("nome"))
+    partes = [
+        f"LOTE: {lote}",
+        f"Município/UF: {lote.municipio}/{lote.estado}",
+        f"Período: {lote.data_inicio:%d/%m/%Y} a {lote.data_fim:%d/%m/%Y}",
+        f"Total de INEPs: {len(escolas)}",
+        "",
+        "INEPs deste LOTE:",
+    ]
+    for escola in escolas:
+        partes.append(f"- {escola.inep} — {escola.nome}")
+    return "\n".join(partes)
+
+
+@transaction.atomic
+def enviar_email_lote(lote, *, para, assunto, mensagem, anexo_extra, usuario):
+    """FEAT-045/FEAT-046 (a formalizar pelo Orquestrador em
+    business_rules.md; pedido do usuário, 2026-09-14): envia o e-mail do
+    LOTE, avança `Lote.status` para "Email em LOTE enviado" e grava, no
+    histórico do RI atual de CADA INEP deste LOTE, que o e-mail foi
+    disparado a partir dele — pedido explícito do usuário: "todos os
+    históricos de todos os INEPs que estiver dentro desse LOTE deve
+    receber a informação que o email foi disparado do LOTE X". Mesmo
+    `tipo=RiHistorico.EMAIL` já usado pelo e-mail do RI (FEAT-008) — o
+    painel de histórico (`ri/_historico_panel.html`) já sabe exibir esse
+    tipo, nenhuma mudança de template precisou ser feita aqui.
+
+    Só pode ser chamada com `Lote.status` em `AGUARDANDO_ENCERRAMENTO` ou
+    já `EMAIL_ENVIADO` (reenvio permitido enquanto nada mais aconteceu
+    depois) — levanta `LoteMipError` se o LOTE já avançou para "Em
+    Andamento"/"Faturamento Concluído" (`mip_lote_status_update_view`):
+    reenviar nesse ponto reverteria `Escola.status_mip` de todo INEP do
+    LOTE de volta para "Email em LOTE enviado", inclusive de quem já saiu
+    daqui (ex.: RI reaberto) — decisão do Dev (2026-09-14, reversível/
+    baixo risco, CLAUDE.md §9).
+
+    "De" é sempre `settings.DEFAULT_FROM_EMAIL` (mesmo do RI, pedido do
+    usuário: "o Do email é o mesmo") — nem é parâmetro desta função, quem
+    decide é sempre o `EmailMessage`. "Para" pode chegar vazio (`[]`,
+    pedido do usuário: "o PARA pode deixar em branco") — sem nenhum
+    destinatário, `EmailMessage.send()` simplesmente não entrega nada
+    (comportamento padrão do Django, não é erro daqui); mesmo assim o
+    histórico de cada INEP é gravado e `Lote.email_enviado_em` é
+    atualizado, porque o usuário pode estar só validando o texto/anexo
+    antes de preencher o Para de verdade depois.
+
+    FEAT-045 (pedido do usuário, 2026-09-14, resolvendo a pendência
+    anterior desta função — "esse anexo vai ser criado futuramente"): o
+    anexo OFICIAL do e-mail do LOTE agora é gerado automaticamente,
+    SEMPRE — `gerar_planilha_faturamento_implantacao_lote` (mesmo modelo
+    `doc/FATURAMENTO IMPLANTAÇÃO.xlsx`, RN a formalizar), com os INEPs
+    fixos deste LOTE (nunca um novo filtro por Estado/Município/status —
+    ver docstring daquela função) e `data_envio=` a data de hoje (o
+    VENCIMENTO da planilha é essa data + 30 dias corridos, "a criação
+    desse documento" citada pelo usuário). Mesmo padrão do e-mail do RI
+    (`apps.ri.views.ri_enviar_email_financeiro_view`): essa planilha
+    gerada é quem fica salva no histórico de cada INEP (`RiHistorico.
+    anexo`), não o `anexo_extra` abaixo.
+
+    "anexo_extra" é o arquivo opcional enviado manualmente no formulário
+    de composição (mesmo espírito de `RiEmailFinanceiroForm.anexo_extra`)
+    — só mais um anexo do e-mail, somado ao acima; nunca substitui a
+    planilha gerada e não é salvo no histórico dos INEPs (mesmo critério
+    do RI: só o documento oficial fica registrado ali)."""
+    if lote.status not in (Lote.AGUARDANDO_ENCERRAMENTO, Lote.EMAIL_ENVIADO):
+        raise LoteMipError(
+            f'{lote} já está em "{lote.get_status_display()}" — não é mais possível reenviar '
+            "o e-mail deste LOTE."
+        )
+
+    workbook = gerar_planilha_faturamento_implantacao_lote(lote, data_envio=timezone.localdate())
+    planilha_stream = io.BytesIO()
+    workbook.save(planilha_stream)
+    planilha_bytes = planilha_stream.getvalue()
+    nome_planilha = nome_arquivo_planilha_faturamento_implantacao(lote)
+
+    anexo_extra_bytes = anexo_extra.read() if anexo_extra else None
+    anexo_extra_nome = anexo_extra.name if anexo_extra else None
+    anexo_extra_content_type = anexo_extra.content_type if anexo_extra else None
+
+    email = EmailMessage(
+        subject=assunto,
+        body=mensagem,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=para,
+    )
+    email.attach(nome_planilha, planilha_bytes, MIME_PLANILHA_FATURAMENTO_IMPLANTACAO)
+    if anexo_extra_bytes:
+        email.attach(anexo_extra_nome, anexo_extra_bytes, anexo_extra_content_type)
+    email.send(fail_silently=False)
+
+    lote.email_enviado_em = timezone.now()
+    lote.email_enviado_por = usuario
+    lote.status = Lote.EMAIL_ENVIADO
+    lote.save(update_fields=["email_enviado_em", "email_enviado_por", "status"])
+
+    auditar(
+        usuario,
+        Auditoria.ENVIO_EMAIL,
+        entidade="Lote",
+        entidade_id=lote.pk,
+        campo="assunto",
+        valor_novo=assunto,
+    )
+
+    for escola in lote.escolas.all():
+        status_anterior = escola.get_status_mip_display()
+        escola.status_mip = Escola.EMAIL_LOTE_ENVIADO
+        escola.save(update_fields=["status_mip"])
+
+        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if not ri_atual:
+            continue
+        entrada = RiHistorico(
+            ri=ri_atual,
+            tipo=RiHistorico.EMAIL,
+            autor=usuario,
+            mensagem=f"E-mail do {lote} enviado. Assunto: {assunto}",
+        )
+        entrada.anexo.save(nome_planilha, ContentFile(planilha_bytes), save=False)
+        entrada.save()
+        _registrar_log_campo_lote(
+            ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Planilha de faturamento de implantação — a pedido do usuário, gerada tanto
+# a partir do mesmo filtro Estado+Município do grid "Projeto > MIP"
+# (`apps.escolas.views.mip_inep_view`, `gerar_planilha_faturamento_
+# implantacao`) quanto a partir dos INEPs fixos de um `Lote` (FEAT-045,
+# `gerar_planilha_faturamento_implantacao_lote`, usada pelo e-mail do LOTE —
+# `enviar_email_lote` — e pelo botão "Baixar planilha"). RN própria desta
+# feature ainda será formalizada pelo Orquestrador em `business_rules.md`/
+# `checklist.md`; aqui ela referencia as regras já existentes que
+# reaproveita: RN-074 (base de escolas — RI atual em "Aguardando validação
+# EACE"), RN-079 (filtro Estado/Município) e RN-076 (Valor Total IXC =
+# quantidade × Valor de serviço dos itens do Lado IXC).
 # ---------------------------------------------------------------------------
 
 
 class PlanilhaFaturamentoImplantacaoError(Exception):
     """Erro de negócio ao gerar a planilha de faturamento de implantação
-    (`gerar_planilha_faturamento_implantacao`) — quem chamar (comando/futura
-    view) converte em mensagem para o usuário. Nome próprio, não reaproveita
-    `apps.ri.services.PlanilhaFaturamentoError`: são planilhas e fluxos
-    diferentes (esta é por Estado/Município, a do RI é por RI)."""
+    (`gerar_planilha_faturamento_implantacao`/`gerar_planilha_faturamento_
+    implantacao_lote`) — quem chamar (comando/view) converte em mensagem
+    para o usuário. Nome próprio, não reaproveita `apps.ri.services.
+    PlanilhaFaturamentoError`: são planilhas e fluxos diferentes (esta é por
+    Estado/Município ou por LOTE, a do RI é por RI)."""
 
 
 CAMINHO_PLANILHA_FATURAMENTO_IMPLANTACAO_MODELO = settings.BASE_DIR / "doc" / "FATURAMENTO IMPLANTAÇÃO.xlsx"
+
+MIME_PLANILHA_FATURAMENTO_IMPLANTACAO = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+# Mesmo padrão de `apps.ri.services._CARACTERES_INVALIDOS_ARQUIVO` —
+# duplicado aqui (função pequena, evita importar símbolo privado de outro
+# módulo, mesmo critério já usado por `apps.escolas.forms.
+# _limpar_lista_emails_lote`) para o nome do .xlsx anexado ao e-mail do
+# LOTE/baixado pelo botão "Baixar planilha" (FEAT-045).
+_CARACTERES_INVALIDOS_ARQUIVO_IMPLANTACAO = re.compile(r'[\\/:*?"<>|\r\n]')
 
 # Mesmo padrão de `apps.ri.services._RE_OBS_*`/`_substituir_observacoes_nf`
 # (RN-013): troca só os trechos variáveis da célula F10, preservando
@@ -429,6 +814,17 @@ def _nome_aba_municipio(municipio):
     projeto deveria precisar do corte."""
     limpo = _CARACTERES_INVALIDOS_ABA_EXCEL.sub("", municipio).strip()
     return limpo[:31] or municipio[:31]
+
+
+def nome_arquivo_planilha_faturamento_implantacao(lote):
+    """Nome do .xlsx anexado ao e-mail do LOTE (FEAT-045) e baixado pelo
+    botão "Baixar planilha" — mesmo espírito de `apps.ri.services.
+    nome_arquivo_planilha_faturamento` (facilita achar o arquivo certo),
+    adaptado ao identificador do LOTE (não ao INEP, como no RI, já que este
+    arquivo soma todos os INEPs do LOTE): "FATURAMENTO IMPLANTAÇÃO EACE -
+    <Município>-<UF> - LOTE-0001.xlsx"."""
+    municipio_limpo = _CARACTERES_INVALIDOS_ARQUIVO_IMPLANTACAO.sub("", lote.municipio or "").strip()
+    return f"FATURAMENTO IMPLANTAÇÃO EACE - {municipio_limpo}-{lote.estado} - {lote}.xlsx"
 
 
 def gerar_planilha_faturamento_implantacao(estado, municipio, data_envio):
@@ -501,6 +897,60 @@ def gerar_planilha_faturamento_implantacao(estado, municipio, data_envio):
             f"Nenhum INEP encontrado para {municipio}/{estado}."
         )
 
+    return _montar_planilha_faturamento_implantacao(
+        escolas, estado=estado, municipio=municipio, data_envio=data_envio
+    )
+
+
+def gerar_planilha_faturamento_implantacao_lote(lote, data_envio):
+    """FEAT-045 (a formalizar pelo Orquestrador em business_rules.md; pedido
+    do usuário, 2026-09-14): mesma planilha de `gerar_planilha_faturamento_
+    implantacao` acima (mesmo modelo `doc/FATURAMENTO IMPLANTAÇÃO.xlsx`,
+    mesmas células calculadas), mas a partir dos INEPs FIXOS de um `Lote`
+    (`lote.escolas`, RN-098) — nunca reaplica o filtro por Estado/Município/
+    status daquela função: o que compõe ESTE arquivo é exatamente quem está
+    no LOTE hoje, ponto (pedido do usuário: "o valor é a soma de todos os
+    INEPS daquele LOTE"), mesmo que outro INEP do mesmo Estado/Município
+    tenha entrado em "Aguardando validação EACE" depois da criação do LOTE
+    (ou o LOTE tenha sido criado antes deste sistema separar INEPs em
+    LOTEs). Usada pelo e-mail do LOTE (`enviar_email_lote`, anexo sempre
+    gerado) e pelo botão "Baixar planilha" (`mip_lote_baixar_planilha_
+    view`).
+
+    Estado/Município (rótulo do texto de observação e nome da aba) vêm de
+    `lote.estado`/`lote.municipio` — o "rótulo" gravado na criação do LOTE
+    (RN-098), não de cada Escola individualmente (todo INEP de um mesmo
+    LOTE já tem o mesmo Estado/Município, por construção de `criar_lote_
+    mip`). `data_envio` é a data em que o e-mail está sendo enviado (ou a
+    data de hoje, no caso do "Baixar planilha") — mesma regra de VENCIMENTO
+    = `data_envio` + 30 dias corridos.
+
+    Levanta `PlanilhaFaturamentoImplantacaoError` se o LOTE não tiver
+    nenhum INEP — não deveria acontecer na prática (todo LOTE nasce com
+    pelo menos 1, `criar_lote_mip`), mas esta função nunca gera uma
+    planilha vazia."""
+    escolas = list(
+        lote.escolas.order_by("nome").prefetch_related(
+            Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc"))
+        )
+    )
+    if not escolas:
+        raise PlanilhaFaturamentoImplantacaoError(f"{lote} não tem nenhum INEP.")
+
+    return _montar_planilha_faturamento_implantacao(
+        escolas, estado=lote.estado, municipio=lote.municipio, data_envio=data_envio
+    )
+
+
+def _montar_planilha_faturamento_implantacao(escolas, *, estado, municipio, data_envio):
+    """Preenche o modelo `doc/FATURAMENTO IMPLANTAÇÃO.xlsx` a partir de uma
+    lista de `escolas` já resolvida pelo chamador — compartilhado por
+    `gerar_planilha_faturamento_implantacao` (filtro Estado+Município do
+    grid "Projeto > MIP") e `gerar_planilha_faturamento_implantacao_lote`
+    (INEPs fixos de um `Lote`, FEAT-045): só muda de onde vêm as escolas, o
+    preenchimento da planilha é sempre o mesmo. Ver as duas funções acima
+    para o detalhamento de cada célula calculada (VALOR R$/H10, CÓDIGO
+    INEPS/F10, VENCIMENTO/E10, aba/A13)."""
     # Catálogo carregado uma única vez (fora do loop), mesmo padrão anti-N+1
     # já usado pelo grid do MIP (RN-010/RN-076).
     catalogo_kits = list(KitPadrao.objects.all())
