@@ -17,7 +17,17 @@
         <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">LOTEs criados a partir do filtro Estado/Município/Data no grid do MIP</p>
     </div>
 
-    <div class="flex gap-4">
+    <div class="flex gap-4 items-end">
+        {% if not request.user.is_visualizador %}
+        {# Pedido do usuário (2026-09-15): baixar em .zip a planilha de faturamento de vários LOTEs marcados de uma vez (1 arquivo por LOTE dentro do .zip). Os checkboxes ficam nas linhas da tabela, fora deste form, e usam o atributo HTML form="form-baixar-planilhas-lotes" pra submeter aqui — cada linha já tem forms próprios (status, desfazer), então não dá pra aninhar um <form> em volta da tabela inteira. #}
+        <form id="form-baixar-planilhas-lotes" method="POST" action="{% url 'mip_lote_baixar_planilhas_zip' %}" target="_blank"
+              onsubmit="return document.querySelectorAll('input[name=lote_ids]:checked').length > 0 || (alert('Selecione ao menos um LOTE para baixar.'), false);">
+            {% csrf_token %}
+            <button type="submit" class="inline-flex items-center gap-1.5 px-4 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg">
+                <i data-lucide="download" class="w-4 h-4"></i> Baixar planilhas (.zip)
+            </button>
+        </form>
+        {% endif %}
         <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Total de LOTEs</p>
             <p class="text-xl font-black italic text-pv-yellow">{{ page_obj.paginator.count }}</p>
@@ -30,6 +40,12 @@
         <table class="min-w-full text-left border-collapse">
             <thead>
                 <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    {% if not request.user.is_visualizador %}
+                    <th class="px-4 py-2 w-8">
+                        <input type="checkbox" data-selecionar-todos-lote title="Selecionar todos os LOTEs desta página"
+                               class="w-3.5 h-3.5 cursor-pointer accent-pv-yellow">
+                    </th>
+                    {% endif %}
                     <th class="px-4 py-2">ID do LOTE</th>
                     <th class="px-4 py-2">Estado</th>
                     <th class="px-4 py-2">Município</th>
@@ -46,6 +62,12 @@
                 {% for linha in linhas_lote %}
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all group cursor-pointer divide-x divide-gray-300 dark:divide-gray-700"
                     data-lote-toggle title="Clique para ver os INEPs deste LOTE">
+                    {% if not request.user.is_visualizador %}
+                    <td class="px-4 py-2" data-no-toggle>
+                        <input type="checkbox" name="lote_ids" value="{{ linha.lote.pk }}" form="form-baixar-planilhas-lotes"
+                               data-checkbox-lote class="w-3.5 h-3.5 cursor-pointer accent-pv-yellow">
+                    </td>
+                    {% endif %}
                     <td class="px-4 py-2">
                         <div class="flex items-center gap-2">
                             <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-gray-300 dark:text-gray-600 shrink-0 transition-transform" data-lote-chevron></i>
@@ -61,7 +83,7 @@
                         <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
                             {% if linha.lote.status == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
                             {% elif linha.lote.status == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
-                            {% elif linha.lote.status == 'email_enviado' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
+                            {% elif linha.lote.status == 'em_faturamento' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
                             {% else %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400{% endif %}">
                             {{ linha.lote.get_status_display }}
                         </span>
@@ -69,22 +91,33 @@
                     {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2" data-no-toggle>
                         <div class="flex flex-col items-start gap-1.5">
+                            {% comment %}
+                            Pedido do usuário (2026-09-15): botão "Enviar e-mail" comentado (não será usado por enquanto) — ver `_modal_enviar_email_lote.html`.
                             {% if linha.lote.status == 'aguardando_encerramento' or linha.lote.status == 'email_enviado' %}
                             <button type="button" data-abrir-modal-email="modal-email-lote-{{ linha.lote.pk }}"
                                     class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
                                 <i data-lucide="mail" class="w-3.5 h-3.5"></i> Enviar e-mail
                             </button>
+                            {% endif %}
+                            {% endcomment %}
+                            <a href="{% url 'mip_lote_baixar_planilha' pk=linha.lote.pk %}?next={{ request.get_full_path|urlencode }}"
+                               target="_blank"
+                               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                                <i data-lucide="download" class="w-3.5 h-3.5"></i> Baixar planilha
+                            </a>
                             <!-- FEAT-049 (a formalizar pelo Orquestrador em
                                  business_rules.md; pedido do usuário,
                                  2026-09-14): "Desfazer LOTE" — mesma
                                  confirmação simples (`onsubmit="return
                                  confirm(...)"`) já usada nos botões de
-                                 excluir do RI/MIP. Só aparece nos mesmos 2
-                                 status em que ainda dá pra reenviar o
-                                 e-mail (`services.desfazer_lote_mip`) — a
-                                 partir de "Em Andamento"/"Faturamento
-                                 Concluído" o RI de cada INEP já foi
-                                 reaberto/encerrado de verdade. -->
+                                 excluir do RI/MIP. Só aparece no mesmo
+                                 status em que ainda dá pra desfazer
+                                 (`services.desfazer_lote_mip`) — a partir
+                                 de "Em Andamento"/"Em Faturamento"/
+                                 "Processo Concluído" o RI de cada INEP já
+                                 pode ter sido reaberto/o processo já foi
+                                 encerrado de verdade. -->
+                            {% if linha.lote.status == 'aguardando_encerramento' %}
                             <form method="POST" action="{% url 'mip_lote_desfazer' pk=linha.lote.pk %}"
                                   onsubmit="return confirm('Desfazer {{ linha.lote|escapejs }}? Os {{ linha.escolas|length }} INEP(s) voltam para \'Aguardando Validação EACE\' no MIP e o LOTE deixa de existir.');">
                                 {% csrf_token %}
@@ -97,14 +130,16 @@
                             {% if linha.lote.email_enviado_em %}
                             <span class="text-[9px] font-bold text-gray-400 dark:text-gray-500">Enviado em {{ linha.lote.email_enviado_em|date:"d/m/Y H:i" }}</span>
                             {% endif %}
-                            {% if linha.lote.status == 'email_enviado' %}
+                            {% if linha.lote.status != 'faturamento_concluido' %}
+                            {# Pedido do usuário (2026-09-15): no lugar do envio de e-mail, campo de troca manual de status com 3 opções. #}
                             <form method="POST" action="{% url 'mip_lote_status_update' pk=linha.lote.pk %}" data-salvar-ao-trocar class="mt-1">
                                 {% csrf_token %}
                                 <input type="hidden" name="next" value="{{ request.get_full_path }}">
                                 <select name="status" class="px-2 py-1 bg-gray-50 dark:bg-gray-800 border-none rounded-lg outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer font-black text-[10px] text-gray-700 dark:text-gray-300 uppercase">
                                     <option value="">Mudar status...</option>
                                     <option value="em_andamento">Em Andamento</option>
-                                    <option value="faturamento_concluido">Faturamento Concluído</option>
+                                    <option value="em_faturamento">Em Faturamento</option>
+                                    <option value="faturamento_concluido">Processo Concluído</option>
                                 </select>
                             </form>
                             {% endif %}
@@ -113,7 +148,7 @@
                     {% endif %}
                 </tr>
                 <tr class="hidden" data-lote-detalhe>
-                    <td colspan="8" class="px-8 py-6 bg-gray-50/60 dark:bg-gray-800/40">
+                    <td colspan="9" class="px-8 py-6 bg-gray-50/60 dark:bg-gray-800/40">
                         <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 mb-3">INEPs deste LOTE</p>
                         <div class="overflow-x-auto contain-layout rounded-2xl border border-gray-200 dark:border-gray-700">
                             <table class="min-w-full text-left border-collapse bg-white dark:bg-gray-900">
@@ -149,7 +184,7 @@
                                             <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
                                                 {% if item.escola.status_mip == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
                                                 {% elif item.escola.status_mip == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
-                                                {% elif item.escola.status_mip == 'email_lote_enviado' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
+                                                {% elif item.escola.status_mip == 'em_faturamento_lote' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
                                                 {% else %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400{% endif %}">
                                                 {{ item.escola.get_status_mip_display }}
                                             </span>
@@ -183,7 +218,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="8" class="px-8 py-20 text-center">
+                    <td colspan="9" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="package-search" class="w-8 h-8"></i>
@@ -229,7 +264,12 @@ containing block de `position: fixed`, o que faria o modal ancorar só na
 área visível da tabela em vez de cobrir a viewport inteira. 2º laço só
 para renderizar os modais — nenhuma consulta nova (mesmo `linhas_lote` já
 calculado na view).
-{% endcomment %}
+
+Pedido do usuário (2026-09-15): envio de e-mail do LOTE comentado (não
+será usado por enquanto) — bloco abaixo (e o modal `_modal_enviar_email_
+lote.html` que ele incluía) mantido comentado, não apagado, para
+reativação futura.
+
 {% if not request.user.is_visualizador %}
 {% for linha in linhas_lote %}
 {% if linha.lote.status == 'aguardando_encerramento' or linha.lote.status == 'email_enviado' %}
@@ -237,6 +277,7 @@ calculado na view).
 {% endif %}
 {% endfor %}
 {% endif %}
+{% endcomment %}
 {% endblock %}
 
 {% block extra_js %}
@@ -269,5 +310,17 @@ document.querySelectorAll('[data-inep-navegar]').forEach(function (linha) {
         window.location.href = linha.getAttribute('data-inep-navegar');
     });
 });
+
+// Pedido do usuário (2026-09-15): checkbox do cabeçalho marca/desmarca
+// todos os LOTEs desta página de uma vez, pra facilitar selecionar vários
+// antes de "Baixar planilhas (.zip)".
+var selecionarTodosLote = document.querySelector('[data-selecionar-todos-lote]');
+if (selecionarTodosLote) {
+    selecionarTodosLote.addEventListener('change', function () {
+        document.querySelectorAll('[data-checkbox-lote]').forEach(function (checkbox) {
+            checkbox.checked = selecionarTodosLote.checked;
+        });
+    });
+}
 </script>
 {% endblock %}

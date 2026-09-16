@@ -40,14 +40,23 @@ class Escola(models.Model):
     # quando o e-mail do LOTE é enviado (`apps.escolas.services.
     # enviar_email_lote`) — também nunca escolhido manualmente (mesmo
     # critério do valor acima).
+    # Pedido do usuário (2026-09-15): envio de e-mail do LOTE foi comentado
+    # (não será usado por enquanto, ver `Lote` abaixo) — este status deixou
+    # de ser alcançável, mas a constante e o valor ficam mantidos (dado
+    # histórico e reativação futura).
     EMAIL_LOTE_ENVIADO = "email_lote_enviado"
+    # Pedido do usuário (2026-09-15): novo status intermediário do fluxo do
+    # LOTE, escolhido manualmente no lugar do antigo envio de e-mail — ver
+    # `Lote.EM_FATURAMENTO`.
+    EM_FATURAMENTO_LOTE = "em_faturamento_lote"
     FATURAMENTO_CONCLUIDO = "faturamento_concluido"
     STATUS_MIP_CHOICES = [
         (EM_ANDAMENTO, "Em Andamento"),
         (AGUARDANDO_VALIDACAO_EACE, "Aguardando Validação EACE"),
         (AGUARDANDO_ENCERRAMENTO_LOTE, "Aguardando Encerramento LOTE"),
-        (EMAIL_LOTE_ENVIADO, "Email em LOTE enviado"),
-        (FATURAMENTO_CONCLUIDO, "Faturamento Concluído"),
+        # (EMAIL_LOTE_ENVIADO, "Email em LOTE enviado"),  # e-mail do LOTE comentado (pedido do usuário, 2026-09-15)
+        (EM_FATURAMENTO_LOTE, "Em Faturamento"),
+        (FATURAMENTO_CONCLUIDO, "Processo Concluído"),
     ]
 
     inep = models.CharField("INEP", max_length=8, unique=True)
@@ -356,6 +365,13 @@ class Lote(models.Model):
     # estiver em `AGUARDANDO_ENCERRAMENTO`/`EMAIL_ENVIADO` (bloqueado depois
     # que o LOTE avança para "Em Andamento"/"Faturamento Concluído" —
     # RN a formalizar, pedido do usuário 2026-09-14, ver `enviar_email_lote`).
+    #
+    # Pedido do usuário (2026-09-15): o envio de e-mail do LOTE foi
+    # comentado em todo o código (`apps.escolas.services.enviar_email_lote`,
+    # a view, o form, o botão e o modal) — não será usado por enquanto. Os
+    # 2 campos abaixo ficam mantidos (sem migration de remoção) só para não
+    # perder o dado de quem já tinha e-mail enviado antes dessa mudança e
+    # para permitir reativar a função no futuro sem recriar coluna.
     email_enviado_em = models.DateTimeField("E-mail enviado em", null=True, blank=True)
     email_enviado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -369,22 +385,32 @@ class Lote(models.Model):
     # do usuário, 2026-09-14): ciclo de vida próprio do LOTE — nasce em
     # AGUARDANDO_ENCERRAMENTO (mesmo instante da criação, espelha o
     # `Escola.status_mip = "aguardando_encerramento_lote"` que cada INEP já
-    # ganha); `enviar_email_lote` avança para EMAIL_ENVIADO; a partir daí a
-    # tela "Projeto > MIP (LOTE)" libera a troca manual para EM_ANDAMENTO
-    # ("vai para o RI como é hoje", pedido do usuário) ou
-    # FATURAMENTO_CONCLUIDO ("encerra o processo completo") —
-    # `apps.escolas.views.mip_lote_status_update_view`. Cada transição muda
-    # também o `Escola.status_mip` de todos os INEPs do LOTE e grava no
-    # histórico de cada um (pedido explícito do usuário).
+    # ganha).
+    #
+    # Pedido do usuário (2026-09-15): o envio de e-mail (`EMAIL_ENVIADO`,
+    # que antes liberava a troca manual) foi comentado — no lugar dele, a
+    # tela "Projeto > MIP (LOTE)" mostra direto, a partir de
+    # AGUARDANDO_ENCERRAMENTO, o campo de troca manual de status com as 3
+    # opções abaixo: EM_ANDAMENTO ("vai para o RI como é hoje", pedido do
+    # usuário), EM_FATURAMENTO (novo status intermediário) e
+    # FATURAMENTO_CONCLUIDO (rótulo "Processo Concluído" — fim do
+    # processo). Cada transição muda também o `Escola.status_mip` de todos
+    # os INEPs do LOTE e grava no histórico de cada um (pedido explícito do
+    # usuário) — `apps.escolas.views.mip_lote_status_update_view`.
     AGUARDANDO_ENCERRAMENTO = "aguardando_encerramento"
+    # EMAIL_ENVIADO — e-mail do LOTE comentado (pedido do usuário,
+    # 2026-09-15); constante mantida para não quebrar LOTE antigo que já
+    # tenha esse valor gravado.
     EMAIL_ENVIADO = "email_enviado"
     EM_ANDAMENTO = "em_andamento"
+    EM_FATURAMENTO = "em_faturamento"
     FATURAMENTO_CONCLUIDO = "faturamento_concluido"
     STATUS_CHOICES = [
         (AGUARDANDO_ENCERRAMENTO, "Aguardando Encerramento LOTE"),
-        (EMAIL_ENVIADO, "Email em LOTE enviado"),
+        # (EMAIL_ENVIADO, "Email em LOTE enviado"),  # e-mail do LOTE comentado (pedido do usuário, 2026-09-15)
         (EM_ANDAMENTO, "Em Andamento"),
-        (FATURAMENTO_CONCLUIDO, "Faturamento Concluído"),
+        (EM_FATURAMENTO, "Em Faturamento"),
+        (FATURAMENTO_CONCLUIDO, "Processo Concluído"),
     ]
     status = models.CharField(
         "Status", max_length=30, choices=STATUS_CHOICES, default=AGUARDANDO_ENCERRAMENTO

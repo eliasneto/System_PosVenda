@@ -17,7 +17,7 @@ from decimal import Decimal
 import openpyxl
 from django.conf import settings
 from django.core.files.base import ContentFile
-from django.core.mail import EmailMessage
+# from django.core.mail import EmailMessage  # e-mail do LOTE comentado (pedido do usuario, 2026-09-15)
 from django.db import transaction
 from django.db.models import DateField, OuterRef, Prefetch, Subquery
 from django.utils import timezone
@@ -606,16 +606,20 @@ def desfazer_lote_mip(lote, usuario):
     desfeito, mesmo depois de o registro do `Lote` sumir daqui.
 
     Só permitido enquanto o LOTE ainda não avançou de verdade -
-    `AGUARDANDO_ENCERRAMENTO` ou `EMAIL_ENVIADO` (mesma dupla que ainda
-    permite reenviar o e-mail, `enviar_email_lote`) - porque a partir de
-    "Em Andamento" o RI de cada INEP já foi REABERTO de verdade
-    (`trocar_status_com_log`, RN-092) e "Faturamento Concluído" já encerra
-    o processo; desfazer dali teria que reverter uma transição real do RI
+    `AGUARDANDO_ENCERRAMENTO` - porque a partir de "Em Andamento"/"Em
+    Faturamento" o RI de cada INEP já pode ter sido REABERTO de verdade
+    (`trocar_status_com_log`, RN-092) e "Processo Concluído" já encerra o
+    processo; desfazer dali teria que reverter uma transição real do RI
     (ou um faturamento já dado como concluído), o que o usuário não pediu
     - decisão do Dev (2026-09-14, reversível/baixo risco, CLAUDE.md §9).
-    Levanta `LoteMipError` fora desses 2 status - a view converte em
-    mensagem para o usuário."""
-    if lote.status not in (Lote.AGUARDANDO_ENCERRAMENTO, Lote.EMAIL_ENVIADO):
+    Levanta `LoteMipError` fora desse status - a view converte em mensagem
+    para o usuário.
+
+    Pedido do usuário (2026-09-15): `EMAIL_ENVIADO` saiu deste critério
+    porque o envio de e-mail do LOTE foi comentado (não é mais alcançado
+    por um LOTE novo) - mantido só como valor histórico possível em LOTE
+    antigo, sem tratamento especial aqui."""
+    if lote.status != Lote.AGUARDANDO_ENCERRAMENTO:
         raise LoteMipError(
             f'Não é possível desfazer {lote} — já está em "{lote.get_status_display()}".'
         )
@@ -634,153 +638,160 @@ def desfazer_lote_mip(lote, usuario):
     lote.delete()
 
 
-def montar_assunto_email_lote(lote):
-    """FEAT-045 (a formalizar pelo Orquestrador em business_rules.md;
-    pedido do usuário, 2026-09-14): assunto sugerido do e-mail do LOTE —
-    mesmo padrão visual do assunto do e-mail do RI
-    (`apps.ri.views._assunto_sugerido_email`, RN-009/RN-050), mas sem o
-    código de rastreio: aquele mecanismo existe para o financeiro
-    responder e o sistema casar a resposta com o INEP certo (FEAT-009,
-    leitura automática de e-mail) — o LOTE não tem esse fluxo de leitura
-    de resposta, só o envio (pedido do usuário)."""
-    return f"Faturamento EACE — {lote} — {lote.municipio}/{lote.estado}"
+# Pedido do usuario (2026-09-15): envio de e-mail do LOTE comentado (nao
+# sera usado por enquanto) -- MIP (LOTE) passa a usar so o campo de status
+# manual (Lote.EM_ANDAMENTO / Lote.EM_FATURAMENTO / Lote.FATURAMENTO_CONCLUIDO,
+# ver apps.escolas.views.mip_lote_status_update_view). Codigo mantido
+# comentado (nao apagado) para reativacao futura.
+#
+# def montar_assunto_email_lote(lote):
+    # """FEAT-045 (a formalizar pelo Orquestrador em business_rules.md;
+    # pedido do usuário, 2026-09-14): assunto sugerido do e-mail do LOTE —
+    # mesmo padrão visual do assunto do e-mail do RI
+    # (`apps.ri.views._assunto_sugerido_email`, RN-009/RN-050), mas sem o
+    # código de rastreio: aquele mecanismo existe para o financeiro
+    # responder e o sistema casar a resposta com o INEP certo (FEAT-009,
+    # leitura automática de e-mail) — o LOTE não tem esse fluxo de leitura
+    # de resposta, só o envio (pedido do usuário)."""
+    # return f"Faturamento EACE — {lote} — {lote.municipio}/{lote.estado}"
 
 
-def montar_corpo_email_lote(lote):
-    """Texto simples do corpo do e-mail do LOTE — mesmo espírito de
-    `apps.ri.services.montar_corpo_email_financeiro`, adaptado para
-    listar todos os INEPs do lote (o RI lista os itens de 1 RI só)."""
-    escolas = list(lote.escolas.order_by("nome"))
+# def montar_corpo_email_lote(lote):
+    # """Texto simples do corpo do e-mail do LOTE — mesmo espírito de
+    # `apps.ri.services.montar_corpo_email_financeiro`, adaptado para
+    # listar todos os INEPs do lote (o RI lista os itens de 1 RI só)."""
+    # escolas = list(lote.escolas.order_by("nome"))
     # RN-098 (correção, 2026-09-14): Data início/fim agora são opcionais
     # (ver `criar_lote_mip`) - sem as duas, o LOTE não tem período pra
     # mostrar (nunca formata `None` como data, CLAUDE.md §9).
-    if lote.data_inicio and lote.data_fim:
-        periodo = f"Período: {lote.data_inicio:%d/%m/%Y} a {lote.data_fim:%d/%m/%Y}"
-    else:
-        periodo = "Período: não informado"
-    partes = [
-        f"LOTE: {lote}",
-        f"Município/UF: {lote.municipio}/{lote.estado}",
-        periodo,
-        f"Total de INEPs: {len(escolas)}",
-        "",
-        "INEPs deste LOTE:",
-    ]
-    for escola in escolas:
-        partes.append(f"- {escola.inep} — {escola.nome}")
-    return "\n".join(partes)
+    # if lote.data_inicio and lote.data_fim:
+        # periodo = f"Período: {lote.data_inicio:%d/%m/%Y} a {lote.data_fim:%d/%m/%Y}"
+    # else:
+        # periodo = "Período: não informado"
+    # partes = [
+        # f"LOTE: {lote}",
+        # f"Município/UF: {lote.municipio}/{lote.estado}",
+        # periodo,
+        # f"Total de INEPs: {len(escolas)}",
+        # "",
+        # "INEPs deste LOTE:",
+    # ]
+    # for escola in escolas:
+        # partes.append(f"- {escola.inep} — {escola.nome}")
+    # return "\n".join(partes)
 
 
-@transaction.atomic
-def enviar_email_lote(lote, *, para, assunto, mensagem, anexo_extra, usuario):
-    """FEAT-045/FEAT-046 (a formalizar pelo Orquestrador em
-    business_rules.md; pedido do usuário, 2026-09-14): envia o e-mail do
-    LOTE, avança `Lote.status` para "Email em LOTE enviado" e grava, no
-    histórico do RI atual de CADA INEP deste LOTE, que o e-mail foi
-    disparado a partir dele — pedido explícito do usuário: "todos os
-    históricos de todos os INEPs que estiver dentro desse LOTE deve
-    receber a informação que o email foi disparado do LOTE X". Mesmo
-    `tipo=RiHistorico.EMAIL` já usado pelo e-mail do RI (FEAT-008) — o
-    painel de histórico (`ri/_historico_panel.html`) já sabe exibir esse
-    tipo, nenhuma mudança de template precisou ser feita aqui.
+# @transaction.atomic
+# def enviar_email_lote(lote, *, para, assunto, mensagem, anexo_extra, usuario):
+    # """FEAT-045/FEAT-046 (a formalizar pelo Orquestrador em
+    # business_rules.md; pedido do usuário, 2026-09-14): envia o e-mail do
+    # LOTE, avança `Lote.status` para "Email em LOTE enviado" e grava, no
+    # histórico do RI atual de CADA INEP deste LOTE, que o e-mail foi
+    # disparado a partir dele — pedido explícito do usuário: "todos os
+    # históricos de todos os INEPs que estiver dentro desse LOTE deve
+    # receber a informação que o email foi disparado do LOTE X". Mesmo
+    # `tipo=RiHistorico.EMAIL` já usado pelo e-mail do RI (FEAT-008) — o
+    # painel de histórico (`ri/_historico_panel.html`) já sabe exibir esse
+    # tipo, nenhuma mudança de template precisou ser feita aqui.
 
-    Só pode ser chamada com `Lote.status` em `AGUARDANDO_ENCERRAMENTO` ou
-    já `EMAIL_ENVIADO` (reenvio permitido enquanto nada mais aconteceu
-    depois) — levanta `LoteMipError` se o LOTE já avançou para "Em
-    Andamento"/"Faturamento Concluído" (`mip_lote_status_update_view`):
-    reenviar nesse ponto reverteria `Escola.status_mip` de todo INEP do
-    LOTE de volta para "Email em LOTE enviado", inclusive de quem já saiu
-    daqui (ex.: RI reaberto) — decisão do Dev (2026-09-14, reversível/
-    baixo risco, CLAUDE.md §9).
+    # Só pode ser chamada com `Lote.status` em `AGUARDANDO_ENCERRAMENTO` ou
+    # já `EMAIL_ENVIADO` (reenvio permitido enquanto nada mais aconteceu
+    # depois) — levanta `LoteMipError` se o LOTE já avançou para "Em
+    # Andamento"/"Faturamento Concluído" (`mip_lote_status_update_view`):
+    # reenviar nesse ponto reverteria `Escola.status_mip` de todo INEP do
+    # LOTE de volta para "Email em LOTE enviado", inclusive de quem já saiu
+    # daqui (ex.: RI reaberto) — decisão do Dev (2026-09-14, reversível/
+    # baixo risco, CLAUDE.md §9).
 
-    "De" é sempre `settings.DEFAULT_FROM_EMAIL` (mesmo do RI, pedido do
-    usuário: "o Do email é o mesmo") — nem é parâmetro desta função, quem
-    decide é sempre o `EmailMessage`. "Para" pode chegar vazio (`[]`,
-    pedido do usuário: "o PARA pode deixar em branco") — sem nenhum
-    destinatário, `EmailMessage.send()` simplesmente não entrega nada
-    (comportamento padrão do Django, não é erro daqui); mesmo assim o
-    histórico de cada INEP é gravado e `Lote.email_enviado_em` é
-    atualizado, porque o usuário pode estar só validando o texto/anexo
-    antes de preencher o Para de verdade depois.
+    # "De" é sempre `settings.DEFAULT_FROM_EMAIL` (mesmo do RI, pedido do
+    # usuário: "o Do email é o mesmo") — nem é parâmetro desta função, quem
+    # decide é sempre o `EmailMessage`. "Para" pode chegar vazio (`[]`,
+    # pedido do usuário: "o PARA pode deixar em branco") — sem nenhum
+    # destinatário, `EmailMessage.send()` simplesmente não entrega nada
+    # (comportamento padrão do Django, não é erro daqui); mesmo assim o
+    # histórico de cada INEP é gravado e `Lote.email_enviado_em` é
+    # atualizado, porque o usuário pode estar só validando o texto/anexo
+    # antes de preencher o Para de verdade depois.
 
-    FEAT-045 (pedido do usuário, 2026-09-14, resolvendo a pendência
-    anterior desta função — "esse anexo vai ser criado futuramente"): o
-    anexo OFICIAL do e-mail do LOTE agora é gerado automaticamente,
-    SEMPRE — `gerar_planilha_faturamento_implantacao_lote` (mesmo modelo
-    `doc/FATURAMENTO IMPLANTAÇÃO.xlsx`, RN a formalizar), com os INEPs
-    fixos deste LOTE (nunca um novo filtro por Estado/Município/status —
-    ver docstring daquela função) e `data_envio=` a data de hoje (o
-    VENCIMENTO da planilha é essa data + 30 dias corridos, "a criação
-    desse documento" citada pelo usuário). Mesmo padrão do e-mail do RI
-    (`apps.ri.views.ri_enviar_email_financeiro_view`): essa planilha
-    gerada é quem fica salva no histórico de cada INEP (`RiHistorico.
-    anexo`), não o `anexo_extra` abaixo.
+    # FEAT-045 (pedido do usuário, 2026-09-14, resolvendo a pendência
+    # anterior desta função — "esse anexo vai ser criado futuramente"): o
+    # anexo OFICIAL do e-mail do LOTE agora é gerado automaticamente,
+    # SEMPRE — `gerar_planilha_faturamento_implantacao_lote` (mesmo modelo
+    # `doc/FATURAMENTO IMPLANTAÇÃO.xlsx`, RN a formalizar), com os INEPs
+    # fixos deste LOTE (nunca um novo filtro por Estado/Município/status —
+    # ver docstring daquela função) e `data_envio=` a data de hoje (o
+    # VENCIMENTO da planilha é essa data + 30 dias corridos, "a criação
+    # desse documento" citada pelo usuário). Mesmo padrão do e-mail do RI
+    # (`apps.ri.views.ri_enviar_email_financeiro_view`): essa planilha
+    # gerada é quem fica salva no histórico de cada INEP (`RiHistorico.
+    # anexo`), não o `anexo_extra` abaixo.
 
-    "anexo_extra" é o arquivo opcional enviado manualmente no formulário
-    de composição (mesmo espírito de `RiEmailFinanceiroForm.anexo_extra`)
-    — só mais um anexo do e-mail, somado ao acima; nunca substitui a
-    planilha gerada e não é salvo no histórico dos INEPs (mesmo critério
-    do RI: só o documento oficial fica registrado ali)."""
-    if lote.status not in (Lote.AGUARDANDO_ENCERRAMENTO, Lote.EMAIL_ENVIADO):
-        raise LoteMipError(
-            f'{lote} já está em "{lote.get_status_display()}" — não é mais possível reenviar '
-            "o e-mail deste LOTE."
-        )
+    # "anexo_extra" é o arquivo opcional enviado manualmente no formulário
+    # de composição (mesmo espírito de `RiEmailFinanceiroForm.anexo_extra`)
+    # — só mais um anexo do e-mail, somado ao acima; nunca substitui a
+    # planilha gerada e não é salvo no histórico dos INEPs (mesmo critério
+    # do RI: só o documento oficial fica registrado ali)."""
+    # if lote.status not in (Lote.AGUARDANDO_ENCERRAMENTO, Lote.EMAIL_ENVIADO):
+        # raise LoteMipError(
+            # f'{lote} já está em "{lote.get_status_display()}" — não é mais possível reenviar '
+            # "o e-mail deste LOTE."
+        # )
 
-    workbook = gerar_planilha_faturamento_implantacao_lote(lote, data_envio=timezone.localdate())
-    planilha_stream = io.BytesIO()
-    workbook.save(planilha_stream)
-    planilha_bytes = planilha_stream.getvalue()
-    nome_planilha = nome_arquivo_planilha_faturamento_implantacao(lote)
+    # workbook = gerar_planilha_faturamento_implantacao_lote(lote, data_envio=timezone.localdate())
+    # planilha_stream = io.BytesIO()
+    # workbook.save(planilha_stream)
+    # planilha_bytes = planilha_stream.getvalue()
+    # nome_planilha = nome_arquivo_planilha_faturamento_implantacao(lote)
 
-    anexo_extra_bytes = anexo_extra.read() if anexo_extra else None
-    anexo_extra_nome = anexo_extra.name if anexo_extra else None
-    anexo_extra_content_type = anexo_extra.content_type if anexo_extra else None
+    # anexo_extra_bytes = anexo_extra.read() if anexo_extra else None
+    # anexo_extra_nome = anexo_extra.name if anexo_extra else None
+    # anexo_extra_content_type = anexo_extra.content_type if anexo_extra else None
 
-    email = EmailMessage(
-        subject=assunto,
-        body=mensagem,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        to=para,
-    )
-    email.attach(nome_planilha, planilha_bytes, MIME_PLANILHA_FATURAMENTO_IMPLANTACAO)
-    if anexo_extra_bytes:
-        email.attach(anexo_extra_nome, anexo_extra_bytes, anexo_extra_content_type)
-    email.send(fail_silently=False)
+    # email = EmailMessage(
+        # subject=assunto,
+        # body=mensagem,
+        # from_email=settings.DEFAULT_FROM_EMAIL,
+        # to=para,
+    # )
+    # email.attach(nome_planilha, planilha_bytes, MIME_PLANILHA_FATURAMENTO_IMPLANTACAO)
+    # if anexo_extra_bytes:
+        # email.attach(anexo_extra_nome, anexo_extra_bytes, anexo_extra_content_type)
+    # email.send(fail_silently=False)
 
-    lote.email_enviado_em = timezone.now()
-    lote.email_enviado_por = usuario
-    lote.status = Lote.EMAIL_ENVIADO
-    lote.save(update_fields=["email_enviado_em", "email_enviado_por", "status"])
+    # lote.email_enviado_em = timezone.now()
+    # lote.email_enviado_por = usuario
+    # lote.status = Lote.EMAIL_ENVIADO
+    # lote.save(update_fields=["email_enviado_em", "email_enviado_por", "status"])
 
-    auditar(
-        usuario,
-        Auditoria.ENVIO_EMAIL,
-        entidade="Lote",
-        entidade_id=lote.pk,
-        campo="assunto",
-        valor_novo=assunto,
-    )
+    # auditar(
+        # usuario,
+        # Auditoria.ENVIO_EMAIL,
+        # entidade="Lote",
+        # entidade_id=lote.pk,
+        # campo="assunto",
+        # valor_novo=assunto,
+    # )
 
-    for escola in lote.escolas.all():
-        status_anterior = escola.get_status_mip_display()
-        escola.status_mip = Escola.EMAIL_LOTE_ENVIADO
-        escola.save(update_fields=["status_mip"])
+    # for escola in lote.escolas.all():
+        # status_anterior = escola.get_status_mip_display()
+        # escola.status_mip = Escola.EMAIL_LOTE_ENVIADO
+        # escola.save(update_fields=["status_mip"])
 
-        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
-        if not ri_atual:
-            continue
-        entrada = RiHistorico(
-            ri=ri_atual,
-            tipo=RiHistorico.EMAIL,
-            autor=usuario,
-            mensagem=f"E-mail do {lote} enviado. Assunto: {assunto}",
-        )
-        entrada.anexo.save(nome_planilha, ContentFile(planilha_bytes), save=False)
-        entrada.save()
-        _registrar_log_campo_lote(
-            ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
-        )
+        # ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        # if not ri_atual:
+            # continue
+        # entrada = RiHistorico(
+            # ri=ri_atual,
+            # tipo=RiHistorico.EMAIL,
+            # autor=usuario,
+            # mensagem=f"E-mail do {lote} enviado. Assunto: {assunto}",
+        # )
+        # entrada.anexo.save(nome_planilha, ContentFile(planilha_bytes), save=False)
+        # entrada.save()
+        # _registrar_log_campo_lote(
+            # ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
+        # )
+
 
 
 # ---------------------------------------------------------------------------
@@ -831,9 +842,14 @@ _CARACTERES_INVALIDOS_ABA_EXCEL = re.compile(r"[\[\]:*?/\\]")
 
 def _substituir_observacoes_faturamento_implantacao(texto_modelo, *, municipio, estado, data_str, codigos_ineps):
     """Troca MUNICIPIO/UF, VENCIMENTO e CÓDIGO INEPS no texto da célula F10
-    já existente na planilha-modelo — nunca reescreve o texto do zero."""
+    já existente na planilha-modelo — nunca reescreve o texto do zero.
+
+    Pedido do usuário (2026-09-16): nome do Município em maiúsculo neste
+    texto de observação (`municipio.upper()`) — só aqui; o nome da aba
+    (`_nome_aba_municipio`) continua na capitalização normal de
+    `Escola.municipio`/`Lote.municipio`, sem mudança."""
     texto = _RE_OBS_IMPLANTACAO_MUNICIPIO_UF.sub(
-        lambda m: m.group(1) + f"{municipio}/{estado}", texto_modelo, count=1
+        lambda m: m.group(1) + f"{municipio.upper()}/{estado}", texto_modelo, count=1
     )
     texto = _RE_OBS_IMPLANTACAO_VENCIMENTO.sub(lambda m: m.group(1) + data_str, texto, count=1)
     texto = _RE_OBS_IMPLANTACAO_CODIGO_INEPS.sub(lambda m: m.group(1) + codigos_ineps, texto, count=1)

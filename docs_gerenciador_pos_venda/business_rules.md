@@ -3538,9 +3538,123 @@ RN-096.
 
 **Status:** Ativa.
 
+### RN-098 — Criação de LOTE agrupa INEPs elegíveis do MIP
+
+**Descrição:** A partir do filtro Estado+Município (+ Data de Ativação
+do RI, opcional) já existente no grid "Projeto > MIP", o botão "Criar
+LOTE" agrupa, num `Lote`, os INEPs que estão em "Aguardando Validação
+EACE" e com Valor Total (IXC) igual ao Valor Total (EACE) (RN-076/
+RN-077). Um modal de revisão lista os INEPs elegíveis (1 checkbox cada,
+todos marcados por padrão) para o usuário poder tirar algum antes de
+confirmar.
+
+**Contexto:** Usuário pediu para agrupar, em lote, os INEPs prontos
+para faturamento por Estado/Município/período, sem tratar um por um.
+Depois pediu 2 ajustes: Data inicial/final não podiam ser obrigatórias
+(bloqueavam o botão para um LOTE de 1 INEP só) e precisava poder
+revisar/tirar algum INEP antes de confirmar a criação.
+
+**Critérios:**
+- Estado e Município são obrigatórios; Data inicial/final são
+  opcionais — quando informadas, continuam restringindo pela Data de
+  Ativação do RI.
+- Só entram INEPs com RI atual em "Aguardando Validação EACE" e Valor
+  Total (IXC) == Valor Total (EACE).
+- Ao confirmar (via modal de revisão), cada INEP incluído ganha
+  `Escola.status_mip = "Aguardando Encerramento LOTE"` e uma entrada no
+  próprio histórico do RI (Status (MIP) + LOTE) — nenhum outro dado do
+  INEP muda.
+- "Desfazer LOTE" reverte exatamente isso — cada INEP volta para
+  "Aguardando Validação EACE" (com histórico) e o `Lote` é excluído —
+  só permitido enquanto o LOTE segue em "Aguardando Encerramento LOTE"
+  (RN-101 trava o resto do ciclo).
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.escolas.services.criar_lote_mip`/
+`escolas_elegiveis_lote_mip`/`desfazer_lote_mip`; modelo `Lote`;
+`apps.escolas.views.mip_lote_criar_view`/`mip_lote_desfazer_view`;
+templates `_modal_criar_lote.html`, `mip_lote_inep.html`.
+
+**Features relacionadas:** FEAT-044, FEAT-049, FEAT-050, RN-075,
+RN-076, RN-077.
+
+**Status:** Ativa.
+
+### RN-101 — Status do LOTE controla o Status (MIP) de todos os seus INEPs (e-mail do LOTE comentado)
+
+**Descrição:** O `Lote` tem um ciclo de status próprio, trocado
+manualmente na tela "Projeto > MIP (LOTE)": nasce em "Aguardando
+Encerramento LOTE" (RN-098) e, a partir daí, pode ir direto para "Em
+Andamento", "Em Faturamento" ou "Processo Concluído" (este último,
+terminal — sem volta pela tela). Cada troca aplica-se a TODOS os INEPs
+do LOTE de uma vez (tudo ou nada) e grava no histórico de cada um.
+
+**Contexto:** O desenho original (FEAT-045/046) previa enviar um
+e-mail do LOTE antes de liberar a troca de status. Pedido do usuário
+(2026-09-15): comentar o envio de e-mail (não será usado por enquanto)
+e liberar a troca de status direto, sem esse passo intermediário — e
+acrescentar um novo status "Em Faturamento" entre "Em Andamento" e o
+status final, renomeado de "Faturamento Concluído" para "Processo
+Concluído" (mesmo valor gravado no banco, só o rótulo mudou).
+
+**Critérios:**
+- "Em Andamento": reabre o RI de verdade (`Ri.status = "andamento"`) —
+  mesma validação e log de transição já usados no MIP individual
+  (RN-011/RN-052/RN-092); 1 INEP bloqueado (ex.: RN-020) impede a troca
+  de todos.
+- "Em Faturamento"/"Processo Concluído": só trocam
+  `Escola.status_mip`, nunca `Ri.status`.
+- Campo de troca fica disponível desde "Aguardando Encerramento LOTE"
+  até o LOTE chegar em "Processo Concluído" — dali em diante, bloqueado
+  (fim do processo).
+- Envio de e-mail do LOTE (`enviar_email_lote`) comentado em todo o
+  código (view, form, botão, modal, rota) — não apagado, para eventual
+  reativação futura; `Lote.email_enviado_em`/`email_enviado_por` seguem
+  no modelo, sem uso atual.
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `Lote.STATUS_CHOICES`/`Escola.STATUS_MIP_CHOICES`
+(migration `0015`, só `choices=`, sem mudança de coluna);
+`apps.escolas.views.mip_lote_status_update_view`; template
+`mip_lote_inep.html`.
+
+**Features relacionadas:** FEAT-045 (revisão — desativada), FEAT-046
+(revisão), RN-092, RN-098, RN-020.
+
+**Status:** Ativa.
+
+### RN-102 — Nome do Município em maiúsculo no texto de observação da planilha de faturamento de implantação
+
+**Descrição:** No texto da célula de observação ("MUNICIPIO/UF: ...")
+da planilha de faturamento de implantação — tanto no download
+individual quanto no `.zip` de vários LOTEs — o nome do Município
+aparece em maiúsculo (ex.: "MUNICIPIO/UF: ABADIÂNIA/GO"). O nome da
+aba da planilha não muda (continua na grafia normal de
+`Escola.municipio`/`Lote.municipio`).
+
+**Contexto:** Pedido do usuário (2026-09-16).
+
+**Critérios:**
+- Município em maiúsculo só no texto de observação (célula F10 do
+  modelo `doc/FATURAMENTO IMPLANTAÇÃO.xlsx`).
+- UF já é sigla de 2 letras, sem alteração.
+- Nome da aba da planilha mantém a capitalização normal.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:**
+`apps.escolas.services._substituir_observacoes_faturamento_implantacao`.
+
+**Features relacionadas:** FEAT-045, FEAT-051.
+
+**Status:** Ativa.
+
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-16 | RN-098 criada (criação/desfazer de LOTE — elegibilidade e agrupamento de INEPs, FEAT-044/049/050); RN-101 criada (ciclo de status do LOTE — Em Andamento/Em Faturamento/Processo Concluído — e-mail do LOTE comentado, não usado por enquanto, FEAT-045/046); RN-102 criada (nome do Município em maiúsculo no texto de observação da planilha de faturamento de implantação) | Todo o conjunto (FEAT-044 a FEAT-046, FEAT-049, FEAT-050) já estava implementado e testado pelo Dev desde 2026-09-14, mas nunca tinha sido formalizado em `business_rules.md`/`checklist.md` — Orquestrador formaliza nesta sessão; usuário pediu, em turnos seguintes, para comentar o e-mail do LOTE e liberar a troca de status sem ele (RN-101), criar o download de planilhas de vários LOTEs em `.zip` (FEAT-051 nova) e o Município em maiúsculo na observação (RN-102); nenhum deploy em produção desta rodada ainda |
 | 2026-09-14 | RN-100 criada (disparo manual do RPA EACE — "Disparar RPA"/"Tentar novamente" — passa a gravar quem clicou na linha do tempo/Auditoria; corrigido bug de exibição que mostrava sempre "Sistema" mesmo com autor real gravado; caso reportado: INEP 35203185) | Usuário pediu para aparecer quem iniciou o robô; achado que a correção já estava implementada e testada pelo Dev antes desta sessão (não commitada nem documentada) — Orquestrador formaliza a regra; ainda sem deploy em produção |
 | 2026-09-14 | RN-099 criada (troca manual do RI para "Aguardando validação EACE" passa a exigir o mesmo critério do avanço automático, RN-056 — bloqueada se sobrar log de RPA EACE fora de "Sucesso" — corrige bug real reportado pelo usuário em produção, INEP 53005015: RI levado manualmente pra esse status antes de qualquer RPA rodar, 2 logs deram erro só depois) | Usuário reportou o INEP no servidor de produção; Dev investigou os dados reais (autorização explícita do usuário para acesso via SSH) e confirmou a causa raiz; Orquestrador formaliza a regra e cria `FEAT-047` para o bug já corrigido e testado pelo Dev nesta mesma sessão (suíte completa `apps.ri`+`apps.escolas`, sem regressão); nenhum deploy em produção desta correção ainda |
 | 2026-09-12 | RN-095 criada (Lado 3 do MIP mostra também os dados do Relatório EACE da própria RI, acima de uma linha divisória, só para comparação visual — não grava nada, RN-067 continua valendo); RN-096 criada (Visualizador ganha acesso a Projeto > MIP, só leitura e sem valor financeiro nenhum, incluindo os totais da RN-097); RN-097 criada (total de cada um dos 3 lados, RI e MIP, escondido do Visualizador) e corrigida no mesmo dia — Lado 1 do RI sem item lançado passa a usar a referência do catálogo (antes nunca mostrava total); item de qualquer lado com Valor Unitário 0 passa a buscar o Valor de equipamento atual no catálogo em vez de somar 0 (corrige bug real reportado pelo usuário, INEP 35277423, total do Lado 2 aparecendo "R$ 0,00") | Usuário pediu, em sequência: mostrar o Relatório EACE da RI no Lado 3 do MIP, para bater os 2 relatórios; o Visualizador também acompanhar o MIP, sem valor financeiro; e o total por lado "igual ao MIP" também na RI; testado o total, reportou os 2 bugs reais acima, corrigidos no mesmo dia depois de investigação contra INEPs reais do banco; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (758 a 760 testes em rodadas sucessivas, sem regressão) |

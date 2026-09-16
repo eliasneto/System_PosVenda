@@ -14,7 +14,7 @@
         <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
             MIP
         </h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">INEPs no MIP (Em Andamento, Aguardando Validação EACE, Aguardando Encerramento LOTE, Email em LOTE enviado ou Faturamento Concluído)</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">INEPs no MIP (Em Andamento, Aguardando Validação EACE, Aguardando Encerramento LOTE, Em Faturamento ou Processo Concluído)</p>
     </div>
 
     <div class="flex gap-4">
@@ -194,7 +194,7 @@
                             {% if linha.escola.status_mip == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
                             {% elif linha.escola.status_mip == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
                             {% elif linha.escola.status_mip == 'aguardando_encerramento_lote' %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400
-                            {% elif linha.escola.status_mip == 'email_lote_enviado' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
+                            {% elif linha.escola.status_mip == 'em_faturamento_lote' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
                             {% else %}bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400{% endif %}">
                             {{ linha.escola.get_status_mip_display }}
                         </span>

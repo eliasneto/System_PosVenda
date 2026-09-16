@@ -3833,6 +3833,191 @@ principais do projeto.
 
 ---
 
+### FEAT-044 — Criar LOTE agrupando INEPs elegíveis (Projeto > MIP)
+
+**Descrição:** Botão "Criar LOTE" no grid "Projeto > MIP", ao lado do
+Total geral — agrupa, num `Lote`, os INEPs filtrados por Estado+
+Município (+ Data de Ativação do RI, opcional, RN-075) que estão em
+"Aguardando Validação EACE" e com Valor Total (IXC) == Valor Total
+(EACE) (RN-076/RN-077). Um modal de revisão lista os elegíveis (1
+checkbox cada, todos marcados) antes de confirmar.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média.
+**Critérios de aceite:**
+- Botão só habilitado com Estado+Município preenchidos e ao menos 1
+  INEP elegível. ✅
+- LOTE criado só com quem está de fato elegível no momento da
+  confirmação (RN-098). ✅
+- Cada INEP do LOTE ganha `status_mip = "aguardando_encerramento_lote"`
+  e histórico próprio (Status (MIP) + LOTE). ✅
+- Escondido do Visualizador (RN-093/RN-096). ✅
+**Regras relacionadas:** RN-098 (nova), RN-075, RN-076, RN-077,
+RN-093, RN-096.
+**Dependências:** FEAT-034/FEAT-039 (MIP), FEAT-040 (Visualizador) —
+todas `🔍 Aguardando QA`.
+**Tipo de validação:** QA — regra de elegibilidade e criação de
+agrupamento que muda status do INEP.
+**Entrega do Dev:** `apps.escolas.services.criar_lote_mip`/
+`escolas_elegiveis_lote_mip`; `apps.escolas.views.mip_lote_criar_view`;
+modelo `Lote`; testes próprios (`CriarLoteMipTests`,
+`LoteMipElegibilidadeTests`).
+**Pendência atual:** aguardando QA; feature já implementada e em uso
+desde 2026-09-14, mas nunca tinha sido commitada/documentada como
+`FEAT-XXX` até esta formalização (2026-09-16).
+
+---
+
+### FEAT-045 — E-mail do LOTE (envio comentado) / Baixar planilha individual
+
+**Descrição:** Escopo original: botão "Enviar e-mail" da tela "Projeto
+> MIP (LOTE)" (assunto/corpo sugeridos, anexo automático da planilha
+de faturamento de implantação, registro no histórico de cada INEP) e o
+botão "Baixar planilha" (mesma planilha, sem enviar nada). **Pedido do
+usuário (2026-09-15): a parte de e-mail foi comentada no código (não
+apagada)** — não é mais usada; substituída pelo campo de status manual
+da FEAT-046. O botão "Baixar planilha" individual continua ativo e
+ganhou companhia na FEAT-051 (baixar vários de uma vez, em `.zip`).
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA (revisão: envio de e-mail desativado)
+**Prioridade:** Baixa (parte relevante já desativada).
+**Critérios de aceite:**
+- Botão/modal/rota/view/service do e-mail comentados — não aparecem
+  nem são acessíveis por nenhum caminho da tela. ✅
+- Campos do modelo (`Lote.email_enviado_em`/`email_enviado_por`)
+  mantidos, sem migration de remoção — preserva dado histórico e
+  permite reativação futura. ✅
+- "Baixar planilha" individual continua funcionando normalmente. ✅
+**Regras relacionadas:** RN-101 (nova).
+**Dependências:** FEAT-044.
+**Tipo de validação:** QA — confirmar que o envio de e-mail não está
+mais acessível por nenhum caminho, e que o download individual segue
+intacto.
+**Entrega do Dev:** `apps.escolas.services.enviar_email_lote`/
+`montar_assunto_email_lote`/`montar_corpo_email_lote`, view, form
+(`LoteEmailForm`), rota e template (`_modal_enviar_email_lote.html`)
+comentados (não apagados); suíte completa sem regressão.
+**Pendência atual:** aguardando QA da desativação.
+
+---
+
+### FEAT-046 — Status do LOTE: Em Andamento / Em Faturamento / Processo Concluído
+
+**Descrição:** Campo de troca manual de status na tela "Projeto > MIP
+(LOTE)", disponível direto a partir de "Aguardando Encerramento LOTE"
+(não depende mais do e-mail, FEAT-045). 3 opções: "Em Andamento"
+(reabre o RI de cada INEP de verdade), "Em Faturamento" (novo status
+intermediário) e "Processo Concluído" (encerra o processo, terminal).
+Cada troca aplica-se a TODOS os INEPs do LOTE de uma vez (tudo ou nada)
+e grava no histórico de cada um.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média.
+**Critérios de aceite:**
+- Campo aparece desde "Aguardando Encerramento LOTE" até o LOTE chegar
+  em "Processo Concluído" (terminal, sem volta pela tela). ✅
+- "Em Andamento": tudo ou nada — 1 INEP bloqueado (ex.: RN-020) impede
+  a troca de todos; reabre o RI com a mesma validação/log já usados no
+  MIP individual. ✅
+- "Em Faturamento"/"Processo Concluído": só trocam o Status (MIP),
+  nunca mexem em `Ri.status`. ✅
+- Visualizador não acessa a tela (RN-093/RN-096, reforçado por
+  middleware). ✅
+**Regras relacionadas:** RN-101 (nova).
+**Dependências:** FEAT-044, FEAT-045 (agora com o e-mail desativado).
+**Tipo de validação:** QA — regra de negócio com cascata de status em
+vários INEPs de uma vez.
+**Entrega do Dev:** `Lote.STATUS_CHOICES`/`Escola.STATUS_MIP_CHOICES`
+(migration `0015`, só metadado de `choices`, sem mudança de coluna);
+`apps.escolas.views.mip_lote_status_update_view`; template
+`mip_lote_inep.html`; suíte completa sem regressão.
+**Pendência atual:** aguardando QA.
+
+---
+
+### FEAT-049 — Desfazer LOTE
+
+**Descrição:** Botão "Desfazer LOTE" — só disponível enquanto o LOTE
+ainda está em "Aguardando Encerramento LOTE" (antes de qualquer troca
+de status real). Cada INEP volta para "Aguardando Validação EACE"
+(mesmo status de antes de entrar no LOTE) com histórico próprio; o
+`Lote` é excluído.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Baixa.
+**Critérios de aceite:**
+- Só permitido em "Aguardando Encerramento LOTE" — bloqueado a partir
+  de "Em Andamento"/"Em Faturamento"/"Processo Concluído". ✅
+- Confirmação simples antes de desfazer (mesmo padrão de excluir do
+  RI/MIP). ✅
+- Histórico de cada INEP registra a troca de status e "LOTE: Desfeito",
+  com autor. ✅
+**Regras relacionadas:** RN-098, RN-101.
+**Dependências:** FEAT-044, FEAT-046.
+**Tipo de validação:** QA.
+**Entrega do Dev:** `apps.escolas.services.desfazer_lote_mip`;
+`mip_lote_desfazer_view`; suíte completa sem regressão.
+**Pendência atual:** aguardando QA.
+
+---
+
+### FEAT-050 — LOTE: Data inicial/final opcionais + modal de revisão dos INEPs
+
+**Descrição:** Correção de bug real reportado pelo usuário: filtrar só
+Estado+Município (sem Data) para um LOTE de 1 INEP não mostrava o
+botão "Criar LOTE". Data inicial/final passam a ser opcionais (Estado+
+Município continuam obrigatórios). O clique em "Criar LOTE" também
+passa a abrir um modal de revisão com 1 checkbox por INEP elegível
+(todos marcados por padrão), para desmarcar quem não deveria entrar
+antes de confirmar.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média — bug real relatado pelo usuário.
+**Critérios de aceite:**
+- Botão "Criar LOTE" aparece com Estado+Município preenchidos e ao
+  menos 1 elegível, mesmo sem Data. ✅
+- Modal lista todos os elegíveis, todos marcados; desmarcar exclui do
+  LOTE criado. ✅
+- Desmarcar todos não cria LOTE nenhum. ✅
+**Regras relacionadas:** RN-098 (revisão).
+**Dependências:** FEAT-044.
+**Tipo de validação:** QA.
+**Entrega do Dev:** `apps.escolas.services.criar_lote_mip`
+(`escola_ids`); template `_modal_criar_lote.html`; suíte completa sem
+regressão.
+**Pendência atual:** aguardando QA.
+
+---
+
+### FEAT-051 — Baixar planilhas de faturamento de implantação de vários LOTEs em .zip
+
+**Descrição:** Na tela "Projeto > MIP (LOTE)", checkbox por linha (+
+"marcar todos" no cabeçalho) e botão "Baixar planilhas (.zip)" —
+baixa, num único `.zip`, 1 planilha de faturamento de implantação por
+LOTE marcado (mesma planilha do botão "Baixar planilha" individual,
+FEAT-045).
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média.
+**Critérios de aceite:**
+- Sem nenhum LOTE marcado, mostra erro e não baixa nada. ✅
+- `.zip` contém exatamente 1 planilha por LOTE marcado, com o mesmo
+  nome de arquivo já usado no download individual. ✅
+- Se 1 LOTE marcado não tiver planilha gerável (ex.: sem INEP), aborta
+  o `.zip` inteiro com mensagem clara, em vez de devolver parcial. ✅
+- Visualizador bloqueado pelo middleware, como as demais ações da
+  tela. ✅
+**Regras relacionadas:** RN-102 (nova — Município em maiúsculo na
+observação).
+**Dependências:** FEAT-044, FEAT-046.
+**Tipo de validação:** QA.
+**Entrega do Dev:** `apps.escolas.views.mip_lote_baixar_planilhas_zip_view`;
+template `mip_lote_inep.html` (checkbox + botão); 8 testes novos;
+suíte completa sem regressão.
+**Pendência atual:** aguardando QA.
+
+---
+
 ### FEAT-047 — Bug: RI avança manualmente para "Aguardando validação EACE" sem os logs de RPA EACE concluídos
 
 **Descrição:** A troca manual de status do RI de "Resposta Financeiro"
@@ -3876,6 +4061,7 @@ específico continua em aberto. Deploy em produção não realizado
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-16 | `FEAT-044`, `FEAT-045`, `FEAT-046`, `FEAT-049`, `FEAT-050` criadas, `🔍 Aguardando QA` — MIP (LOTE): criar/desfazer LOTE agrupando INEPs elegíveis (RN-098 nova), status do LOTE agora com 3 opções Em Andamento/Em Faturamento/Processo Concluído liberadas direto, sem depender de e-mail (RN-101 nova, e-mail do LOTE comentado no código, não usado por enquanto), Data inicial/final opcionais + modal de revisão dos INEPs antes de criar; `FEAT-051` criada, `🔍 Aguardando QA` — baixar planilhas de faturamento de implantação de vários LOTEs marcados de uma vez, em `.zip` (RN-102 nova — Município em maiúsculo no texto de observação da planilha); suíte completa de `apps.escolas` sem regressão | Todo o conjunto FEAT-044/045/046/049/050 já estava implementado e testado pelo Dev desde 2026-09-14, mas nunca tinha sido commitado nem documentado como feature própria — Orquestrador formaliza nesta sessão; usuário pediu, em turnos seguintes, para comentar o e-mail do LOTE e liberar a troca de status sem ele, criar o download em `.zip` de vários LOTEs e o Município em maiúsculo na observação; nenhum deploy em produção desta rodada ainda |
 | 2026-09-14 | `FEAT-047` criada, `🔍 Aguardando QA` — corrige bug real de regra de negócio (RN-099 nova): troca manual do RI para "Aguardando validação EACE" não conferia log de RPA EACE pendente/erro, deixando o INEP entrar no MIP sem o anexo de verdade confirmado (INEP 53005015 em produção); 3 testes novos, suíte completa `apps.ri`+`apps.escolas` sem regressão | Usuário reportou o INEP no servidor de produção (autorizou acesso via SSH); Dev investigou os dados reais e achou a causa raiz; Orquestrador formaliza RN-099 e esta feature, já corrigida e testada pelo Dev nesta mesma sessão; nenhum deploy em produção desta correção ainda; caso específico do INEP 53005015 (2 logs em erro) segue sem decisão do usuário |
 | 2026-09-12 | `FEAT-042` criada, `🔍 Aguardando QA` — Lado 3 do MIP mostra também os dados do Relatório EACE da própria RI, para comparação visual (RN-095 nova); `FEAT-040` ganha revisão — Visualizador também acessa Projeto > MIP, sem valor financeiro (RN-096 nova); `FEAT-043` criada, `🔍 Aguardando QA` — total de cada lado no RI e no MIP (RN-097 nova), corrigida no mesmo dia depois de 2 bugs reais encontrados testando contra INEPs reais (Lado 1 do RI sem total; Lado 2 com "R$ 0,00" mesmo com item lançado, INEP 35277423); 758 a 760 testes em rodadas sucessivas, sem regressão | Usuário pediu, em sequência, os 3 itens acima; testou o total contra INEPs reais do próprio banco e reportou os 2 bugs, corrigidos no mesmo dia; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão; nenhum deploy em produção desta rodada |
 | 2026-09-11 | `FEAT-040` criada, `🔍 Aguardando QA` — perfil fixo "Visualizador", só leitura em Projeto > Equipamentos (RN-093 nova); `FEAT-041` criada, `🔍 Aguardando QA` — corrige bug real do Sincronizador do Relatório EACE (RN-094 nova): 2 produtos iguais com Num OSP diferente, o 2º nunca era lançado (INEP 53005015); 659 testes sem regressão | Usuário reportou o bug do Sincronizador e pediu a correção; perfil Visualizador (RN-093) já estava implementado e testado pelo Dev numa sessão anterior, mas nunca tinha sido commitado nem documentado — Orquestrador formaliza os dois nesta sessão; backup do banco de produção feito e validado para o deploy da correção do Sincronizador, atualização de código no servidor pendente (bloqueio técnico do agente para rodar comandos direto lá) |

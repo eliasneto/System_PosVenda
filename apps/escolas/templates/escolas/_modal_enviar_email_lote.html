@@ -1,4 +1,9 @@
 {% comment %}
+Pedido do usuario (2026-09-15): envio de e-mail do LOTE comentado (nao
+sera usado por enquanto) -- este modal deixou de ser incluido por
+mip_lote_inep.html. Arquivo mantido comentado (nao apagado) para
+reativacao futura.
+
 FEAT-045 (a formalizar pelo Orquestrador em business_rules.md; pedido do
 usuário, 2026-09-14): modal "Enviar e-mail do LOTE" — mesmo padrão visual
 e de interação do modal de e-mail do RI (`ri/_modal_enviar_email.html`,
@@ -16,7 +21,6 @@ para somar mais um arquivo, e "Baixar planilha" confere o conteúdo antes
 do envio. Parâmetros: `lote`, `escolas` (lista de INEPs, para o resumo no
 painel de confirmação), `assunto_sugerido`, `corpo_sugerido`,
 `remetente_lote`, `next_url`.
-{% endcomment %}
 <div id="modal-email-lote-{{ lote.pk }}" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email>
     <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
     <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -110,3 +114,5 @@ painel de confirmação), `assunto_sugerido`, `corpo_sugerido`,
         </form>
     </div>
 </div>
+
+{% endcomment %}

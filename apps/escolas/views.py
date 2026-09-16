@@ -1,9 +1,10 @@
 import datetime
 import io
+import zipfile
 from decimal import Decimal
 from urllib.parse import quote, urlencode
 
-from django.conf import settings
+# from django.conf import settings  # só usado por "remetente_lote" (e-mail do LOTE comentado, pedido do usuário, 2026-09-15)
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
@@ -21,7 +22,8 @@ from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemIxc
 from apps.ri.services import sincronizar_divergencia_kit_relatorio, trocar_status_com_log
 from apps.ri.views import _validar_transicao_status_ri
 
-from .forms import LoteEmailForm, PlanilhaRelatorioEaceMipUploadForm
+# `LoteEmailForm` — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.forms`).
+from .forms import PlanilhaRelatorioEaceMipUploadForm
 from .models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
 from .services import (
     MIME_PLANILHA_FATURAMENTO_IMPLANTACAO,
@@ -35,11 +37,9 @@ from .services import (
     _valor_total_itens,
     criar_lote_mip,
     desfazer_lote_mip,
-    enviar_email_lote,
+    # enviar_email_lote, montar_assunto_email_lote, montar_corpo_email_lote — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.services`).
     escolas_elegiveis_lote_mip,
     gerar_planilha_faturamento_implantacao_lote,
-    montar_assunto_email_lote,
-    montar_corpo_email_lote,
     nome_arquivo_planilha_faturamento_implantacao,
     sincronizar_relatorio_eace_mip_de_todas_as_escolas,
 )
@@ -518,10 +518,11 @@ def mip_lote_inep_view(request):
     mesmo critério da RN-096.
 
     FEAT-045 (a formalizar pelo Orquestrador; pedido do usuário,
-    2026-09-14): cada linha ganha o botão "Enviar e-mail" (modal
-    `_modal_enviar_email_lote.html`, mesmo padrão do RI) — assunto/corpo
-    sugeridos calculados aqui (`montar_assunto_email_lote`/
-    `montar_corpo_email_lote`) para não recalcular no template."""
+    2026-09-14) — pedido do usuário (2026-09-15): o botão "Enviar e-mail"
+    (modal `_modal_enviar_email_lote.html`) e o assunto/corpo sugeridos
+    (`montar_assunto_email_lote`/`montar_corpo_email_lote`) foram
+    comentados; cada linha agora mostra só o campo de troca de status
+    (`mip_lote_status_update_view`)."""
     lotes = Lote.objects.prefetch_related(
         Prefetch(
             "escolas",
@@ -560,8 +561,7 @@ def mip_lote_inep_view(request):
             {
                 "lote": registro_lote,
                 "escolas": escolas_do_lote,
-                "assunto_sugerido": montar_assunto_email_lote(registro_lote),
-                "corpo_sugerido": montar_corpo_email_lote(registro_lote),
+                # "assunto_sugerido"/"corpo_sugerido" — e-mail do LOTE comentado (pedido do usuário, 2026-09-15).
             }
         )
 
@@ -571,49 +571,52 @@ def mip_lote_inep_view(request):
         {
             "page_obj": page_obj,
             "linhas_lote": linhas_lote,
-            "remetente_lote": settings.DEFAULT_FROM_EMAIL,
+            # "remetente_lote": settings.DEFAULT_FROM_EMAIL,  # só usado pelo modal de e-mail comentado (pedido do usuário, 2026-09-15)
         },
     )
 
 
-@login_required
-def mip_lote_enviar_email_view(request, pk):
-    """FEAT-045 (a formalizar pelo Orquestrador em business_rules.md;
-    pedido do usuário, 2026-09-14): recebe o envio do modal de composição
-    de e-mail do LOTE (`escolas/_modal_enviar_email_lote.html`, mesmo
-    padrão do modal do RI, `ri/_modal_enviar_email.html`). Delega o envio
-    e o registro no histórico de cada INEP para
-    `apps.escolas.services.enviar_email_lote`."""
-    lote = get_object_or_404(Lote, pk=pk)
-    next_url = request.POST.get("next") or ""
-    if not next_url.startswith("/"):
-        next_url = reverse("mip_lote_inep")
+# Pedido do usuario (2026-09-15): envio de e-mail do LOTE comentado (nao
+# sera usado por enquanto). View mantida comentada (nao apagada) para
+# reativacao futura -- ver apps.escolas.services.enviar_email_lote.
+# @login_required
+# def mip_lote_enviar_email_view(request, pk):
+    # """FEAT-045 (a formalizar pelo Orquestrador em business_rules.md;
+    # pedido do usuário, 2026-09-14): recebe o envio do modal de composição
+    # de e-mail do LOTE (`escolas/_modal_enviar_email_lote.html`, mesmo
+    # padrão do modal do RI, `ri/_modal_enviar_email.html`). Delega o envio
+    # e o registro no histórico de cada INEP para
+    # `apps.escolas.services.enviar_email_lote`."""
+    # lote = get_object_or_404(Lote, pk=pk)
+    # next_url = request.POST.get("next") or ""
+    # if not next_url.startswith("/"):
+        # next_url = reverse("mip_lote_inep")
 
-    if request.method != "POST":
-        return redirect(next_url)
+    # if request.method != "POST":
+        # return redirect(next_url)
 
-    form = LoteEmailForm(request.POST, request.FILES)
-    if not form.is_valid():
-        for erros_campo in form.errors.values():
-            for erro in erros_campo:
-                messages.error(request, erro)
-        return redirect(next_url)
+    # form = LoteEmailForm(request.POST, request.FILES)
+    # if not form.is_valid():
+        # for erros_campo in form.errors.values():
+            # for erro in erros_campo:
+                # messages.error(request, erro)
+        # return redirect(next_url)
 
-    try:
-        enviar_email_lote(
-            lote,
-            para=form.cleaned_data["para"],
-            assunto=form.cleaned_data["assunto"],
-            mensagem=form.cleaned_data["mensagem"],
-            anexo_extra=form.cleaned_data.get("anexo_extra"),
-            usuario=request.user,
-        )
-    except (LoteMipError, PlanilhaFaturamentoImplantacaoError) as erro:
-        messages.error(request, str(erro))
-        return redirect(next_url)
+    # try:
+        # enviar_email_lote(
+            # lote,
+            # para=form.cleaned_data["para"],
+            # assunto=form.cleaned_data["assunto"],
+            # mensagem=form.cleaned_data["mensagem"],
+            # anexo_extra=form.cleaned_data.get("anexo_extra"),
+            # usuario=request.user,
+        # )
+    # except (LoteMipError, PlanilhaFaturamentoImplantacaoError) as erro:
+        # messages.error(request, str(erro))
+        # return redirect(next_url)
 
-    messages.success(request, f"E-mail do {lote} enviado.")
-    return redirect(next_url)
+    # messages.success(request, f"E-mail do {lote} enviado.")
+    # return redirect(next_url)
 
 
 @login_required
@@ -651,21 +654,71 @@ def mip_lote_baixar_planilha_view(request, pk):
 
 
 @login_required
+def mip_lote_baixar_planilhas_zip_view(request):
+    """Pedido do usuário (2026-09-15): botão "Baixar planilhas (.zip)" da
+    tela "Projeto > MIP (LOTE)" — o usuário marca vários LOTEs (1 checkbox
+    por linha, fora de qualquer `<form>` da linha — usam o atributo HTML
+    `form="form-baixar-planilhas-lotes"` pra submeter aqui, já que cada
+    linha tem forms próprios de status/desfazer) e baixa, num único .zip,
+    a planilha de faturamento de implantação de cada LOTE marcado — mesma
+    `gerar_planilha_faturamento_implantacao_lote` já usada pelo botão
+    "Baixar planilha" individual (`mip_lote_baixar_planilha_view`) e pelo
+    e-mail do LOTE (comentado). Se 1 LOTE marcado não tiver planilha
+    gerável (ex.: sem nenhum INEP), aborta o .zip inteiro e mostra o erro
+    — decisão do Dev (2026-09-15, reversível/baixo risco, CLAUDE.md §9):
+    mais simples e claro do que devolver um .zip parcial sem avisar qual
+    LOTE ficou de fora."""
+    if request.method != "POST":
+        return redirect("mip_lote_inep")
+
+    lote_ids = request.POST.getlist("lote_ids")
+    if not lote_ids:
+        messages.error(request, "Selecione ao menos um LOTE para baixar.")
+        return redirect("mip_lote_inep")
+
+    lotes = list(Lote.objects.filter(pk__in=lote_ids))
+
+    zip_stream = io.BytesIO()
+    with zipfile.ZipFile(zip_stream, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
+        for lote in lotes:
+            try:
+                workbook = gerar_planilha_faturamento_implantacao_lote(lote, data_envio=timezone.localdate())
+            except PlanilhaFaturamentoImplantacaoError as erro:
+                messages.error(request, f"{lote}: {erro}")
+                return redirect("mip_lote_inep")
+            planilha_stream = io.BytesIO()
+            workbook.save(planilha_stream)
+            arquivo_zip.writestr(nome_arquivo_planilha_faturamento_implantacao(lote), planilha_stream.getvalue())
+
+    resposta = HttpResponse(zip_stream.getvalue(), content_type="application/zip")
+    resposta["Content-Disposition"] = 'attachment; filename="faturamento_implantacao_lotes.zip"'
+    return resposta
+
+
+@login_required
 def mip_lote_status_update_view(request, pk):
     """FEAT-046 (a formalizar pelo Orquestrador em business_rules.md;
-    pedido do usuário, 2026-09-14): troca o Status do LOTE para "Em
-    Andamento" ou "Faturamento Concluído" — só disponível depois de
-    "Email em LOTE enviado" (`Lote.status == Lote.EMAIL_ENVIADO`).
+    pedido do usuário, 2026-09-14): troca o Status do LOTE entre "Em
+    Andamento", "Em Faturamento" e "Processo Concluído".
+
+    Pedido do usuário (2026-09-15): o envio de e-mail do LOTE foi
+    comentado (`apps.escolas.services.enviar_email_lote`) — o campo de
+    troca de status deixou de depender dele (`Lote.status ==
+    Lote.EMAIL_ENVIADO`) e passa a ficar disponível direto a partir de
+    "Aguardando Encerramento LOTE"; só fica bloqueado quando o LOTE já
+    chegou em "Processo Concluído" (fim do processo, sem volta por aqui).
+
     Aplica a mudança a TODOS os INEPs do LOTE de uma vez, tudo ou nada
     (`transaction.atomic`): "Em Andamento" reabre o RI de cada um de
     verdade — mesma validação e log já usados no Grid de Equipamentos/MIP
     individual (`_validar_transicao_status_ri`/`trocar_status_com_log`,
     RN-011/RN-052/RN-092) — pedido do usuário: "vai para o RI como é
-    hoje". "Faturamento Concluído" só encerra o Status (MIP) de cada um
-    (mesmo critério do `mip_status_update_view` individual, sem validação
-    de RI — esse status nunca mexe em `Ri.status`). Cada INEP ganha uma
-    entrada no próprio histórico (pedido explícito do usuário: "Tudo isso
-    deve ser enviado para os históricos dos INEPS")."""
+    hoje". "Em Faturamento" e "Processo Concluído" só trocam o Status
+    (MIP) de cada um (mesmo critério do `mip_status_update_view`
+    individual, sem validação de RI — nenhum dos dois mexe em
+    `Ri.status`). Cada INEP ganha uma entrada no próprio histórico
+    (pedido explícito do usuário: "Tudo isso deve ser enviado para os
+    históricos dos INEPS")."""
     lote = get_object_or_404(Lote, pk=pk)
     next_url = request.POST.get("next") or ""
     if not next_url.startswith("/"):
@@ -675,14 +728,13 @@ def mip_lote_status_update_view(request, pk):
         return redirect(next_url)
 
     novo_status = (request.POST.get("status") or "").strip()
-    if novo_status not in (Lote.EM_ANDAMENTO, Lote.FATURAMENTO_CONCLUIDO):
+    if novo_status not in (Lote.EM_ANDAMENTO, Lote.EM_FATURAMENTO, Lote.FATURAMENTO_CONCLUIDO):
         messages.error(request, "Status inválido.")
         return redirect(next_url)
-    if lote.status != Lote.EMAIL_ENVIADO:
+    if lote.status == Lote.FATURAMENTO_CONCLUIDO:
         messages.error(
             request,
-            f'Só é possível trocar o Status do LOTE a partir de "Email em LOTE enviado" '
-            f'— {lote} está em "{lote.get_status_display()}".',
+            f'{lote} já está em "Processo Concluído" — não é mais possível trocar o status.',
         )
         return redirect(next_url)
 
@@ -719,19 +771,22 @@ def mip_lote_status_update_view(request, pk):
             lote.save(update_fields=["status"])
         messages.success(request, f'{lote} atualizado para "Em Andamento" — RI de cada INEP reaberto.')
     else:
+        status_escola_novo = (
+            Escola.EM_FATURAMENTO_LOTE if novo_status == Lote.EM_FATURAMENTO else Escola.FATURAMENTO_CONCLUIDO
+        )
         with transaction.atomic():
             for escola in escolas:
                 status_anterior = escola.get_status_mip_display()
-                escola.status_mip = Escola.FATURAMENTO_CONCLUIDO
+                escola.status_mip = status_escola_novo
                 escola.save(update_fields=["status_mip"])
                 ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
                 if ri_atual:
                     _registrar_log_campo_mip(
                         ri_atual, request.user, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
                     )
-            lote.status = Lote.FATURAMENTO_CONCLUIDO
+            lote.status = novo_status
             lote.save(update_fields=["status"])
-        messages.success(request, f'{lote} atualizado para "Faturamento Concluído".')
+        messages.success(request, f'{lote} atualizado para "{lote.get_status_display()}".')
 
     return redirect(next_url)
 
@@ -876,15 +931,18 @@ def mip_detail_view(request, inep):
 
     # FEAT-044/FEAT-046/RN-098 (a formalizar pelo Orquestrador em
     # business_rules.md; pedido do usuário, 2026-09-14): "Aguardando
-    # Encerramento LOTE" e "Email em LOTE enviado" nunca são escolhidos
+    # Encerramento LOTE" e "Em Faturamento" nunca são escolhidos
     # manualmente aqui — são só o resultado automático de `criar_lote_mip`
-    # (botão "Criar LOTE") e `enviar_email_lote` (botão "Enviar e-mail" do
-    # LOTE). Sem essa exclusão, o usuário poderia colocar um INEP nesses
-    # status sem ele pertencer a nenhum `Lote` de verdade.
+    # (botão "Criar LOTE") e da troca de status do LOTE
+    # (`mip_lote_status_update_view`, tela "Projeto > MIP (LOTE)"). Sem
+    # essa exclusão, o usuário poderia colocar um INEP nesses status sem
+    # ele pertencer a nenhum `Lote` de verdade. "Email em LOTE enviado"
+    # (`EMAIL_LOTE_ENVIADO`) nem aparece mais em `STATUS_MIP_CHOICES` —
+    # e-mail do LOTE comentado (pedido do usuário, 2026-09-15).
     status_mip_opcoes_editavel = [
         (valor, rotulo)
         for valor, rotulo in Escola.STATUS_MIP_CHOICES
-        if valor not in (Escola.AGUARDANDO_ENCERRAMENTO_LOTE, Escola.EMAIL_LOTE_ENVIADO)
+        if valor not in (Escola.AGUARDANDO_ENCERRAMENTO_LOTE, Escola.EM_FATURAMENTO_LOTE)
     ]
 
     somente_servico_editavel = escola.status_mip == Escola.AGUARDANDO_VALIDACAO_EACE
@@ -946,12 +1004,12 @@ def mip_status_update_view(request, inep):
     (RN-011/RN-052) — nada duplicado aqui.
 
     FEAT-044/FEAT-046/RN-098 (a formalizar pelo Orquestrador em
-    business_rules.md; 2026-09-14): "Aguardando Encerramento LOTE" e
-    "Email em LOTE enviado" nunca são aceitos aqui — o `<select>` já não
-    oferece essas opções (`mip_detail_view`), mas o bloqueio abaixo é o
-    reforço de sempre contra POST montado à mão (mesmo critério do
+    business_rules.md; 2026-09-14): "Aguardando Encerramento LOTE" e "Em
+    Faturamento" nunca são aceitos aqui — o `<select>` já não oferece
+    essas opções (`mip_detail_view`), mas o bloqueio abaixo é o reforço de
+    sempre contra POST montado à mão (mesmo critério do
     `HttpResponseForbidden` usado em outras views deste módulo). Só
-    `criar_lote_mip`/`enviar_email_lote` gravam esses status."""
+    `criar_lote_mip`/`mip_lote_status_update_view` gravam esses status."""
     escola = get_object_or_404(Escola, inep=inep)
     if request.method != "POST":
         return redirect("mip_detail", inep=inep)
@@ -959,7 +1017,7 @@ def mip_status_update_view(request, inep):
     novo_status = (request.POST.get("status_mip") or "").strip()
     if (
         novo_status not in dict(Escola.STATUS_MIP_CHOICES)
-        or novo_status in (Escola.AGUARDANDO_ENCERRAMENTO_LOTE, Escola.EMAIL_LOTE_ENVIADO)
+        or novo_status in (Escola.AGUARDANDO_ENCERRAMENTO_LOTE, Escola.EM_FATURAMENTO_LOTE)
     ):
         messages.error(request, "Status inválido.")
         return redirect("mip_detail", inep=inep)
