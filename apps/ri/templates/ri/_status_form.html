@@ -56,13 +56,16 @@ oculto.
 <form method="POST" action="{% url 'ri_status_update' pk=ri.pk %}"
       hx-post="{% url 'ri_status_update' pk=ri.pk %}" hx-swap="none"
       id="form-status-forcar-{{ ri.pk }}" hx-swap-oob="true"
-      onsubmit="return confirm('Confirma que o financeiro já respondeu? Isso força a saída de \'Aguardando financeiro\' sem esperar o e-mail automático (RN-019).');"
       class="flex items-center">
     {% csrf_token %}
     <input type="hidden" name="next" value="{{ next_url }}">
     <input type="hidden" name="origem" value="grid">
     <input type="hidden" name="status" value="{{ status_resposta_financeiro }}">
-    <button type="submit"
+    <button type="button"
+            data-confirmar
+            data-confirmar-titulo="Forçar Resposta Financeiro?"
+            data-confirmar-mensagem="Confirma que o financeiro já respondeu? Isso força a saída de &quot;Aguardando financeiro&quot; sem esperar o e-mail automático (RN-019)."
+            data-confirmar-texto-botao="Forçar Resposta Financeiro"
             class="shrink-0 px-3 py-2 bg-amber-600 text-white font-black uppercase italic text-[10px] rounded-lg hover:bg-amber-700 transition"
             title="Só Administrador — força a saída de &quot;Aguardando financeiro&quot; sem esperar a resposta automática (RN-019)">
         Forçar Resposta Financeiro

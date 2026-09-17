@@ -52,6 +52,9 @@
                     <th class="px-4 py-2">Data Início</th>
                     <th class="px-4 py-2">Data Fim</th>
                     <th class="px-4 py-2">INEPs</th>
+                    {% if not request.user.is_visualizador %}
+                    <th class="px-4 py-2">Valor Total do LOTE</th>
+                    {% endif %}
                     <th class="px-4 py-2">Status</th>
                     {% if not request.user.is_visualizador %}
                     <th class="px-4 py-2">Ações</th>
@@ -65,7 +68,9 @@
                     {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2" data-no-toggle>
                         <input type="checkbox" name="lote_ids" value="{{ linha.lote.pk }}" form="form-baixar-planilhas-lotes"
-                               data-checkbox-lote class="w-3.5 h-3.5 cursor-pointer accent-pv-yellow">
+                               data-checkbox-lote data-valor="{{ linha.valor_total_lote_str }}"
+                               data-incompleto="{% if linha.valor_total_lote_incompleto %}1{% else %}0{% endif %}"
+                               class="w-3.5 h-3.5 cursor-pointer accent-pv-yellow">
                     </td>
                     {% endif %}
                     <td class="px-4 py-2">
@@ -79,6 +84,14 @@
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.data_inicio|date:"d/m/Y"|default:"—" }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.data_fim|date:"d/m/Y"|default:"—" }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.escolas|length }}</span></td>
+                    {% if not request.user.is_visualizador %}
+                    <td class="px-4 py-2">
+                        <span class="text-[11px] font-black text-gray-900 dark:text-gray-100">R$ {{ linha.valor_total_lote|intcomma }}</span>
+                        {% if linha.valor_total_lote_incompleto %}
+                        <span class="text-amber-500 dark:text-amber-400" title="Um ou mais INEPs deste LOTE têm item do Lado IXC sem Valor de serviço encontrado no catálogo — não somado aqui.">*</span>
+                        {% endif %}
+                    </td>
+                    {% endif %}
                     <td class="px-4 py-2">
                         <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
                             {% if linha.lote.status == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
@@ -108,21 +121,26 @@
                             <!-- FEAT-049 (a formalizar pelo Orquestrador em
                                  business_rules.md; pedido do usuário,
                                  2026-09-14): "Desfazer LOTE" — mesma
-                                 confirmação simples (`onsubmit="return
-                                 confirm(...)"`) já usada nos botões de
-                                 excluir do RI/MIP. Só aparece no mesmo
-                                 status em que ainda dá pra desfazer
-                                 (`services.desfazer_lote_mip`) — a partir
-                                 de "Em Andamento"/"Em Faturamento"/
-                                 "Processo Concluído" o RI de cada INEP já
-                                 pode ter sido reaberto/o processo já foi
-                                 encerrado de verdade. -->
+                                 confirmação (modal genérico, `data-
+                                 confirmar`, `core/_modal_confirmar.html`)
+                                 já usada nos botões de excluir do RI/MIP.
+                                 Só aparece no mesmo status em que ainda dá
+                                 pra desfazer (`services.desfazer_lote_
+                                 mip`) — a partir de "Em Andamento"/"Em
+                                 Faturamento"/"Processo Concluído" o RI de
+                                 cada INEP já pode ter sido reaberto/o
+                                 processo já foi encerrado de verdade. -->
                             {% if linha.lote.status == 'aguardando_encerramento' %}
-                            <form method="POST" action="{% url 'mip_lote_desfazer' pk=linha.lote.pk %}"
-                                  onsubmit="return confirm('Desfazer {{ linha.lote|escapejs }}? Os {{ linha.escolas|length }} INEP(s) voltam para \'Aguardando Validação EACE\' no MIP e o LOTE deixa de existir.');">
+                            <form method="POST" action="{% url 'mip_lote_desfazer' pk=linha.lote.pk %}">
                                 {% csrf_token %}
                                 <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 border-2 border-red-200 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition">
+                                <button type="button"
+                                        data-confirmar
+                                        data-confirmar-titulo="Desfazer LOTE?"
+                                        data-confirmar-mensagem="Desfazer {{ linha.lote }}? Os {{ linha.escolas|length }} INEP(s) voltam para &quot;Aguardando Validação EACE&quot; no MIP e o LOTE deixa de existir."
+                                        data-confirmar-texto-botao="Desfazer LOTE"
+                                        data-confirmar-cor="perigo"
+                                        class="inline-flex items-center gap-1.5 px-3 py-1.5 border-2 border-red-200 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition">
                                     <i data-lucide="undo-2" class="w-3.5 h-3.5"></i> Desfazer LOTE
                                 </button>
                             </form>
@@ -148,7 +166,7 @@
                     {% endif %}
                 </tr>
                 <tr class="hidden" data-lote-detalhe>
-                    <td colspan="9" class="px-8 py-6 bg-gray-50/60 dark:bg-gray-800/40">
+                    <td colspan="10" class="px-8 py-6 bg-gray-50/60 dark:bg-gray-800/40">
                         <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 mb-3">INEPs deste LOTE</p>
                         <div class="overflow-x-auto contain-layout rounded-2xl border border-gray-200 dark:border-gray-700">
                             <table class="min-w-full text-left border-collapse bg-white dark:bg-gray-900">
@@ -218,7 +236,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="9" class="px-8 py-20 text-center">
+                    <td colspan="10" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="package-search" class="w-8 h-8"></i>
@@ -234,6 +252,14 @@
             </tbody>
         </table>
     </div>
+
+    {% if not request.user.is_visualizador and linhas_lote %}
+    {# Pedido do usuário (2026-09-16): resumo do valor logo abaixo da lista de LOTEs — por padrão soma todos os LOTEs desta página; ao marcar 1 ou mais checkboxes (mesmos do "Baixar planilhas (.zip)"), passa a somar só os marcados. RN-096: some inteiro pro Visualizador, mesmo critério das demais colunas de valor. #}
+    <div class="bg-gray-50/50 dark:bg-gray-800/40 px-8 py-5 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between" data-lote-resumo-valor>
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest" data-lote-resumo-label>Valor total (nesta página)</span>
+        <span class="text-base font-black text-gray-900 dark:text-gray-100 italic" data-lote-resumo-total>R$ {{ valor_total_pagina|intcomma }}{% if valor_total_pagina_incompleto %}<span class="text-amber-500 dark:text-amber-400" title="Um ou mais LOTEs têm INEP com item do Lado IXC sem Valor de serviço encontrado no catálogo — não somado.">*</span>{% endif %}</span>
+    </div>
+    {% endif %}
 
     {% if page_obj.has_other_pages %}
     <div class="bg-gray-50/50 dark:bg-gray-800/40 px-8 py-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
@@ -315,11 +341,47 @@ document.querySelectorAll('[data-inep-navegar]').forEach(function (linha) {
 // todos os LOTEs desta página de uma vez, pra facilitar selecionar vários
 // antes de "Baixar planilhas (.zip)".
 var selecionarTodosLote = document.querySelector('[data-selecionar-todos-lote]');
+var checkboxesLote = document.querySelectorAll('[data-checkbox-lote]');
+
+// Pedido do usuário (2026-09-16): resumo de valor abaixo da tabela —
+// sem nenhum checkbox marcado, mostra a soma de todos os LOTEs desta
+// página (mesmo valor já calculado no servidor, `valor_total_pagina`);
+// ao marcar 1 ou mais, passa a somar só os marcados, recalculado aqui no
+// navegador (mesmos `data-valor`/`data-incompleto` de cada checkbox, sem
+// precisar de outra consulta ao servidor).
+var resumoTotal = document.querySelector('[data-lote-resumo-total]');
+var resumoLabel = document.querySelector('[data-lote-resumo-label]');
+if (resumoTotal && resumoLabel) {
+    var valorTotalPaginaFormatado = resumoTotal.innerHTML;
+    var atualizarResumoValorLote = function () {
+        var marcados = Array.prototype.filter.call(checkboxesLote, function (checkbox) {
+            return checkbox.checked;
+        });
+        if (!marcados.length) {
+            resumoLabel.textContent = 'Valor total (nesta página)';
+            resumoTotal.innerHTML = valorTotalPaginaFormatado;
+            return;
+        }
+        var total = 0;
+        var incompleto = false;
+        marcados.forEach(function (checkbox) {
+            total += parseFloat(checkbox.getAttribute('data-valor')) || 0;
+            if (checkbox.getAttribute('data-incompleto') === '1') incompleto = true;
+        });
+        resumoLabel.textContent = 'Valor total de ' + marcados.length + ' LOTE(s) selecionado(s)';
+        resumoTotal.textContent = 'R$ ' + total.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + (incompleto ? ' *' : '');
+    };
+    checkboxesLote.forEach(function (checkbox) {
+        checkbox.addEventListener('change', atualizarResumoValorLote);
+    });
+}
+
 if (selecionarTodosLote) {
     selecionarTodosLote.addEventListener('change', function () {
-        document.querySelectorAll('[data-checkbox-lote]').forEach(function (checkbox) {
+        checkboxesLote.forEach(function (checkbox) {
             checkbox.checked = selecionarTodosLote.checked;
         });
+        if (resumoTotal && resumoLabel) atualizarResumoValorLote();
     });
 }
 </script>

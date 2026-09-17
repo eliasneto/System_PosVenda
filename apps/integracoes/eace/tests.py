@@ -268,6 +268,89 @@ class AnexarNotaFiscalValidacaoContraOPortalTests(SimpleTestCase):
         self.assertTrue(resultado.sucesso)
         mock_upload.assert_called_once()
 
+    def test_indice_none_localiza_linha_pendente_automaticamente_pelo_valor(self):
+        """Fase 2 (RN-057/RN-058): sem `indice`, casa sozinho a linha
+        'Pendente' cujo valor bate com o do PDF - caminho usado de verdade
+        pela fila (`apps/ri/services.py` nunca passa `indice`), sem
+        cobertura de teste antes desta correção."""
+        linhas = [
+            {"inep": "35083938", "status": "Aprovado", "descricao": "Nobreak", "valor": "1.000,00", "indice": 1},
+            {"inep": "35083938", "status": "Pendente", "descricao": "Kit", "valor": "22.644,43", "indice": 2},
+        ]
+        with patch("playwright.sync_api.sync_playwright", return_value=self._mock_sync_playwright()), \
+                patch("apps.integracoes.eace.login.fazer_login", return_value=True), \
+                patch("apps.integracoes.eace.login.selecionar_perfil_fornecedor", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_medicoes", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_osps", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.pesquisar_osp", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.contar_pedidos_osp", return_value=1), \
+                patch("apps.integracoes.eace.dashboard.expandir_resultado_osp", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.expandir_notas_fiscais", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.extrair_dados_grid", return_value=linhas), \
+                patch("apps.integracoes.eace.dashboard.upload_linha", return_value=True) as mock_upload, \
+                patch("apps.integracoes.eace.dashboard.clicar_enviar_notas", return_value=True):
+            resultado = anexar_nota_fiscal(
+                osp="3929", inep="35083938", caminho_pdf=str(self.pdf), caminho_xml=str(self.xml),
+            )
+        self.assertTrue(resultado.sucesso)
+        self.assertEqual(resultado.valor_portal, "22.644,43")
+        mock_upload.assert_called_once()
+
+    def test_indice_none_sem_linha_pendente_com_valor_igual_aborta_com_valor_divergente(self):
+        linhas = [
+            {"inep": "35083938", "status": "Pendente", "descricao": "Kit", "valor": "1.551,93", "indice": 1},
+        ]
+        with patch("playwright.sync_api.sync_playwright", return_value=self._mock_sync_playwright()), \
+                patch("apps.integracoes.eace.login.fazer_login", return_value=True), \
+                patch("apps.integracoes.eace.login.selecionar_perfil_fornecedor", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_medicoes", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_osps", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.pesquisar_osp", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.contar_pedidos_osp", return_value=1), \
+                patch("apps.integracoes.eace.dashboard.expandir_resultado_osp", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.expandir_notas_fiscais", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.extrair_dados_grid", return_value=linhas), \
+                patch("apps.integracoes.eace.dashboard.upload_linha") as mock_upload:
+            resultado = anexar_nota_fiscal(
+                osp="3929", inep="35083938", caminho_pdf=str(self.pdf), caminho_xml=str(self.xml),
+            )
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "valor_divergente")
+        mock_upload.assert_not_called()
+
+    def test_indice_none_com_2_linhas_pendentes_de_valor_igual_aborta_sem_adivinhar(self):
+        """Correção (2026-09-16, INEP 35010264 em produção): antes desta
+        correção, 2 linhas 'Pendente' do mesmo INEP com o MESMO valor
+        (preço de catálogo repetido entre produtos diferentes) faziam a
+        automação escolher a 1ª sem checar se era a linha certa - se não
+        fosse, a Nota Fiscal subia numa linha errada em vez de dar o erro
+        "Divergência de valor entre EACE e Nota Fiscal" que era esperado
+        para a linha de verdade."""
+        linhas = [
+            {"inep": "35083938", "status": "Pendente", "descricao": "Nobreak", "valor": "22.644,43", "indice": 1},
+            {"inep": "35083938", "status": "Pendente", "descricao": "Kit", "valor": "22.644,43", "indice": 2},
+        ]
+        with patch("playwright.sync_api.sync_playwright", return_value=self._mock_sync_playwright()), \
+                patch("apps.integracoes.eace.login.fazer_login", return_value=True), \
+                patch("apps.integracoes.eace.login.selecionar_perfil_fornecedor", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_medicoes", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_osps", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.pesquisar_osp", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.contar_pedidos_osp", return_value=1), \
+                patch("apps.integracoes.eace.dashboard.expandir_resultado_osp", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.expandir_notas_fiscais", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.extrair_dados_grid", return_value=linhas), \
+                patch("apps.integracoes.eace.dashboard.upload_linha") as mock_upload:
+            resultado = anexar_nota_fiscal(
+                osp="3929", inep="35083938", caminho_pdf=str(self.pdf), caminho_xml=str(self.xml),
+            )
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "valor_ambiguo")
+        mock_upload.assert_not_called()
+
+        from apps.integracoes.eace.rpa import MOTIVOS_REGRA_DE_NEGOCIO
+        self.assertIn("valor_ambiguo", MOTIVOS_REGRA_DE_NEGOCIO)
+
     def test_progresso_reporta_todas_as_etapas_ate_100_por_cento(self):
         """Pedido do usuário (2026-09-03): no caminho feliz completo, o
         `progresso_callback` precisa passar por TODAS as etapas de

@@ -182,19 +182,22 @@ INEP é considerado concluído (Faturado).
 - **MIP (Projeto > MIP, 2026-09-07; ampliado 2026-09-08)** — visão
   paralela ao Grid de INEPs, dentro do app `apps.escolas` (a `Escola`
   já vivia lá; ganhou aqui a 1ª camada web do app). Duas telas: grid
-  `/mip/`, mostrando só os INEPs cujo RI atual está em "Aguardando
-  validação EACE" (RN-074, substitui a visão cadastral de todos os
-  INEPs original) — colunas INEP (com bolinha verde/vermelha de
-  sincronização, RN-081), Nome, Estado, Município (RN-078), Valor Total
+  `/mip/`, mostrando **todo INEP cadastrado** — o mesmo universo do
+  Grid de Equipamentos, sem excluir ninguém pelo status do RI/MIP
+  (RN-103, 2026-09-16, revisa a exclusão mútua que a RN-092/RN-074
+  tinham introduzido) — colunas INEP (com bolinha verde/vermelha de
+  sincronização, RN-081), Nome, Estado, Município (RN-078), Status
+  (MIP) (mostra o Status do MIP quando já houve handoff — RN-092 — ou
+  o Status do RI real enquanto não houve, RN-103), Valor Total
   (IXC) e Valor Total (EACE) (RN-076/RN-077, soma quantidade × Valor de
   serviço dos itens de cada lado, com destaque quando os dois totais
-  divergem); filtros de busca, Estado/Município do tipo lista (RN-079)
-  e data de entrada em "Aguardando validação EACE" (RN-075); cards "Com
+  divergem); filtros de busca, Estado/Município do tipo lista (RN-079),
+  Status (MIP)/Status do RI (RN-103) e data de entrada em "Aguardando
+  validação EACE" (RN-075); cards "Com
   divergência" (RN-071) e "No período" (RN-073); linha de total geral
   refletindo os filtros aplicados (RN-080); lista à parte "Fora da
   Validação EACE" para INEPs encontrados na última sincronização mas
-  fora desse status (RN-081). Ao clicar em qualquer INEP (sem esse
-  filtro de status), tela `/mip/<inep>/` com os mesmos 3 lados do RI
+  fora desse status (RN-081). Ao clicar em qualquer INEP, tela `/mip/<inep>/` com os mesmos 3 lados do RI
   juntos (Kit declarado, IXC, Relatório EACE), só leitura, mostrando o
   **Valor de serviço** (`KitPadrao.valor_servico`) em vez do Valor de
   equipamento usado no RI (RN-067). Lado Relatório EACE alimentado pelo
@@ -263,9 +266,9 @@ INEP é considerado concluído (Faturado).
   agrupando 2 subitens — **"Equipamentos"** (grid da FEAT-007,
   `grid_inep`; nome atualizado nesta revisão — a versão anterior desta
   seção registrava "EACE", desatualizado em relação ao código) e
-  **"MIP"** (FEAT-034, 2026-09-07 — grid de INEPs em Validação EACE
-  mais a tela com os 3 lados do RI, `apps.escolas`, ver "Novos nesta
-  versão").
+  **"MIP"** (FEAT-034, 2026-09-07 — grid com todo INEP cadastrado,
+  mesmo universo do grid "Equipamentos" desde a RN-103, mais a tela com
+  os 3 lados do RI, `apps.escolas`, ver "Novos nesta versão").
 - Reorganização original (FEAT-007) foi só de navegação/UI — não alterou
   view, URL, template ou lógica do grid da FEAT-007
   (`apps/ri/views.py`, `grid_inep.html`).
@@ -386,6 +389,7 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-09-16 | Módulo "MIP" revisado — grid volta a mostrar todo INEP cadastrado (mesmo universo do grid "Equipamentos"), não só quem já passou pelo handoff `status_mip`; Grid de Equipamentos deixa de excluir INEP por `status_mip`; coluna "Status (MIP)" passa a mostrar o Status do RI real enquanto não há handoff (`ADR-006`, RN-103 nova); "Estrutura de navegação" atualizada | Usuário pediu para o INEP deixar de "sumir" do Grid de Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como imagem do RI, mesmo card e mesmo histórico para as duas telas; Orquestrador registrou a decisão nesta sessão (`FEAT-052` criada, implementação ainda não iniciada) |
 | 2026-09-08 | Módulo "MIP" reescrito — grid deixa de mostrar todos os INEPs e passa a mostrar só os em "Aguardando validação EACE" (RN-074); ganha colunas Valor Total (IXC)/Valor Total (EACE) com destaque de divergência (RN-076/RN-077), Estado/Município no lugar de Endereço (RN-078), filtros de Estado/Município e data de entrada no status (RN-075/RN-079), linha de total geral (RN-080) e bolinha de sincronização com lista "Fora da Validação EACE" (RN-081); "Estrutura de navegação" e "Decisões Pendentes" atualizadas (uso do período do Relatório EACE (MIP), RN-073, resolvido) | Usuário pediu, ao longo do dia, uma sequência de ajustes no grid do MIP diretamente ao Dev; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (530 testes, sem regressão, validado inclusive contra dado real de produção) |
 | 2026-09-07 | Módulo "MIP" atualizado — Sincronizador do Lado 3 (RN-070) e confronto de divergência de Valor de serviço (RN-071) documentados; "Decisões Pendentes" restrito ao uso do período (Data inicial/Data final) do upload, já que o Sincronizador e o confronto não dependem dele | Usuário pediu o Sincronizador "com as mesmas regras do RI" e, na sequência, o mesmo card de divergência do RI, validando só Valor de serviço; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (404 testes de `apps.ri` + 64 de `apps.escolas`, sem regressão) |
 | 2026-09-07 | Módulo "MIP" ganha nota sobre a tela de upload do Lado 3 (`Administrador > Relatório EACE (MIP)`, FEAT-035/RN-069); "Decisões Pendentes" ganha item sobre o Sincronizador dessa planilha ainda não definido | Usuário pediu a tela de upload (mesmo padrão da Planilha EACE do RI, com Data inicial/Data final a mais) e depois indicou a fonte real (`doc/Base MIP.xlsx`) e as colunas a ler; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (404 testes de `apps.ri` + 45 de `apps.escolas`, sem regressão) |

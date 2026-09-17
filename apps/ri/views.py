@@ -498,29 +498,21 @@ def grid_inep_view(request):
     drill-down, editável. O cadastro do RI e dos itens é feito na tela da
     FEAT-004 (`ri_detail`).
 
-    RN-092 (2026-09-10; revista no mesmo dia): INEP cujo `Escola.
-    status_mip` está em "Aguardando validação EACE" ou "Faturamento
-    Concluído" "sai" deste grid — passa a ser controlado só pelo MIP
-    (Projeto > MIP). Exceção: `status_mip="Em Andamento"` continua (ou
-    volta a) aparecer aqui normalmente — esse status do MIP É o
-    `Ri.status="andamento"` de verdade, com todo o acesso de sempre desta
-    tela (RN-052/RN-011); só os outros 2 status tiram o INEP daqui.
-    Continua acessível direto por `/ri/<inep>/` (tela de detalhe), que
-    não tem esse filtro de qualquer forma.
+    RN-103 (2026-09-16): revisa a RN-092 (2026-09-10) — o INEP deixa de
+    "sair" deste grid quando `Escola.status_mip` avança para "Aguardando
+    validação EACE"/"Faturamento Concluído"/qualquer status do LOTE.
+    Grid de Equipamentos e grid do MIP (Projeto > MIP) voltam a mostrar
+    sempre o mesmo universo de INEPs — nenhum dos dois esconde o INEP
+    que aparece no outro. `status_mip` continua existindo e sendo
+    gravado do mesmo jeito (handoff automático, RN-092), só não filtra
+    mais a visibilidade aqui.
     """
     q = (request.GET.get("q") or "").strip()
     status_conexao_filtro = (request.GET.get("status_conexao") or "").strip()
     status_ri_filtro = (request.GET.get("status_ri") or "").strip()
     divergencia_filtro = (request.GET.get("divergencia") or "").strip() == "1"
 
-    # `.exclude(status_mip__in=[...])` sozinho excluiria também quem nunca
-    # entrou no MIP (`status_mip` NULL) — três-valores do SQL faz `NOT
-    # (NULL IN (...))` virar NULL, tratado como falso pelo WHERE; por isso
-    # o filtro positivo abaixo (nunca entrou OU está "Em Andamento"), em
-    # vez de um exclude.
-    escolas = Escola.objects.filter(
-        Q(status_mip__isnull=True) | Q(status_mip=Escola.EM_ANDAMENTO)
-    ).order_by("nome")
+    escolas = Escola.objects.order_by("nome")
     if q:
         escolas = escolas.filter(
             Q(inep__icontains=q)
@@ -532,12 +524,21 @@ def grid_inep_view(request):
         escolas = escolas.filter(status_conexao=status_conexao_filtro)
 
     # Prefetch unico evita N+1: todas as Escolas da pagina trazem seus RIs
-    # (mais recente primeiro) e, de cada RI, os itens e as divergencias.
+    # (mais recente primeiro) e, de cada RI, os itens, as divergencias e a
+    # resposta do financeiro (RECEBIDO mais recente, `to_attr` evita nova
+    # consulta por linha ao ler `respostas_financeiro_recebidas[0]`).
     escolas = escolas.prefetch_related(
         Prefetch(
             "ris",
             queryset=Ri.objects.order_by("-criado_em").prefetch_related(
-                "itens_eace", "itens_ixc", "itens_relatorio_eace", "divergencias"
+                "itens_eace", "itens_ixc", "itens_relatorio_eace", "divergencias",
+                Prefetch(
+                    "emails_financeiro",
+                    queryset=EmailFinanceiroLog.objects.filter(
+                        direcao=EmailFinanceiroLog.RECEBIDO
+                    ).order_by("-data_hora"),
+                    to_attr="respostas_financeiro_recebidas",
+                ),
             ),
         )
     )
@@ -588,11 +589,21 @@ def grid_inep_view(request):
             else escola.kit_inicial
         )
 
+        # Data em que o financeiro respondeu o e-mail (RF-08) — `data_hora`
+        # do `EmailFinanceiroLog` RECEBIDO mais recente do RI atual, já
+        # trazido pelo prefetch acima (sem consulta nova por linha).
+        data_resposta_financeiro = (
+            ri_atual.respostas_financeiro_recebidas[0].data_hora
+            if ri_atual and ri_atual.respostas_financeiro_recebidas
+            else None
+        )
+
         linha = {
             "escola": escola,
             "ri": ri_atual,
             "divergencia_aberta": divergencia_aberta,
             "kit_declarado_referencia": kit_declarado_referencia,
+            "data_resposta_financeiro": data_resposta_financeiro,
             # RN-051/RN-066: mesma lista filtrada por RI já usada na tela de
             # detalhe (`_status_ri_opcoes_disponiveis`) - antes o <select>
             # do drill-down usava a lista global `STATUS_RI_EDITAVEIS`, sem

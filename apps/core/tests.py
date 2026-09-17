@@ -1,18 +1,23 @@
 import datetime
+import gzip
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
-from django.urls import reverse
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, TransactionTestCase
+from django.urls import NoReverseMatch, reverse
 
 from apps.escolas.models import Escola
 from apps.ri.models import KitPadrao, Ri, RiItemRelatorioEace
 
+from . import services
 from .email_tracking import (
     extrair_codigos_rastreio,
     montar_assunto_com_codigo,
     montar_codigo_rastreio,
 )
+from .views import BACKUP_FRASE_CONFIRMACAO
 
 User = get_user_model()
 
@@ -1256,3 +1261,310 @@ class VisualizadorAccessMiddlewareTests(TestCase):
             reverse("login"), {"username": "analista-mw", "password": "senha-teste-123"},
         )
         self.assertRedirects(resp, reverse("home"))
+
+    def test_tela_de_backup_e_bloqueada(self):
+        """Administrador > Backup não entra na lista de liberadas ao
+        Visualizador (nem leitura) — mesmo critério do MIP (LOTE) acima."""
+        self.client.force_login(self.visualizador)
+        resp = self.client.get(reverse("backup"), follow=True)
+        self.assertRedirects(resp, reverse("grid_inep"))
+
+
+class BackupPermissaoTests(TestCase):
+    """Administrador > Backup (pedido do usuário, 2026-09-17): todas as
+    rotas exigem login e perfil Administrador — mesmo critério das
+    demais telas administrativas (RN-004)."""
+
+    def setUp(self):
+        self.administrador = User.objects.create_user(
+            username="admin-backup-perm", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-backup-perm", password="senha-teste-123",
+        )
+
+    def test_exige_login(self):
+        resp = self.client.get(reverse("backup"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_tela_bloqueada_para_analista(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("backup"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_exportar_bloqueado_para_analista(self):
+        self.client.force_login(self.analista)
+        resp = self.client.post(reverse("backup_exportar"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_importar_bloqueado_para_analista(self):
+        self.client.force_login(self.analista)
+        resp = self.client.post(reverse("backup_importar"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_baixar_bloqueado_para_analista(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("backup_baixar", kwargs={"nome": "seguranca_20260101_000000.sql.gz"}))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_administrador_ve_a_tela(self):
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Exportar backup")
+        self.assertContains(resp, "Importar backup")
+
+
+class BackupExportarViewTests(TestCase):
+    """Exportar backup — streaming direto do `mysqldump`, sem gravar nada
+    no servidor (`services.exportar_backup_chunks`)."""
+
+    def setUp(self):
+        self.administrador = User.objects.create_user(
+            username="admin-backup-export", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+
+    def test_get_redireciona_sem_exportar(self):
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup_exportar"))
+        self.assertEqual(resp.status_code, 302)
+
+    def test_post_devolve_gzip_valido(self):
+        self.client.force_login(self.administrador)
+        resp = self.client.post(reverse("backup_exportar"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "application/gzip")
+        self.assertIn("attachment;", resp["Content-Disposition"])
+        conteudo = b"".join(resp.streaming_content)
+        # Cabeçalho do formato gzip (RFC 1952) — confirma que o `zlib`
+        # (wbits=31) realmente produziu um .gz de verdade, não só bytes
+        # crus do mysqldump.
+        self.assertEqual(conteudo[:2], b"\x1f\x8b")
+        sql = gzip.decompress(conteudo).decode("utf-8", errors="replace")
+        # Cliente instalado no Dockerfile é MariaDB (compatível com o
+        # MySQL 8.0 real do container `db`) — o cabeçalho do dump reflete
+        # isso, mesmo apontando pro banco certo (`Database: ...`).
+        self.assertIn("-- MariaDB dump", sql)
+        self.assertIn("Database: test_gerenciador_posvenda", sql)
+
+
+class BackupImportarViewTests(TransactionTestCase):
+    """Importar backup — SOBRESCREVE o banco inteiro, por isso exige
+    Administrador + confirmação forte (checkbox + frase exata) e sempre
+    grava um backup de segurança do estado atual antes de tocar em
+    qualquer coisa (`services.criar_backup_seguranca`).
+
+    `TransactionTestCase` (não `TestCase`): `mysqldump`/`mysql` rodam por
+    fora da conexão do Django, num processo à parte — dentro da
+    transação não confirmada de um `TestCase` normal, o `DROP TABLE` do
+    restore dispararia um commit implícito do MySQL no meio do teste
+    (corrompendo o isolamento dos testes seguintes)."""
+
+    def setUp(self):
+        # `BACKUP_ROOT` é uma pasta real em disco, compartilhada entre
+        # TODAS as classes de teste (não isolada por transação/banco de
+        # teste) — limpa também na entrada, não só na saída, senão um
+        # backup deixado por outra classe (`BackupListaEDownloadTests`)
+        # pode ser contado aqui por engano.
+        for backup in services.listar_backups_seguranca():
+            services.excluir_backup_seguranca(backup.nome)
+        self.administrador = User.objects.create_user(
+            username="admin-backup-import", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-backup-import", password="senha-teste-123",
+        )
+
+    def tearDown(self):
+        for backup in services.listar_backups_seguranca():
+            services.excluir_backup_seguranca(backup.nome)
+
+    def test_bloqueado_para_analista_e_nao_mexe_no_banco(self):
+        self.client.force_login(self.analista)
+        resp = self.client.post(reverse("backup_importar"))
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(services.listar_backups_seguranca(), [])
+
+    def test_sem_arquivo_mostra_erro(self):
+        self.client.force_login(self.administrador)
+        resp = self.client.post(
+            reverse("backup_importar"),
+            {"ciencia": "on", "frase_confirmacao": BACKUP_FRASE_CONFIRMACAO},
+            follow=True,
+        )
+        self.assertContains(resp, "Selecione um arquivo")
+
+    def test_extensao_invalida_mostra_erro(self):
+        self.client.force_login(self.administrador)
+        arquivo = SimpleUploadedFile("backup.txt", b"qualquer coisa")
+        resp = self.client.post(
+            reverse("backup_importar"),
+            {"arquivo": arquivo, "ciencia": "on", "frase_confirmacao": BACKUP_FRASE_CONFIRMACAO},
+            follow=True,
+        )
+        self.assertContains(resp, "Arquivo inválido")
+
+    def test_sem_ciencia_marcada_mostra_erro(self):
+        self.client.force_login(self.administrador)
+        arquivo = SimpleUploadedFile("backup.sql", b"-- fake")
+        resp = self.client.post(
+            reverse("backup_importar"),
+            {"arquivo": arquivo, "frase_confirmacao": BACKUP_FRASE_CONFIRMACAO},
+            follow=True,
+        )
+        self.assertContains(resp, "Importação cancelada")
+
+    def test_frase_errada_bloqueia_e_nao_mexe_no_banco(self):
+        escola = Escola.objects.create(inep="70000001", nome="Escola Antes Da Importacao")
+        arquivo = SimpleUploadedFile("backup.sql", b"-- fake")
+        self.client.force_login(self.administrador)
+        resp = self.client.post(
+            reverse("backup_importar"),
+            {"arquivo": arquivo, "ciencia": "on", "frase_confirmacao": "frase errada"},
+            follow=True,
+        )
+        self.assertContains(resp, "Importação cancelada")
+        self.assertTrue(Escola.objects.filter(pk=escola.pk).exists())
+        self.assertEqual(services.listar_backups_seguranca(), [])
+
+    @patch("apps.core.views.services.criar_backup_seguranca")
+    def test_falha_no_backup_de_seguranca_aborta_sem_importar(self, mock_criar_backup):
+        """Se o backup de segurança falhar, a importação é cancelada
+        antes de chegar perto do `mysql` de restauração — nunca
+        sobrescreve o banco sem essa rede de segurança confirmada."""
+        mock_criar_backup.side_effect = services.BackupError("disco cheio")
+        escola = Escola.objects.create(inep="70000005", nome="Escola Protegida")
+        arquivo = SimpleUploadedFile("backup.sql", b"-- fake")
+        self.client.force_login(self.administrador)
+        resp = self.client.post(
+            reverse("backup_importar"),
+            {"arquivo": arquivo, "ciencia": "on", "frase_confirmacao": BACKUP_FRASE_CONFIRMACAO},
+            follow=True,
+        )
+        self.assertContains(resp, "não foi possível gravar o backup de segurança")
+        self.assertTrue(Escola.objects.filter(pk=escola.pk).exists())
+
+    def test_roundtrip_export_e_import_gz_preserva_dado(self):
+        """Exporta o banco (com 1 INEP conhecido), importa esse mesmo
+        arquivo de volta — o dado tem que continuar lá depois, e um
+        backup de segurança do estado anterior tem que ter sido
+        gravado."""
+        escola = Escola.objects.create(inep="70000002", nome="Escola Round Trip Gz")
+        self.client.force_login(self.administrador)
+
+        resp_exportar = self.client.post(reverse("backup_exportar"))
+        self.assertEqual(resp_exportar.status_code, 200)
+        conteudo_gz = b"".join(resp_exportar.streaming_content)
+
+        arquivo = SimpleUploadedFile("backup.sql.gz", conteudo_gz)
+        resp_importar = self.client.post(
+            reverse("backup_importar"),
+            {"arquivo": arquivo, "ciencia": "on", "frase_confirmacao": BACKUP_FRASE_CONFIRMACAO},
+            follow=True,
+        )
+        self.assertContains(resp_importar, "Backup importado com sucesso")
+        self.assertTrue(Escola.objects.filter(inep="70000002").exists())
+        backups = services.listar_backups_seguranca()
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].usuario, "admin-backup-import")
+
+    def test_roundtrip_export_e_import_sql_sem_compressao_tambem_funciona(self):
+        escola = Escola.objects.create(inep="70000003", nome="Escola Round Trip Sql")
+        self.client.force_login(self.administrador)
+
+        resp_exportar = self.client.post(reverse("backup_exportar"))
+        conteudo_sql = gzip.decompress(b"".join(resp_exportar.streaming_content))
+
+        arquivo = SimpleUploadedFile("backup.sql", conteudo_sql)
+        resp_importar = self.client.post(
+            reverse("backup_importar"),
+            {"arquivo": arquivo, "ciencia": "on", "frase_confirmacao": BACKUP_FRASE_CONFIRMACAO},
+            follow=True,
+        )
+        self.assertContains(resp_importar, "Backup importado com sucesso")
+        self.assertTrue(Escola.objects.filter(inep="70000003").exists())
+
+
+class BackupListaEDownloadTests(TransactionTestCase):
+    """Lista/baixa os backups de segurança gravados automaticamente pela
+    importação (`services.criar_backup_seguranca`) — sem opção de
+    excluir na tela (pedido do usuário, 2026-09-17: "feito tá feito").
+    `TransactionTestCase` pelo mesmo motivo de `BackupImportarViewTests`
+    (o round-trip usado para gerar um backup de verdade)."""
+
+    def setUp(self):
+        # Mesmo cuidado de `BackupImportarViewTests.setUp` — `BACKUP_ROOT`
+        # é compartilhado entre classes, limpa também na entrada.
+        for backup in services.listar_backups_seguranca():
+            services.excluir_backup_seguranca(backup.nome)
+        self.administrador = User.objects.create_user(
+            username="admin-backup-lista", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+
+    def tearDown(self):
+        for backup in services.listar_backups_seguranca():
+            services.excluir_backup_seguranca(backup.nome)
+
+    def _gerar_um_backup_de_seguranca(self):
+        self.client.force_login(self.administrador)
+        resp_exportar = self.client.post(reverse("backup_exportar"))
+        conteudo_gz = b"".join(resp_exportar.streaming_content)
+        arquivo = SimpleUploadedFile("backup.sql.gz", conteudo_gz)
+        self.client.post(
+            reverse("backup_importar"),
+            {"arquivo": arquivo, "ciencia": "on", "frase_confirmacao": BACKUP_FRASE_CONFIRMACAO},
+        )
+        return services.listar_backups_seguranca()[0]
+
+    def test_lista_vazia_por_padrao(self):
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup"))
+        self.assertContains(resp, "Nenhum backup de segurança gravado ainda.")
+
+    def test_backup_aparece_na_lista_apos_importacao(self):
+        backup = self._gerar_um_backup_de_seguranca()
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup"))
+        self.assertContains(resp, backup.nome)
+        self.assertGreater(backup.tamanho_bytes, 0)
+
+    def test_baixar_backup_existente(self):
+        backup = self._gerar_um_backup_de_seguranca()
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup_baixar", kwargs={"nome": backup.nome}))
+        self.assertEqual(resp.status_code, 200)
+        conteudo = b"".join(resp.streaming_content)
+        self.assertEqual(conteudo[:2], b"\x1f\x8b")
+
+    def test_baixar_nome_inexistente_da_404(self):
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup_baixar", kwargs={"nome": "seguranca_99999999_999999.sql.gz"}))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_baixar_nome_fora_do_padrao_da_404(self):
+        """Defesa contra path traversal: o `str` do path converter já não
+        deixa `nome` conter "/" (URL nem casaria), e o regex de
+        `resolver_caminho_backup_seguranca` recusa qualquer coisa fora do
+        padrão `seguranca_<timestamp>.sql.gz` — inclusive um nome com
+        `..` sem barra nenhuma."""
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup_baixar", kwargs={"nome": "..config.sql.gz"}))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_nao_existe_opcao_de_excluir(self):
+        """Pedido do usuário (2026-09-17): backup de segurança gravado
+        fica permanente ("feito tá feito") — sem rota nem botão de
+        excluir na tela."""
+        self._gerar_um_backup_de_seguranca()
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup"))
+        self.assertNotContains(resp, "Excluir")
+        with self.assertRaises(NoReverseMatch):
+            reverse("backup_excluir", kwargs={"nome": "seguranca_99999999_999999.sql.gz"})
+
+    def test_lista_mostra_usuario_que_importou(self):
+        self._gerar_um_backup_de_seguranca()
+        self.client.force_login(self.administrador)
+        resp = self.client.get(reverse("backup"))
+        self.assertContains(resp, "admin-backup-lista")

@@ -1,9 +1,11 @@
+from datetime import datetime
 from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponseForbidden
+from django.db import connections
+from django.http import FileResponse, Http404, HttpResponseForbidden, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render, resolve_url
 
 from apps.ri.services import (
@@ -15,6 +17,7 @@ from apps.ri.services import (
     montar_produtos_complementares_por_estado,
 )
 
+from . import services
 from .models import User
 
 
@@ -309,3 +312,131 @@ def usuarios_trocar_acesso_view(request, usuario_id):
     situacao = "Ligado" if usuario.acesso_liberado else "Desligado"
     messages.success(request, f"Acesso de {usuario.username} alterado para {situacao}.")
     return redirect("usuarios")
+
+
+# Pedido do usuário (2026-09-17): "Administrador > Backup" — exportar o
+# banco inteiro (para levar um retrato de produção) e importar esse
+# retrato em outro ambiente (ex.: homologação), para testar com dado
+# real. "Importar" SOBRESCREVE todo o banco atual — por isso exige,
+# além de Administrador, marcar a confirmação e digitar esta frase
+# exata (decisão explícita do usuário: confirmação forte + backup
+# automático antes de qualquer importação, sem depender de uma
+# variável de ambiente "isto é produção" que este projeto ainda não
+# tem).
+BACKUP_FRASE_CONFIRMACAO = "IMPORTAR E APAGAR TUDO"
+
+
+@login_required
+def backup_view(request):
+    """Tela "Administrador > Backup" — botão de exportar, formulário de
+    importar (com a confirmação forte acima) e a lista dos backups de
+    segurança já gravados automaticamente antes de cada importação
+    (`services.criar_backup_seguranca`), para o Administrador poder
+    baixar/desfazer se precisar."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+
+    try:
+        backups = services.listar_backups_seguranca()
+        espaco_livre_bytes = services.espaco_livre_bytes()
+    except services.BackupError as erro:
+        messages.error(request, str(erro))
+        backups = []
+        espaco_livre_bytes = None
+
+    return render(
+        request,
+        "core/backup.html",
+        {
+            "backups": backups,
+            "espaco_livre_bytes": espaco_livre_bytes,
+            "frase_confirmacao": BACKUP_FRASE_CONFIRMACAO,
+            "nome_banco": connections["default"].settings_dict.get("NAME", ""),
+        },
+    )
+
+
+@login_required
+def backup_exportar_view(request):
+    """Baixa o banco inteiro (.sql.gz) — streaming direto do `mysqldump`,
+    nada fica gravado no servidor por esta ação (diferente do backup de
+    segurança automático da importação, abaixo)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+    if request.method != "POST":
+        return redirect("backup")
+
+    nome_arquivo = f"backup_gerenciador_posvenda_{datetime.now():%Y%m%d_%H%M%S}.sql.gz"
+    resposta = StreamingHttpResponse(services.exportar_backup_chunks(), content_type="application/gzip")
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def backup_importar_view(request):
+    """Restaura um arquivo `.sql`/`.sql.gz` por cima do banco atual —
+    SOBRESCREVE tudo. Exige Administrador, o checkbox de ciência marcado
+    e a frase de confirmação digitada exatamente (`BACKUP_FRASE_
+    CONFIRMACAO`, validada aqui no servidor, nunca só no JS da tela).
+    Antes de tocar no banco, grava um backup de segurança do estado
+    atual (`criar_backup_seguranca`) — se esse passo falhar, a
+    importação é cancelada sem mexer em nada."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+    if request.method != "POST":
+        return redirect("backup")
+
+    arquivo = request.FILES.get("arquivo")
+    confirmou_ciencia = request.POST.get("ciencia") == "on"
+    frase_digitada = (request.POST.get("frase_confirmacao") or "").strip()
+
+    if not arquivo:
+        messages.error(request, "Selecione um arquivo de backup (.sql ou .sql.gz).")
+        return redirect("backup")
+    if not arquivo.name.lower().endswith((".sql", ".sql.gz")):
+        messages.error(request, "Arquivo inválido — envie um .sql ou .sql.gz.")
+        return redirect("backup")
+    if not confirmou_ciencia or frase_digitada != BACKUP_FRASE_CONFIRMACAO:
+        messages.error(
+            request,
+            "Importação cancelada — marque a confirmação e digite a frase exatamente como pedido.",
+        )
+        return redirect("backup")
+
+    try:
+        backup_seguranca = services.criar_backup_seguranca(usuario=request.user.username)
+    except services.BackupError as erro:
+        messages.error(request, f"Importação cancelada — não foi possível gravar o backup de segurança: {erro}")
+        return redirect("backup")
+
+    try:
+        services.restaurar_backup(arquivo)
+    except services.BackupError as erro:
+        messages.error(
+            request,
+            f"Falha ao importar — o banco pode estar em estado inconsistente. "
+            f"Backup de segurança salvo em \"{backup_seguranca.name}\" para restaurar se precisar. Erro: {erro}",
+        )
+        return redirect("backup")
+
+    messages.success(
+        request,
+        f'Backup importado com sucesso — o banco atual foi substituído. '
+        f'Backup de segurança do estado anterior salvo em "{backup_seguranca.name}".',
+    )
+    return redirect("backup")
+
+
+@login_required
+def backup_baixar_view(request, nome):
+    """Baixa um backup de segurança já gravado (`criar_backup_seguranca`)
+    — nunca serve o arquivo direto por URL de mídia (fora de
+    `MEDIA_ROOT`, ver `settings.BACKUP_ROOT`); só esta view, autenticada
+    e restrita a Administrador."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+
+    caminho = services.resolver_caminho_backup_seguranca(nome)
+    if caminho is None:
+        raise Http404("Backup não encontrado.")
+    return FileResponse(open(caminho, "rb"), as_attachment=True, filename=caminho.name)

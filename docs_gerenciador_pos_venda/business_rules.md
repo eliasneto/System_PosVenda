@@ -3334,9 +3334,18 @@ Reaproveita, sem alterar, `apps.ri.views._validar_transicao_status_ri` e
 
 **Features relacionadas:** FEAT-039, RN-001, RN-003, RN-004, RN-008,
 RN-011, RN-020, RN-052, RN-067, RN-074 (substituída por esta), RN-076,
-RN-089, RN-091.
+RN-089, RN-091, RN-103 (revisão parcial, 2026-09-16).
 
-**Status:** Ativa.
+**Emenda (2026-09-16):** A exclusão de grid descrita acima ("Grid de
+Equipamentos mostra a Escola quando `status_mip` é `None` ou "Em
+Andamento" — nos outros 2 valores, o INEP só aparece no MIP") deixa de
+valer — ver RN-103. O restante desta regra continua ativo sem mudança:
+handoff automático pelo `Ri.save()`, "Em Andamento" sempre igual a
+`Ri.status`, e a exceção de lançamento do equipamento só-valor-de-
+serviço restrita a `status_mip="Aguardando Validação EACE"`.
+
+**Status:** Ativa — critério de exclusão de grid revisto por RN-103
+(2026-09-16); demais critérios continuam valendo.
 
 ## Perfil Visualizador
 
@@ -3651,9 +3660,93 @@ aba da planilha não muda (continua na grafia normal de
 
 **Status:** Ativa.
 
+## Grid de Equipamentos e MIP voltam a espelhar o mesmo universo de INEPs
+
+### RN-103 — MIP deixa de excluir INEP do Grid de Equipamentos (grids espelham o mesmo universo)
+
+**Descrição:** O Grid de Equipamentos (RI, `apps.ri.views.grid_inep_view`)
+deixa de excluir o INEP quando `Escola.status_mip` está em "Aguardando
+Validação EACE" ou em qualquer outro valor pós-handoff (RN-092) — volta
+a listar toda Escola, sem exceção. O grid do MIP (`apps.escolas.views.
+mip_inep_view`) deixa de exigir `status_mip` preenchido (RN-074, revista
+por RN-092) — passa a listar toda Escola cadastrada, o mesmo universo do
+Grid de Equipamentos. As duas telas voltam a ser duas visões do mesmo
+conjunto de INEPs/RI: nenhuma delas esconde o INEP quando ele aparece na
+outra; o card (RI) e o histórico (`RiHistorico`, RN-068) continuam sendo
+os mesmos nas duas telas, sem duplicação.
+
+Coluna/filtro "Status (MIP)": enquanto `Escola.status_mip` ainda é
+`None` (RI não chegou em "Aguardando Validação EACE"), passa a mostrar o
+**Status do RI real** (RN-001: Implantação EACE, Em Andamento, Envio de
+Email para faturamento, Aguardando financeiro, Resposta Financeiro ou
+Correção MEGA), em vez de ficar em branco. A partir do 1º handoff,
+continua mostrando só os valores próprios do MIP (Em Andamento,
+Aguardando Validação EACE, Aguardando Encerramento LOTE, Em Faturamento,
+Processo Concluído), exatamente como hoje (RN-092). O filtro por Status
+(MIP) passa a oferecer também os 6 rótulos do RI puro, além dos 5 já
+existentes do MIP.
+
+**Contexto:** Usuário pediu para o INEP deixar de "sumir" do Grid de
+Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como
+uma imagem do RI (todos os INEPs, todas as informações dos lados), com
+qualquer alteração feita no MIP (ex.: itens de equipamento lançados por
+lá) refletindo no mesmo card do RI, e o mesmo histórico para os dois.
+Perguntado (CLAUDE.md §9) sobre o que mostrar na coluna Status (MIP)
+para quem ainda não chegou em "Aguardando Validação EACE" (hoje em
+branco), o usuário escolheu mostrar o Status do RI real nesse período,
+em vez de deixar em branco ou criar uma coluna nova ao lado.
+
+**Critérios:**
+- `Ri.status`/`Escola.status_mip` (armazenamento, handoff automático,
+  ciclo do LOTE) não mudam — RN-092/RN-098/RN-101 continuam valendo
+  exatamente como estão. Muda só a VISIBILIDADE nos dois grids e o
+  rótulo exibido na coluna Status (MIP).
+- `grid_inep_view`: remove o filtro `Q(status_mip__isnull=True) |
+  Q(status_mip=Escola.EM_ANDAMENTO)` — lista toda Escola, sem exceção
+  pelo `status_mip`.
+- `mip_inep_view`: remove o `.filter(status_mip__isnull=False)` — lista
+  toda Escola cadastrada, igual ao Grid de Equipamentos.
+- Item de equipamento "só valor de serviço" lançado via MIP (RN-092) já
+  grava em `RiItemIxc` — a mesma tabela do Lado IXC do RI
+  (`mip_item_ixc_somente_servico_salvar_view`); ao remover o filtro de
+  visibilidade acima, esse item passa a aparecer automaticamente no
+  card do RI (grid e detalhe), sem nenhuma migração de dado nem tabela
+  nova — o "mesmo card" já era compartilhado, só a linha do grid é que
+  ficava escondida.
+- Lado 3 (Relatório EACE) continua com as 2 fontes independentes de
+  sempre (`RiItemRelatorioEace` do RI × `EscolaItemRelatorioEaceMip` do
+  MIP, RN-067/RN-095) — não é alcançado por este pedido, que fala de
+  itens de equipamento (Lado IXC).
+- "Status (MIP)" (coluna e filtro) mostra o Status do RI real (RN-001)
+  enquanto `status_mip` é `None`; a partir do 1º handoff, volta a
+  mostrar só os valores próprios do MIP.
+- Elegibilidade do LOTE (RN-098: `status_mip == "Aguardando Validação
+  EACE"` + Valor Total IXC == EACE) não muda — não depende de o grid
+  mostrar ou esconder o INEP.
+- Lista separada "Fora da Validação EACE" (RN-081) não muda — continua
+  sinalizando descompasso da própria sincronização do Lado 3 do MIP, sem
+  relação com este pedido.
+
+**Exceções:** Nenhuma além dos critérios acima.
+
+**Impacto técnico:** `apps.ri.views.grid_inep_view` (remove filtro
+RN-092); `apps.escolas.views.mip_inep_view` (remove filtro RN-092/
+RN-074; resolve o rótulo de Status (MIP) a partir de `status_mip` quando
+preenchido, senão `Ri.status`); template `escolas/mip_inep.html`
+(coluna/filtro Status (MIP)). Sem migration nova — nenhum campo muda de
+formato, só a query de visibilidade e o rótulo exibido.
+
+**Features relacionadas:** FEAT-052 (nova), RN-092 (revisão parcial —
+critério de exclusão de grid substituído por esta; o restante continua
+ativo), RN-074 (já substituída por RN-092), RN-067, RN-068, RN-081,
+RN-098.
+
+**Status:** Ativa.
+
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-16 | RN-103 criada (Grid de Equipamentos deixa de excluir INEP pelo `status_mip`; grid do MIP passa a mostrar toda Escola cadastrada, não só quem já passou pelo handoff; coluna/filtro "Status (MIP)" passa a mostrar o Status do RI real enquanto não há handoff; RN-092 ganha emenda registrando a revisão parcial) | Usuário pediu para o INEP deixar de "sumir" do Grid de Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como imagem do RI (todos os INEPs, mesmo card, mesmo histórico); Orquestrador registrou a regra e `ADR-006`/`FEAT-052` nesta sessão; implementação ainda não iniciada |
 | 2026-09-16 | RN-098 criada (criação/desfazer de LOTE — elegibilidade e agrupamento de INEPs, FEAT-044/049/050); RN-101 criada (ciclo de status do LOTE — Em Andamento/Em Faturamento/Processo Concluído — e-mail do LOTE comentado, não usado por enquanto, FEAT-045/046); RN-102 criada (nome do Município em maiúsculo no texto de observação da planilha de faturamento de implantação) | Todo o conjunto (FEAT-044 a FEAT-046, FEAT-049, FEAT-050) já estava implementado e testado pelo Dev desde 2026-09-14, mas nunca tinha sido formalizado em `business_rules.md`/`checklist.md` — Orquestrador formaliza nesta sessão; usuário pediu, em turnos seguintes, para comentar o e-mail do LOTE e liberar a troca de status sem ele (RN-101), criar o download de planilhas de vários LOTEs em `.zip` (FEAT-051 nova) e o Município em maiúsculo na observação (RN-102); nenhum deploy em produção desta rodada ainda |
 | 2026-09-14 | RN-100 criada (disparo manual do RPA EACE — "Disparar RPA"/"Tentar novamente" — passa a gravar quem clicou na linha do tempo/Auditoria; corrigido bug de exibição que mostrava sempre "Sistema" mesmo com autor real gravado; caso reportado: INEP 35203185) | Usuário pediu para aparecer quem iniciou o robô; achado que a correção já estava implementada e testada pelo Dev antes desta sessão (não commitada nem documentada) — Orquestrador formaliza a regra; ainda sem deploy em produção |
 | 2026-09-14 | RN-099 criada (troca manual do RI para "Aguardando validação EACE" passa a exigir o mesmo critério do avanço automático, RN-056 — bloqueada se sobrar log de RPA EACE fora de "Sucesso" — corrige bug real reportado pelo usuário em produção, INEP 53005015: RI levado manualmente pra esse status antes de qualquer RPA rodar, 2 logs deram erro só depois) | Usuário reportou o INEP no servidor de produção; Dev investigou os dados reais (autorização explícita do usuário para acesso via SSH) e confirmou a causa raiz; Orquestrador formaliza a regra e cria `FEAT-047` para o bug já corrigido e testado pelo Dev nesta mesma sessão (suíte completa `apps.ri`+`apps.escolas`, sem regressão); nenhum deploy em produção desta correção ainda |

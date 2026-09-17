@@ -1,0 +1,47 @@
+{% comment %}
+Modal de confirmação genérico (pedido do usuário, 2026-09-17): substitui
+o `confirm()` nativo do navegador em qualquer botão de ação irreversível
+do sistema — mesmo visual do painel "Confirmar envio" do modal de e-mail
+do RI (`ri/_modal_enviar_email.html`, `data-painel-secundario`), mas como
+modal único e compartilhado (incluído 1x aqui, em `base.html`) em vez de
+um modal por linha/ação — necessário porque várias telas têm N botões
+"Excluir" (1 por linha de uma tabela), e duplicar um modal inteiro por
+linha seria inviável.
+
+Uso: no botão que hoje chamaria `confirm()`, trocar
+`onclick`/`onsubmit="return confirm('...')"` por:
+    data-confirmar
+    data-confirmar-titulo="Excluir item?"
+    data-confirmar-mensagem="Esta ação não pode ser desfeita."
+    data-confirmar-texto-botao="Excluir"  (opcional, padrão "Confirmar")
+    data-confirmar-cor="perigo"  (opcional — vermelho para ações destrutivas)
+O botão deve ser `type="button"` dentro do `<form>` que vai ser enviado
+(se tiver `name`/`value` próprios, ex.: o par "sobrepor=1" do
+Sincronizador, eles são preservados como campo oculto antes do submit).
+JS delegado em `core/base.html` (mesmo padrão de `data-abrir-modal-email`).
+{% endcomment %}
+<div id="modal-confirmar-generico" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-confirmar-generico>
+    <div class="absolute inset-0 bg-black/60" data-fechar-modal-confirmar-generico></div>
+    <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-md overflow-hidden">
+        <div class="px-6 py-6">
+            <div class="flex items-start gap-4">
+                <div id="modal-confirmar-generico-icone" class="shrink-0 w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
+                    <i data-lucide="triangle-alert" class="w-5 h-5 text-amber-600 dark:text-amber-400"></i>
+                </div>
+                <div class="min-w-0">
+                    <h3 id="modal-confirmar-generico-titulo" class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Confirmar ação</h3>
+                    <p id="modal-confirmar-generico-mensagem" class="text-xs text-gray-500 dark:text-gray-400 mt-2 leading-relaxed"></p>
+                </div>
+            </div>
+        </div>
+        <div class="flex justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800">
+            <button type="button" data-fechar-modal-confirmar-generico class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                Cancelar
+            </button>
+            <button type="button" id="modal-confirmar-generico-confirmar" class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition inline-flex items-center gap-2">
+                <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                <span id="modal-confirmar-generico-texto-botao">Confirmar</span>
+            </button>
+        </div>
+    </div>
+</div>

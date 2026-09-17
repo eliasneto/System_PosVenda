@@ -14,18 +14,18 @@
         <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
             MIP
         </h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">INEPs no MIP (Em Andamento, Aguardando Validação EACE, Aguardando Encerramento LOTE, Em Faturamento ou Processo Concluído)</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">INEPs em Aguardando Validação EACE, com os 3 lados do RI</p>
     </div>
 
     <div class="flex gap-4">
         <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
-            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Total no MIP</p>
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Em Validação EACE</p>
             <p class="text-xl font-black italic text-pv-yellow">{{ total_inep }}</p>
         </div>
         <!-- RN-071: confronto de Valor de serviço entre Lado IXC (2º) e
              Lado Relatório EACE do MIP (3º) — mesmo card/filtro "Com
              divergência" do Grid de Equipamentos (RN-003). -->
-        <a href="{% url 'mip_inep' %}?divergencia=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}{% if status_mip_filtro %}&status_mip={{ status_mip_filtro|urlencode }}{% endif %}"
+        <a href="{% url 'mip_inep' %}?divergencia=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}"
            class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white hover:ring-2 hover:ring-amber-400 transition {% if divergencia_filtro %}ring-2 ring-pv-yellow{% endif %}"
            title="Clique para filtrar os INEPs com divergência de Valor de serviço">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Com divergência</p>
@@ -36,7 +36,7 @@
              "Com divergência" (RN-071). Sem planilha ativa, não há
              período pra comparar. -->
         {% if planilha_ativa.data_inicial and planilha_ativa.data_final %}
-        <a href="{% url 'mip_inep' %}?periodo=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}{% if status_mip_filtro %}&status_mip={{ status_mip_filtro|urlencode }}{% endif %}"
+        <a href="{% url 'mip_inep' %}?periodo=1{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}"
            class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white hover:ring-2 hover:ring-amber-400 transition {% if periodo_filtro %}ring-2 ring-pv-yellow{% endif %}"
            title="Clique para filtrar os INEPs com item do Relatório EACE (MIP) entre {{ planilha_ativa.data_inicial|date:'d/m/Y' }} e {{ planilha_ativa.data_final|date:'d/m/Y' }}">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">No período</p>
@@ -85,19 +85,6 @@
         </select>
     </div>
 
-    <!-- RN-092: Status próprio do MIP (`Escola.status_mip`) — os 3
-         valores possíveis, independente do status do RI. -->
-    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
-        <label for="mip-status" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Status</label>
-        <select id="mip-status" name="status_mip" data-select-placeholder
-                class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase">
-            <option value="">Todos os status</option>
-            {% for valor, rotulo in status_mip_opcoes %}
-            <option value="{{ valor }}" {% if valor == status_mip_filtro %}selected{% endif %}>{{ rotulo }}</option>
-            {% endfor %}
-        </select>
-    </div>
-
     <!-- RN-075 (revista em 2026-09-09): filtro pela Data de Ativação do
          Lado IXC (2º lado) do RI atual (`Ri.data_ativacao`) — dado
          diferente do card do período de Data Emissão ACS (RN-073), que
@@ -128,7 +115,7 @@
         <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
             Filtrar
         </button>
-        {% if q or divergencia_filtro or periodo_filtro or data_inicial_validacao or data_final_validacao or estado_filtro or municipio_filtro or status_mip_filtro %}
+        {% if q or divergencia_filtro or periodo_filtro or data_inicial_validacao or data_final_validacao or estado_filtro or municipio_filtro %}
         <a href="{% url 'mip_inep' %}" class="px-4 py-3 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-2xl hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 dark:hover:text-red-400 transition flex items-center justify-center" title="Limpar filtro">
             <i data-lucide="x" class="w-5 h-5"></i>
         </a>
@@ -153,7 +140,7 @@
                     <th class="px-4 py-2">Nome da Escola</th>
                     <th class="px-4 py-2">Estado</th>
                     <th class="px-4 py-2">Município</th>
-                    <th class="px-4 py-2">Status</th>
+                    <th class="px-4 py-2" title="Data em que o financeiro respondeu o e-mail (RF-08) — do RI atual deste INEP">Data Faturamento</th>
                     <!-- RN-096 (nova, a formalizar pelo Orquestrador em
                          business_rules.md; pedido do usuário, 2026-09-12):
                          Visualizador ganha acesso ao MIP, mas sem nenhum
@@ -190,14 +177,7 @@
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.escola.estado|default:"—" }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.escola.municipio|default:"—" }}</span></td>
                     <td class="px-4 py-2">
-                        <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
-                            {% if linha.escola.status_mip == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
-                            {% elif linha.escola.status_mip == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
-                            {% elif linha.escola.status_mip == 'aguardando_encerramento_lote' %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400
-                            {% elif linha.escola.status_mip == 'em_faturamento_lote' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
-                            {% else %}bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400{% endif %}">
-                            {{ linha.escola.get_status_mip_display }}
-                        </span>
+                        <span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_resposta_financeiro|date:"d/m/Y"|default:"—" }}</span>
                     </td>
                     {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2">
@@ -364,12 +344,12 @@
         </span>
         <div class="flex gap-2">
             {% if page_obj.has_previous %}
-            <a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}{% if status_mip_filtro %}&status_mip={{ status_mip_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+            <a href="?page={{ page_obj.previous_page_number }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-left" class="w-5 h-5"></i>
             </a>
             {% endif %}
             {% if page_obj.has_next %}
-            <a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}{% if status_mip_filtro %}&status_mip={{ status_mip_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+            <a href="?page={{ page_obj.next_page_number }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if data_inicial_validacao %}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if data_final_validacao %}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}{% endif %}{% if estado_filtro %}&estado={{ estado_filtro|urlencode }}{% endif %}{% if municipio_filtro %}&municipio={{ municipio_filtro|urlencode }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-right" class="w-5 h-5"></i>
             </a>
             {% endif %}

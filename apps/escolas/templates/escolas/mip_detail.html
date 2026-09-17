@@ -52,7 +52,7 @@
     <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold mb-4">
         Só leitura — lançar/editar continua em Projeto &gt; Equipamentos.
         {% if escola.status_mip == "em_andamento" %}
-        Status (MIP) em "Em Andamento": este INEP está de volta lá, com o formulário normal do Lado IXC.
+        Status (MIP) em "Em Andamento": os campos do Lado IXC podem ser atualizados em Projeto &gt; Equipamentos, com o formulário normal.
         <a href="{% url 'ri_detail' inep=escola.inep %}" class="text-amber-600 dark:text-amber-400 hover:underline">Abrir em Equipamentos →</a>
         {% elif somente_servico_editavel and not request.user.is_visualizador %}
         Exceção: com o Status (MIP) em "Aguardando Validação EACE", equipamento só com valor de serviço (sem "Equipamentos R$" na LPU) pode ser lançado/excluído direto aqui.
@@ -107,9 +107,15 @@
                         {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
                     </p>
                     {% if somente_servico_editavel and item.descricao in descricoes_somente_servico and request.user.is_administrador %}
-                    <form method="POST" action="{% url 'mip_item_ixc_somente_servico_delete' item_pk=item.pk %}" onsubmit="return confirm('Excluir este equipamento?');" class="shrink-0">
+                    <form method="POST" action="{% url 'mip_item_ixc_somente_servico_delete' item_pk=item.pk %}" class="shrink-0">
                         {% csrf_token %}
-                        <button type="submit" class="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Excluir (equipamento só valor de serviço)">
+                        <button type="button"
+                                data-confirmar
+                                data-confirmar-titulo="Excluir equipamento?"
+                                data-confirmar-mensagem="Excluir este equipamento?"
+                                data-confirmar-texto-botao="Excluir"
+                                data-confirmar-cor="perigo"
+                                class="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Excluir (equipamento só valor de serviço)">
                             <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                         </button>
                     </form>

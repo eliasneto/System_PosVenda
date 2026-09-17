@@ -60,6 +60,7 @@
 <body class="bg-[#F8F9FA] dark:bg-gray-950 text-gray-900 dark:text-gray-100 antialiased overflow-x-hidden">
 
     {% include "core/_messages.html" %}
+    {% include "core/_modal_confirmar.html" %}
 
     {% if user.is_authenticated %}
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 hidden md:hidden transition-opacity" onclick="toggleSidebar()"></div>
@@ -159,14 +160,14 @@
 
             {% if user.is_administrador %}
             <div class="mb-1 relative">
-                <button onclick="toggleSubmenu('submenu-administrador', 'seta-administrador')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'planilha_eace' or request.resolver_match.url_name == 'relatorio_eace_mip' or request.resolver_match.url_name == 'relatorio_administrador' or request.resolver_match.url_name == 'relatorio_faturamento_eace_materiais' or request.resolver_match.url_name == 'usuarios' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
+                <button onclick="toggleSubmenu('submenu-administrador', 'seta-administrador')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'planilha_eace' or request.resolver_match.url_name == 'relatorio_eace_mip' or request.resolver_match.url_name == 'relatorio_administrador' or request.resolver_match.url_name == 'relatorio_faturamento_eace_materiais' or request.resolver_match.url_name == 'usuarios' or request.resolver_match.url_name == 'backup' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
                     <div class="flex items-center gap-3">
                         <i data-lucide="shield" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
                         <span class="text-sm font-semibold">Administrador</span>
                     </div>
-                    <i data-lucide="chevron-down" id="seta-administrador" class="w-4 h-4 transition-transform duration-300 {% if request.resolver_match.url_name == 'planilha_eace' or request.resolver_match.url_name == 'relatorio_eace_mip' or request.resolver_match.url_name == 'relatorio_administrador' or request.resolver_match.url_name == 'relatorio_faturamento_eace_materiais' or request.resolver_match.url_name == 'usuarios' %} rotate-180 {% endif %}"></i>
+                    <i data-lucide="chevron-down" id="seta-administrador" class="w-4 h-4 transition-transform duration-300 {% if request.resolver_match.url_name == 'planilha_eace' or request.resolver_match.url_name == 'relatorio_eace_mip' or request.resolver_match.url_name == 'relatorio_administrador' or request.resolver_match.url_name == 'relatorio_faturamento_eace_materiais' or request.resolver_match.url_name == 'usuarios' or request.resolver_match.url_name == 'backup' %} rotate-180 {% endif %}"></i>
                 </button>
-                <div id="submenu-administrador" class="{% if request.resolver_match.url_name != 'planilha_eace' and request.resolver_match.url_name != 'relatorio_eace_mip' and request.resolver_match.url_name != 'relatorio_administrador' and request.resolver_match.url_name != 'relatorio_faturamento_eace_materiais' and request.resolver_match.url_name != 'usuarios' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
+                <div id="submenu-administrador" class="{% if request.resolver_match.url_name != 'planilha_eace' and request.resolver_match.url_name != 'relatorio_eace_mip' and request.resolver_match.url_name != 'relatorio_administrador' and request.resolver_match.url_name != 'relatorio_faturamento_eace_materiais' and request.resolver_match.url_name != 'usuarios' and request.resolver_match.url_name != 'backup' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
                     <a href="{% url 'planilha_eace' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'planilha_eace' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
                         <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'planilha_eace' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Relatório EACE (RI)
                     </a>
@@ -178,6 +179,9 @@
                     </a>
                     <a href="{% url 'usuarios' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'usuarios' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
                         <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'usuarios' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Usuários
+                    </a>
+                    <a href="{% url 'backup' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'backup' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'backup' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Backup
                     </a>
                 </div>
             </div>
@@ -365,6 +369,74 @@
                         el.classList.remove('hidden');
                     });
                 }
+                return;
+            }
+
+            // Modal de confirmação genérico (pedido do usuário, 2026-09-17):
+            // substitui o `confirm()` nativo em qualquer botão de ação
+            // irreversível — mesmo visual do painel de confirmação do modal
+            // de e-mail acima, mas 1 modal único e compartilhado (não dá pra
+            // duplicar um modal inteiro por linha de tabela). Markup em
+            // `core/_modal_confirmar.html`.
+            var confirmarAbrir = evento.target.closest('[data-confirmar]');
+            if (confirmarAbrir) {
+                evento.preventDefault();
+                // Mesmo cuidado do `data-validar-form` do modal de e-mail
+                // acima: valida o formulário de verdade ANTES de perguntar
+                // "confirma?" — sem isso, um campo obrigatório vazio só
+                // seria percebido depois de já ter confirmado.
+                var formParaValidar = confirmarAbrir.closest('form');
+                if (formParaValidar && !formParaValidar.reportValidity()) return;
+                var modalConfirmar = document.getElementById('modal-confirmar-generico');
+                if (!modalConfirmar) return;
+                modalConfirmar.dataset.botaoOrigemId = '';
+                if (!confirmarAbrir.id) {
+                    confirmarAbrir.id = 'confirmar-origem-' + Math.random().toString(36).slice(2);
+                }
+                modalConfirmar.dataset.botaoOrigemId = confirmarAbrir.id;
+                document.getElementById('modal-confirmar-generico-titulo').textContent =
+                    confirmarAbrir.getAttribute('data-confirmar-titulo') || 'Confirmar ação';
+                document.getElementById('modal-confirmar-generico-mensagem').textContent =
+                    confirmarAbrir.getAttribute('data-confirmar-mensagem') || '';
+                document.getElementById('modal-confirmar-generico-texto-botao').textContent =
+                    confirmarAbrir.getAttribute('data-confirmar-texto-botao') || 'Confirmar';
+                var icone = document.getElementById('modal-confirmar-generico-icone');
+                var botaoConfirmarAcao = document.getElementById('modal-confirmar-generico-confirmar');
+                var perigo = confirmarAbrir.getAttribute('data-confirmar-cor') === 'perigo';
+                icone.className = 'shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center '
+                    + (perigo ? 'bg-red-50 dark:bg-red-900/20' : 'bg-amber-50 dark:bg-amber-900/20');
+                // `lucide.createIcons()` já trocou o `<i data-lucide>` por um
+                // `<svg>` desde o carregamento da página — o seletor cobre os
+                // 2 estados (antes/depois de rodar).
+                var iconeSvg = icone.querySelector('svg, i');
+                if (iconeSvg) {
+                    iconeSvg.setAttribute('class', 'w-5 h-5 ' + (perigo ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'));
+                }
+                botaoConfirmarAcao.className = 'px-6 py-2 font-black uppercase italic text-[10px] rounded-lg transition inline-flex items-center gap-2 '
+                    + (perigo ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-pv-black text-pv-yellow hover:bg-gray-800');
+                modalConfirmar.classList.remove('hidden');
+                return;
+            }
+            if (evento.target.closest('[data-fechar-modal-confirmar-generico]')) {
+                document.getElementById('modal-confirmar-generico').classList.add('hidden');
+                return;
+            }
+            if (evento.target.closest('#modal-confirmar-generico-confirmar')) {
+                var modalAtivo = document.getElementById('modal-confirmar-generico');
+                var origem = document.getElementById(modalAtivo.dataset.botaoOrigemId || '');
+                modalAtivo.classList.add('hidden');
+                if (!origem) return;
+                var formOrigem = origem.closest('form');
+                if (!formOrigem) return;
+                var nomeCampo = origem.getAttribute('name');
+                if (nomeCampo) {
+                    var campoOculto = document.createElement('input');
+                    campoOculto.type = 'hidden';
+                    campoOculto.name = nomeCampo;
+                    campoOculto.value = origem.getAttribute('value') || '';
+                    formOrigem.appendChild(campoOculto);
+                }
+                formOrigem.requestSubmit ? formOrigem.requestSubmit() : formOrigem.submit();
             }
         });
     </script>

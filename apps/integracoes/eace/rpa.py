@@ -65,6 +65,7 @@ class ResultadoRpaEace:
 #   indice_invalido         - --indice fora do numero de linhas do INEP
 #   documento_ja_enviado    - linha nao esta "Pendente" (ja enviada/aprovada/etc.)
 #   valor_divergente        - valor do PDF diferente do valor exibido na linha do portal
+#   valor_ambiguo           - valor do PDF bate com 2+ linhas "Pendente" do mesmo INEP ao mesmo tempo (Fase 2, sem indice explicito) - automacao nao arrisca escolher
 #   upload                  - falha ao anexar PDF/XML no input do portal
 #   enviar_notas            - falha ao clicar em "Enviar notas"
 #   credenciais_ausentes    - .env sem EACE_USUARIO/EACE_SENHA
@@ -85,6 +86,7 @@ MOTIVOS_REGRA_DE_NEGOCIO = frozenset({
     "pdf_sem_valor",
     "inep_divergente_do_pdf",
     "valor_divergente",
+    "valor_ambiguo",
     "osp_nao_encontrada",
     "inep_nao_encontrado",
     "documento_ja_enviado",
@@ -307,16 +309,40 @@ def anexar_nota_fiscal(
                             "documento provavelmente ja enviado antes.", inep,
                         )
                         return _falhar(pagina, inep, "documento_ja_enviado", dados_pdf)
-                    linha_alvo = next(
-                        (l for l in pendentes if valores_iguais(dados_pdf["valor"], l["valor"])),
-                        None,
-                    )
-                    if linha_alvo is None:
+                    candidatas = [l for l in pendentes if valores_iguais(dados_pdf["valor"], l["valor"])]
+                    if not candidatas:
                         logger.error(
                             "Nenhuma linha 'Pendente' do INEP %s tem valor igual ao do PDF (%s).",
                             inep, dados_pdf["valor"],
                         )
                         return _falhar(pagina, inep, "valor_divergente", dados_pdf, pendentes[0]["valor"])
+                    if len(candidatas) > 1:
+                        # Correcao (2026-09-16, INEP 35010264 em producao):
+                        # com 2+ linhas "Pendente" do mesmo INEP tendo o
+                        # MESMO valor (preco de catalogo repetido entre
+                        # produtos diferentes, ex.: 2 KITs do mesmo Lote), o
+                        # `next(...)` que havia aqui sempre pegava a 1ª
+                        # candidata - se essa 1ª nao era a linha de verdade
+                        # daquela Nota Fiscal, a NF subia numa linha errada
+                        # (com valor igual só por coincidencia) e a linha
+                        # certa (cujo valor realmente diverge da NF) nunca
+                        # recebia o erro "Divergencia de valor entre EACE e
+                        # Nota Fiscal" que deveria ter dado - escondia a
+                        # divergencia real atras de um match por coincidencia
+                        # numerica. RN-057 so tem o Valor pra casar
+                        # automaticamente (sem indice explicito, Fase 2 - ver
+                        # docstring de `anexar_nota_fiscal`) - sem um 2º dado
+                        # pra desempatar, a escolha segura e recusar a
+                        # automacao e deixar o usuario resolver manualmente
+                        # (RN-065, "Marcar como concluida manualmente") em
+                        # vez de adivinhar qual linha e a certa.
+                        logger.error(
+                            "Valor do PDF (%s) bate com %s linhas 'Pendente' do INEP %s ao "
+                            "mesmo tempo - ambiguo demais pra automacao escolher sozinha.",
+                            dados_pdf["valor"], len(candidatas), inep,
+                        )
+                        return _falhar(pagina, inep, "valor_ambiguo", dados_pdf, candidatas[0]["valor"])
+                    linha_alvo = candidatas[0]
                     indice = linha_alvo["indice"]
                     valor_portal = linha_alvo["valor"]
                 else:

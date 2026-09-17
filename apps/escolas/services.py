@@ -144,7 +144,47 @@ def _agrupar_linhas_relatorio_eace_mip_por_inep(planilha_ativa):
             workbook.close()
 
 
-def _sincronizar_relatorio_eace_mip_da_escola(escola, linhas):
+def _resumo_item_relatorio_eace_mip(item):
+    """Descrição curta de 1 item do Lado 3 do MIP (quantidade, Valor de
+    serviço, UF/Cidade, Data Emissão ACS), usada como "antes"/"depois" no
+    histórico (pedido do usuário, 2026-09-16) — texto simples, não um
+    formato pra ser lido de volta pelo sistema."""
+    partes = [f"{item.quantidade} un."]
+    if item.valor_servico is not None:
+        partes.append(f"R$ {item.valor_servico}")
+    if item.uf or item.cidade:
+        partes.append(f"{item.uf or '—'}/{item.cidade or '—'}")
+    if item.data_emissao_acs:
+        partes.append(f"Emissão {item.data_emissao_acs.strftime('%d/%m/%Y')}")
+    return " — ".join(partes)
+
+
+def _registrar_log_relatorio_eace_mip(ri, usuario, campo, valor_anterior, valor_novo):
+    """Mesmo padrão de `apps.ri.views._registrar_log_campo`/`apps.escolas.
+    views._registrar_log_campo_mip` (RN-008) — duplicado aqui (função
+    pequena, `services.py` nunca importa de `views.py`, ver comentário no
+    topo do arquivo) para o log do Sincronizador do Lado 3 do MIP (pedido
+    do usuário, 2026-09-16)."""
+    RiHistorico.objects.create(
+        ri=ri,
+        tipo=RiHistorico.LOG_CAMPO,
+        autor=usuario,
+        campo=campo,
+        valor_anterior=valor_anterior,
+        valor_novo=valor_novo,
+    )
+    auditar(
+        usuario,
+        Auditoria.ALTERACAO_CAMPO,
+        entidade="Ri",
+        entidade_id=ri.pk,
+        campo=campo,
+        valor_anterior=valor_anterior,
+        valor_novo=valor_novo,
+    )
+
+
+def _sincronizar_relatorio_eace_mip_da_escola(escola, linhas, sobrepor=True, usuario=None):
     """1 Escola: mesma regra de casamento Descrição×catálogo do
     Sincronizador do RI (RN-022) — KIT por número de Access Points,
     produto avulso por prefixo da Descrição curta — mas grava o Valor de
@@ -154,11 +194,27 @@ def _sincronizar_relatorio_eace_mip_da_escola(escola, linhas):
     Descrição confirmada nesta rodada é criada/atualizada; Descrição
     ausente é removida. Mesma regra "só 1 KIT por INEP" do RI (RN-015):
     um novo KIT nunca substitui o já lançado, só protege o existente de
-    ser removido."""
+    ser removido.
+
+    `sobrepor=False` (pedido do usuário, 2026-09-16): Escola que já tem
+    pelo menos 1 item lançado no Lado 3 é pulada inteira — nem atualiza
+    nem remove nada dela; só quem está com o Lado 3 ainda vazio recebe os
+    itens desta rodada. Retorna `(mudou, pulado)`.
+
+    `usuario` (pedido do usuário, 2026-09-16): item criado/atualizado/
+    excluído nesta chamada gera 1 entrada no histórico do RI atual da
+    Escola (`RiHistorico`, mesmo painel compartilhado do RI e do MIP,
+    RN-068) com o antes/depois do item e quem rodou a sincronização.
+    `usuario=None` (ex.: comando de gestão sem usuário logado) só aplica
+    a mudança, sem gerar histórico; Escola sem nenhum RI ainda também não
+    gera (não há onde gravar — `RiHistorico` é sempre de 1 RI)."""
     itens_existentes = {item.descricao_item: item for item in escola.itens_relatorio_eace_mip.all()}
+    if not sobrepor and itens_existentes:
+        return False, True
     kit_existente = next((item for item in itens_existentes.values() if item.eh_kit), None)
     confirmados = set()
     mudou = False
+    eventos = []  # (descricao_item, valor_anterior, valor_novo) — vira histórico no final.
 
     for linha in linhas:
         descricao_planilha = str(linha["descricao"] or "").strip()
@@ -191,6 +247,7 @@ def _sincronizar_relatorio_eace_mip_da_escola(escola, linhas):
 
         if existente is not None:
             confirmados.add(descricao_item)
+            valor_anterior = _resumo_item_relatorio_eace_mip(existente)
             campos_alterados = []
             for campo, valor_novo in (
                 ("quantidade", quantidade),
@@ -205,6 +262,7 @@ def _sincronizar_relatorio_eace_mip_da_escola(escola, linhas):
             if campos_alterados:
                 existente.save(update_fields=campos_alterados)
                 mudou = True
+                eventos.append((descricao_item, valor_anterior, _resumo_item_relatorio_eace_mip(existente)))
             continue
 
         novo = EscolaItemRelatorioEaceMip.objects.create(
@@ -222,27 +280,71 @@ def _sincronizar_relatorio_eace_mip_da_escola(escola, linhas):
         if eh_kit:
             kit_existente = novo
         mudou = True
+        eventos.append((descricao_item, "(sem item antes)", _resumo_item_relatorio_eace_mip(novo)))
 
     for descricao_item, item in itens_existentes.items():
         if descricao_item not in confirmados:
+            valor_anterior = _resumo_item_relatorio_eace_mip(item)
             item.delete()
             mudou = True
+            eventos.append((descricao_item, valor_anterior, "(removido)"))
 
-    return mudou
+    if eventos and usuario is not None:
+        ri_atual = escola.ris.order_by("-criado_em").first()
+        if ri_atual is not None:
+            for descricao_item, valor_anterior, valor_novo in eventos:
+                _registrar_log_relatorio_eace_mip(
+                    ri_atual, usuario, f"Relatório EACE (MIP) — {descricao_item}", valor_anterior, valor_novo,
+                )
+
+    return mudou, False
 
 
-def sincronizar_relatorio_eace_mip_de_todas_as_escolas():
+def escolas_com_lado3_preenchido_no_arquivo_ativo():
+    """Quantos INEPs do arquivo ativo (RN-069) já têm pelo menos 1 item
+    lançado no Lado 3 (`EscolaItemRelatorioEaceMip`) — usado pela tela
+    para decidir se o botão "Sincronizar todos os INEPs" precisa
+    perguntar ao usuário se quer sobrepor os dados existentes (pedido do
+    usuário, 2026-09-16) antes de rodar de verdade. `0` sem planilha
+    ativa ou sem nenhum INEP dela batendo com uma Escola já preenchida."""
+    planilha = PlanilhaRelatorioEaceMip.ativa()
+    if not planilha:
+        return 0
+    ineps_da_planilha = _agrupar_linhas_relatorio_eace_mip_por_inep(planilha).keys()
+    if not ineps_da_planilha:
+        return 0
+    return (
+        Escola.objects.filter(inep__in=ineps_da_planilha, itens_relatorio_eace_mip__isnull=False)
+        .distinct()
+        .count()
+    )
+
+
+def sincronizar_relatorio_eace_mip_de_todas_as_escolas(sobrepor=True, usuario=None):
     """Botão "Sincronizar todos os INEPs" (Administrador > Relatório EACE
     (MIP)) — aplica `_sincronizar_relatorio_eace_mip_da_escola` a toda
     Escola de uma vez, a partir do arquivo ativo (RN-069). Levanta
     `RelatorioEaceMipSincronizacaoError` só quando não há planilha ativa
     — a view converte em mensagem de erro.
 
+    `sobrepor=False` (pedido do usuário, 2026-09-16): Escola cujo Lado 3
+    já tem algum item lançado é pulada inteira, em vez de ter seus itens
+    atualizados/removidos — só quem está com o Lado 3 vazio é
+    cadastrado nesta rodada. `escolas_com_lado3_preenchido_no_arquivo_
+    ativo` (acima) conta antes, pra tela decidir se pergunta essa escolha
+    ao usuário.
+
+    `usuario` (pedido do usuário, 2026-09-16): repassado a
+    `_sincronizar_relatorio_eace_mip_da_escola` — cada item alterado
+    grava, no histórico do RI daquela Escola, o antes/depois e quem
+    rodou esta sincronização em lote.
+
     RN-081 (a criar): também grava, em toda Escola, se o INEP apareceu ou
     não na planilha desta rodada (`Escola.encontrado_relatorio_eace_mip`)
     — vira a bolinha verde/vermelha do grid do MIP. Sempre grava (mesmo
     quando `False`), pra refletir sempre o resultado desta sincronização,
-    nunca de uma anterior.
+    nunca de uma anterior — independente de `sobrepor` (é só uma marca de
+    presença, não conteúdo do Lado 3).
 
     Também grava `Escola.cod_fornecedor` (coluna "Cod Fornecedor" da
     planilha, igual para toda linha do mesmo INEP) — usado junto com o
@@ -266,6 +368,7 @@ def sincronizar_relatorio_eace_mip_de_todas_as_escolas():
     # o resultado.
     escolas_atualizadas = 0
     escolas_sem_linha = 0
+    escolas_puladas_ja_preenchidas = 0
     for escola in Escola.objects.all():
         linhas = linhas_por_inep.get(escola.inep, [])
         encontrado = bool(linhas)
@@ -283,10 +386,17 @@ def sincronizar_relatorio_eace_mip_de_todas_as_escolas():
         if not linhas:
             escolas_sem_linha += 1
             continue
-        if _sincronizar_relatorio_eace_mip_da_escola(escola, linhas):
+        mudou, pulado = _sincronizar_relatorio_eace_mip_da_escola(escola, linhas, sobrepor=sobrepor, usuario=usuario)
+        if pulado:
+            escolas_puladas_ja_preenchidas += 1
+        elif mudou:
             escolas_atualizadas += 1
 
-    return {"escolas_atualizadas": escolas_atualizadas, "escolas_sem_linha": escolas_sem_linha}
+    return {
+        "escolas_atualizadas": escolas_atualizadas,
+        "escolas_sem_linha": escolas_sem_linha,
+        "escolas_puladas_ja_preenchidas": escolas_puladas_ja_preenchidas,
+    }
 
 
 # ---------------------------------------------------------------------------

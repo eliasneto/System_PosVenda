@@ -56,6 +56,12 @@ services:
       # roda a partir do commit publicado, nao do checkout local).
       - staticfiles_hml:/app/staticfiles
       - media_hml:/app/media
+      # Administrador > Backup (pedido do usuario, 2026-09-17): volume
+      # proprio, fora de media_hml/staticfiles_hml - nao e servido pelo
+      # Nginx (so a view autenticada do "web" le/escreve aqui), mas ainda
+      # precisa sobreviver a um "docker compose up --build" (por isso
+      # volume nomeado, nao um diretorio solto na imagem).
+      - backups_banco_hml:/app/backups_banco
     depends_on:
       db:
         condition: service_healthy
@@ -134,3 +140,4 @@ volumes:
   posvenda_db_data_hml:
   staticfiles_hml:
   media_hml:
+  backups_banco_hml:

@@ -18,6 +18,10 @@ urlpatterns = [
         views.usuarios_trocar_acesso_view,
         name="usuarios_trocar_acesso",
     ),
+    path("administrador/backup/", views.backup_view, name="backup"),
+    path("administrador/backup/exportar/", views.backup_exportar_view, name="backup_exportar"),
+    path("administrador/backup/importar/", views.backup_importar_view, name="backup_importar"),
+    path("administrador/backup/<str:nome>/baixar/", views.backup_baixar_view, name="backup_baixar"),
     path(
         "login/",
         views.LoginPerfilView.as_view(template_name="core/login.html", redirect_authenticated_user=True),

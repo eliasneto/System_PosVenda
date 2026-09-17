@@ -130,19 +130,17 @@ class GridInepViewTests(TestCase):
         resp = self.client.get(reverse("grid_inep"))
         self.assertContains(resp, "Nobreak: Nobreak — 1 un.")
 
-    def test_faturamento_concluido_sai_do_grid_de_equipamentos(self):
-        """RN-092 (2026-09-10): assim que o RI chega em "Faturamento
-        Concluído" (`Escola.status_mip` gravado por `Ri.save()`), o INEP
-        "sai" do grid de Equipamentos — passa a ser controlado só pelo
-        MIP. Continua acessível direto por `ri_detail` (RN-020, testada
-        lá — `RiDetailViewTests.
-        test_pill_de_status_trava_para_analista_em_faturamento_concluido`
-        — e no backend, `RiStatusUpdateViewTests`)."""
+    def test_faturamento_concluido_continua_no_grid_de_equipamentos(self):
+        """RN-103 (2026-09-16, revisa a RN-092 de 2026-09-10): o INEP
+        continua aparecendo no grid de Equipamentos mesmo depois de o RI
+        chegar em "Faturamento Concluído" (`Escola.status_mip` gravado por
+        `Ri.save()`) — os dois grids (Equipamentos e MIP) voltam a
+        mostrar sempre o mesmo universo de INEPs."""
         self.ri.status = Ri.FATURAMENTO_CONCLUIDO
         self.ri.save(update_fields=["status"])
         self.client.force_login(self.user)
         resp = self.client.get(reverse("grid_inep"))
-        self.assertNotContains(resp, self.escola_com_ri.inep)
+        self.assertContains(resp, self.escola_com_ri.inep)
 
     def test_filtro_por_status_do_ri(self):
         """RF-05: coluna e filtro "Status do RI" são o status do RI
@@ -331,11 +329,13 @@ class GridInepViewTests(TestCase):
         self.assertNotContains(resp, "Forçar Resposta Financeiro")
 
 
-class GridInepStatusMipExclusionTests(TestCase):
-    """RN-092 (2026-09-10): INEP cujo `Escola.status_mip` já foi
-    preenchido (handoff pro MIP, gravado por `Ri.save()` na 1ª vez que o
-    RI chega em "Aguardando validação EACE"/"Faturamento Concluído")
-    "sai" deste grid — passa a ser controlado só pelo MIP."""
+class GridInepStatusMipVisibilidadeTests(TestCase):
+    """RN-103 (2026-09-16, revisa a RN-092 de 2026-09-10): INEP cujo
+    `Escola.status_mip` já foi preenchido (handoff pro MIP, gravado por
+    `Ri.save()` na 1ª vez que o RI chega em "Aguardando validação EACE"/
+    "Faturamento Concluído") continua aparecendo neste grid — Grid de
+    Equipamentos e grid do MIP voltam a mostrar sempre o mesmo universo
+    de INEPs."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="analista-mip-handoff", password="senha-teste-123")
@@ -347,12 +347,12 @@ class GridInepStatusMipExclusionTests(TestCase):
         resp = self.client.get(reverse("grid_inep"))
         self.assertContains(resp, escola.inep)
 
-    def test_escola_com_handoff_some_do_grid(self):
+    def test_escola_com_handoff_continua_no_grid(self):
         escola = Escola.objects.create(inep="10000011", nome="Escola Com Handoff")
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
         resp = self.client.get(reverse("grid_inep"))
-        self.assertNotContains(resp, escola.inep)
+        self.assertContains(resp, escola.inep)
 
     def test_escola_com_handoff_continua_acessivel_direto_pela_url(self):
         escola = Escola.objects.create(inep="10000012", nome="Escola Com Handoff")
@@ -1756,6 +1756,34 @@ class ProcessarFilaRpaEaceTests(TestCase):
             processar_proximo_da_fila_rpa_eace()
 
         self.assertEqual(mock_rpa.call_args.kwargs["osp"], "4867")
+
+    def test_valor_da_nf_nao_bate_com_nenhum_item_em_ri_com_varias_osps_nao_arrisca_osp(self):
+        """Correção (2026-09-16, INEP 35010264 em produção): antes desta
+        correção, quando o valor do PDF não batia com NENHUM item do RI
+        (divergência real, não PDF ilegível), `_resolver_osp_da_nota_
+        fiscal` caía no "último recurso" (1ª OSP não vazia) mesmo assim -
+        com o RI tendo itens em OSPs DIFERENTES, isso podia mandar a RPA
+        pra uma OSP errada, arriscando casar por coincidência com outra
+        linha 'Pendente' de valor igual só que de outro produto, em vez de
+        dar o erro "Divergência de valor entre EACE e Nota Fiscal". Sem
+        saber a OSP certa, o jeito seguro é não chamar a RPA."""
+        from apps.ri.services import processar_proximo_da_fila_rpa_eace
+
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Wi-Fi", quantidade=1, valor_unitario=25330.63, num_osp="4867",
+        )
+        log = self._enfileirar()
+
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_nota_fiscal",
+            return_value={"inep": "35083938", "produto": "Kit Wi-Fi", "valor": "999,99"},
+        ), patch("apps.integracoes.eace.rpa.anexar_nota_fiscal") as mock_rpa:
+            processar_proximo_da_fila_rpa_eace()
+
+        mock_rpa.assert_not_called()
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.ERRO)
+        self.assertEqual(log.motivo_erro, "fila_sem_osp_ou_documento")
 
     def test_casa_pelo_valor_total_do_item_nao_so_pelo_unitario(self):
         """Correção (2026-09-04): usuário reportou um item de 3 Access

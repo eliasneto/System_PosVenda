@@ -43,13 +43,48 @@
              do RI. RN-090 (2026-09-09): esta tela deixou de ter período
              (Data inicial/Data final, RN-069/RN-073 revogadas aqui) —
              este botão só lança/atualiza/remove itens pela Descrição,
-             igual ao Sincronizador do RI. -->
+             igual ao Sincronizador do RI.
+
+             Pedido do usuário (2026-09-16): com INEP do arquivo cujo
+             Lado 3 já tem item lançado, pergunta se é pra sobrepor —
+             os 2 botões abaixo enviam o mesmo POST com um valor
+             diferente em "sobrepor". O botão negativo é um `<button
+             type="submit">` normal (o navegador inclui seu name/value
+             sozinho); o botão afirmativo passa pelo modal de
+             confirmação genérico (`data-confirmar`, `core/_modal_
+             confirmar.html`) — por isso é `type="button"`, e o JS
+             delegado em `base.html` recria seu name/value como campo
+             oculto antes de submeter, só depois de confirmado. Sem
+             conflito nenhum, mantém o botão único de sempre (sem o card
+             de "já tem dado"), já com `sobrepor=1`. -->
         <form method="POST" action="{% url 'relatorio_eace_mip_sincronizar_todas' %}" class="mt-5 pt-5 border-t border-gray-100 dark:border-gray-800">
             {% csrf_token %}
-            <button type="submit" class="w-full px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center justify-center gap-2">
+            {% if total_escolas_com_lado3_preenchido %}
+            <p class="text-xs text-amber-600 dark:text-amber-400 font-bold mb-3">
+                {{ total_escolas_com_lado3_preenchido }} INEP(s) deste arquivo já {% if total_escolas_com_lado3_preenchido == 1 %}tem{% else %}têm{% endif %} dado lançado no Lado 3. Sobrepor com o que veio no arquivo?
+            </p>
+            <div class="flex flex-col sm:flex-row gap-2">
+                <button type="button" name="sobrepor" value="1"
+                        data-confirmar
+                        data-confirmar-titulo="Sobrepor dados existentes?"
+                        data-confirmar-mensagem="Confirma sobrepor os dados já existentes de {{ total_escolas_com_lado3_preenchido }} INEP(s)? Os itens atuais do Lado 3 deles serão substituídos pelo que veio no arquivo."
+                        data-confirmar-texto-botao="Sim, sobrepor"
+                        class="flex-1 px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center justify-center gap-2">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                    Sim, sobrepor
+                </button>
+                <button type="submit" name="sobrepor" value="0"
+                        class="flex-1 px-6 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-black uppercase italic text-xs rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-700 transition inline-flex items-center justify-center gap-2">
+                    <i data-lucide="shield" class="w-4 h-4"></i>
+                    Não, só os vazios
+                </button>
+            </div>
+            {% else %}
+            <button type="submit" name="sobrepor" value="1" class="w-full px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center justify-center gap-2">
                 <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                 Sincronizar todos os INEPs
             </button>
+            {% endif %}
         </form>
         {% else %}
         <p class="text-sm text-gray-500 dark:text-gray-400 mt-4">Nenhuma planilha enviada ainda.</p>

@@ -78,10 +78,15 @@
                         {% if usuario == request.user %}
                         <span class="text-[10px] text-gray-400 dark:text-gray-500">Não é possível ligar/desligar o próprio acesso</span>
                         {% else %}
-                        <form method="POST" action="{% url 'usuarios_trocar_acesso' usuario_id=usuario.id %}"
-                              onsubmit="return confirm('{% if usuario.acesso_liberado %}Desligar{% else %}Ligar{% endif %} o acesso de {{ usuario.username|escapejs }}?');">
+                        <form method="POST" action="{% url 'usuarios_trocar_acesso' usuario_id=usuario.id %}">
                             {% csrf_token %}
-                            <button type="submit" class="px-4 py-2 font-black uppercase text-[10px] rounded-xl transition
+                            <button type="button"
+                                    data-confirmar
+                                    data-confirmar-titulo="{% if usuario.acesso_liberado %}Desligar acesso?{% else %}Ligar acesso?{% endif %}"
+                                    data-confirmar-mensagem="{% if usuario.acesso_liberado %}Desligar{% else %}Ligar{% endif %} o acesso de {{ usuario.username }}?"
+                                    data-confirmar-texto-botao="{% if usuario.acesso_liberado %}Desligar{% else %}Ligar{% endif %}"
+                                    {% if usuario.acesso_liberado %}data-confirmar-cor="perigo"{% endif %}
+                                    class="px-4 py-2 font-black uppercase text-[10px] rounded-xl transition
                                 {% if usuario.acesso_liberado %}bg-red-50 text-red-600 hover:bg-red-500 hover:text-white dark:bg-red-900/20{% else %}bg-emerald-50 text-emerald-700 hover:bg-emerald-500 hover:text-white dark:bg-emerald-900/20 dark:text-emerald-400{% endif %}">
                                 {% if usuario.acesso_liberado %}Desligar{% else %}Ligar{% endif %}
                             </button>

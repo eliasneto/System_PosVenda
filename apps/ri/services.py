@@ -2096,6 +2096,24 @@ def _resolver_osp_da_nota_fiscal(ri, documento_pdf):
             if abs(valor_pdf_num - valor_total_item) < 0.01:
                 return item.num_osp
 
+        # Correção (2026-09-16, INEP 35010264 em produção): valor do PDF foi
+        # LIDO com sucesso, só que não bate com NENHUM item deste RI -
+        # diferente do caso "PDF ilegível" citado no docstring acima (ali o
+        # fallback é seguro porque `anexar_nota_fiscal` barra o PDF sem valor
+        # ANTES de abrir o portal, não importa qual OSP foi escolhida). Aqui
+        # a Nota Fiscal tem um valor real que diverge de TODOS os itens deste
+        # RI - cair no "último recurso" (1º item) quando o RI tem itens em
+        # OSPs DIFERENTES arriscava mandar a RPA pra uma OSP que nem é a
+        # dela, podendo casar por coincidência com outra linha "Pendente" de
+        # valor igual só que de outro produto (ver `valor_ambiguo`/
+        # `valor_divergente` em `apps/integracoes/eace/rpa.py`) - escondendo
+        # a divergência real atrás de um match por coincidência numérica.
+        # Só arrisca o "último recurso" quando não há ambiguidade de OSP
+        # nenhuma (todos os itens do RI na mesma OSP) - nesse caso a OSP
+        # certa é sempre a mesma, batendo o valor ou não.
+        if len({item.num_osp for item in itens}) > 1:
+            return None
+
     return itens[0].num_osp
 
 

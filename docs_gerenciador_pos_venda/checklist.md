@@ -4058,9 +4058,64 @@ específico continua em aberto. Deploy em produção não realizado
 
 ---
 
+### FEAT-052 — MIP deixa de excluir INEP do Grid de Equipamentos (grids voltam a espelhar o mesmo universo)
+
+**Descrição:** Grid de Equipamentos (RI) e grid do MIP passam a mostrar
+sempre o mesmo universo de INEPs — nenhum dos dois esconde o INEP
+quando ele aparece no outro. Coluna/filtro "Status (MIP)" passa a
+mostrar o Status do RI real enquanto o INEP ainda não passou pelo
+handoff (RN-092).
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta — pedido direto do usuário, muda comportamento
+visível nas duas telas principais do sistema.
+**Critérios de aceite:**
+- INEP com `Escola.status_mip` em "Aguardando Validação EACE"/
+  "Aguardando Encerramento LOTE"/"Em Faturamento"/"Processo Concluído"
+  continua aparecendo no Grid de Equipamentos (RI), com acesso normal.
+- Grid do MIP mostra todo INEP cadastrado, inclusive quem nunca teve
+  `status_mip` preenchido (RI ainda em Implantação EACE/Andamento/
+  Envio de Email/Aguardando financeiro/Resposta Financeiro/Correção
+  MEGA).
+- Coluna/filtro "Status (MIP)" mostra o Status do RI real (RN-001)
+  enquanto `status_mip` é `None`; a partir do handoff, continua
+  mostrando só os valores do MIP, como hoje.
+- Item de equipamento (Lado IXC, "só valor de serviço") lançado pelo
+  MIP aparece no mesmo card no Grid de Equipamentos/detalhe do RI, sem
+  nenhuma ação manual de sincronização.
+- Histórico (`RiHistorico`) continua sendo o mesmo nas duas telas, sem
+  duplicar entradas.
+- Elegibilidade de LOTE (RN-098) e a exceção do equipamento só-valor-
+  de-serviço (RN-092) continuam funcionando exatamente como antes.
+- Visualizador (RN-093/RN-096) continua vendo exatamente os mesmos
+  INEPs que Administrador/Analista nas duas telas, só sem valor
+  financeiro/edição.
+**Regras relacionadas:** RN-103 (nova), RN-092 (revisão parcial — o
+critério de exclusão de grid é substituído por esta), RN-074 (já
+substituída), RN-067, RN-068, RN-098.
+**Dependências:** FEAT-039 (MIP: status próprio), FEAT-044 (LOTE).
+**Tipo de validação:** QA (QA-052).
+**Entrega do Dev:**
+- Grid de Equipamentos volta a mostrar todo INEP, mesmo depois de "Aguardando Validação EACE".
+- Grid do MIP passa a mostrar todo INEP cadastrado, não só quem já passou pelo handoff.
+- Coluna/filtro "Status" do MIP mostra o Status do RI real enquanto ainda não houve handoff.
+- Equipamento lançado pelo MIP continua aparecendo no mesmo card do RI, sem migração de dado.
+- As duas telas verificadas com dado real (mesmo total de INEPs nas duas).
+- **Pendência:** nenhuma.
+**Pendência atual:** aguardando QA.
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-17 | Modal de confirmação genérico criado pelo Dev (`core/_modal_confirmar.html` + JS delegado em `base.html`, `data-confirmar`) — substitui os 9 usos do `confirm()` nativo do navegador no sistema inteiro (Backup: importar/excluir; Usuários: ligar/desligar acesso; MIP: excluir equipamento só-serviço, desfazer LOTE; Relatório EACE (MIP): sobrepor dados; RI: forçar Resposta Financeiro, excluir item IXC/Relatório EACE) pelo mesmo visual do painel "Confirmar envio" do modal de e-mail do RI — 1 modal único compartilhado (não duplicado por linha), com validação HTML5 do formulário antes de perguntar. Backup > "Backups de segurança" ganhou coluna "Usuário" (quem disparou a importação, gravado num `.meta.json` ao lado do `.sql.gz`) e perdeu a opção de excluir pela tela (pedido do usuário: "feito tá feito" — permanece só a função interna, usada em testes/limpeza futura). Suíte completa `apps.core`+`apps.ri`+`apps.escolas` (901 testes) sem regressão | Usuário pediu que toda confirmação do sistema tivesse "um modal igual ao envio de e-mail pela RI", em vez do popup cru do navegador; em seguida, no mesmo turno, pediu para a lista de backups mostrar quem fez cada upload/importação e tirar a opção de excluir, já que um backup de segurança gravado deve ser permanente |
+| 2026-09-17 | Nova tela "Administrador > Backup" implementada pelo Dev: exportar todo o banco (streaming `.sql.gz` via `mysqldump`, nada gravado no servidor) e importar um backup por cima do banco atual (`mysql`), com confirmação forte (checkbox + digitar frase exata) e backup de segurança automático do estado atual antes de qualquer importação (`apps.core.services`, pasta própria `settings.BACKUP_ROOT`, fora de `MEDIA_ROOT` — nunca servida pelo Nginx sem autenticação). Restauração roda `migrate` no final para alinhar o schema. `docker-compose.hml.yml` ganhou o volume nomeado `backups_banco_hml`; `docker/nginx/homolog.conf` teve o limite de upload subido de 20M para 500M. Dockerfile não precisou de alteração — o cliente MySQL/MariaDB já estava instalado desde antes desta feature. 24 testes novos (`apps.core.tests`, incluindo round-trip real de exportar+importar contra `test_gerenciador_posvenda`); suíte completa `apps.core`+`apps.ri`+`apps.escolas` (902 testes) sem regressão — 1 falha pré-existente e não relacionada (`EnvioEmailAuditoriaTests`, confirmada também na branch limpa antes desta entrega) | Usuário pediu para poder exportar um backup de produção e importar em homologação, para testar com dado real; Dev perguntou ao usuário como tratar o risco de sobrescrever produção por engano (dado que hoje não existe uma variável de ambiente distinguindo os 2), e o usuário escolheu confirmação forte + backup automático em vez de bloqueio por variável de ambiente nova — RN/FEAT ainda não numeradas, pendência do Orquestrador formalizar em `business_rules.md`/`checklist.md` e revisar se merece um ADR próprio (decisão de guardar o dump fora de `MEDIA_ROOT`, por sensibilidade) |
+| 2026-09-17 | RN-104 criada pelo Dev (a formalizar pelo Orquestrador em `business_rules.md`), desfazendo a RN-103 (2026-09-16) no lado do MIP: o grid "Projeto > MIP" volta a mostrar só `Escola.status_mip == "Aguardando Validação EACE"` (não mais toda Escola cadastrada) — coluna/filtro "Status" removidos do grid (só havia 1 valor possível); card "Total de INEPs" renomeado para "Em Validação EACE" (mesmo texto da RN-074 original). O Grid de Equipamentos (RI) NÃO muda — continua mostrando toda Escola sempre, sem excluir quem entra em "Aguardando Validação EACE" (a outra metade da RN-103 permanece ativa). 9 testes ajustados/reescritos para a nova regra; suíte `apps.escolas` (264) e `apps.ri` (526) sem regressão | Usuário pediu para desfazer parte da mudança anterior: "quero que no MIP só apareça os INEPs que estão como Aguardando validação EACE... porém os INEPs que forem colocados para Aguardando validação EACE não devem desaparecer dentro do RI" — ou seja, mantém a visibilidade total no RI (RN-103) e reverte só a visibilidade no MIP (volta à RN-074/RN-092) |
+| 2026-09-17 | Ajuste de redação (sem mudança de comportamento) pelo Dev: mensagens e comentários do Status (MIP) "Em Andamento" deixam de falar em "enviar"/"o INEP voltou para o RI" — `mip_status_update_view`, `mip_detail_view` e `mip_detail.html` passam a descrever só o efeito real (`Ri.status` muda para "andamento", liberando a edição do Lado IXC em Projeto > Equipamentos); mecânica idêntica (RN-067/RN-092 inalteradas); suíte `apps.escolas` (265 testes) sem regressão | Usuário apontou que, com o MIP hoje espelhando o RI (RN-103/ADR-006, INEP sempre visível nos dois grids), não faz mais sentido a redação de "enviar o INEP para o RI" — pediu explicitamente para não dizer mais isso, mantendo a mesma mecânica (liberar edição via RI, RN-067 continua proibindo edição direta no MIP) |
+| 2026-09-16 | Correção de dado: 85 escolas faltantes importadas (`importar_escolas_planilha`, FEAT-002/RN-007) a partir de `doc/CONSOLIDADO EACE Atualizado.xlsx` — total de `Escola` no ambiente local sobe de 2636 para 2721 (2718 INEPs únicos da planilha atualizada + 3 registros de teste/demonstração pré-existentes, sem relação com a planilha) | Usuário notou que o total esperado (2718) não batia com o exibido nos grids (2636); Dev confrontou a planilha atualizada com o banco e achou 85 INEPs nunca importados (planilha foi atualizada depois da última importação, que usou a `CONSOLIDADO EACE.xlsx` antiga, 2622 linhas); comando existente é idempotente (só cria quem não existe); usuário autorizou a importação |
+| 2026-09-16 | Nova coluna "Data Faturamento" implementada pelo Dev no Grid de Equipamentos (RI) e no grid do MIP — mostra a data (`d/m/Y`) do `EmailFinanceiroLog` RECEBIDO mais recente do RI atual de cada INEP (resposta do financeiro ao e-mail de faturamento, RF-08); sem consulta nova por linha (`Prefetch`/`to_attr`); "—" quando o financeiro ainda não respondeu; suíte completa `apps.ri` (526) e `apps.escolas` (265) sem regressão | Usuário pediu para o grid de RI e MIP mostrarem a data que o financeiro respondeu o e-mail; dado já existia (`EmailFinanceiroLog.RECEBIDO.data_hora`, RF-08/FEAT-009), só não aparecia nas duas telas; RN/FEAT formal deste ajuste ainda não numerada — pendência do Orquestrador formalizar em `business_rules.md`/`checklist.md` |
+| 2026-09-16 | `FEAT-052` criada, `⬜ Pendente` — Grid de Equipamentos (RI) deixa de excluir o INEP quando `Escola.status_mip` avança (RN-103 nova, revisa parcialmente a RN-092); grid do MIP passa a mostrar todo INEP cadastrado, não só quem já passou pelo handoff; coluna/filtro "Status (MIP)" mostra o Status do RI real enquanto não há handoff; `ADR-006` registrada | Usuário pediu para o INEP deixar de "sumir" do Grid de Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como imagem do RI (todos os INEPs, mesmo card, mesmo histórico); Orquestrador registrou RN-103/ADR-006/FEAT-052 nesta sessão; implementação ainda não iniciada |
 | 2026-09-16 | Deploy em produção (`192.168.90.109`, commit `8a588d7`) concluído — backup do banco validado antes (`backups/backup_pre_deploy_20260916_092247.sql.gz`), containers reconstruídos (`db`/`web`/`nginx`/`email_scheduler`/`rpa_eace_worker` todos `Up`, `db` `(healthy)`), só a migration nova (`escolas.0015`) aplicada (confirma volume correto), `/login/` e o estático respondendo `200 OK` | Usuário autorizou o deploy completo e pediu a checagem de saúde dos containers; Orquestrador executou o passo a passo do `DEPLOYMENT.md` (backup → build → migrate → collectstatic → validação) via SSH, sem incidente |
 | 2026-09-16 | `FEAT-044`, `FEAT-045`, `FEAT-046`, `FEAT-049`, `FEAT-050` criadas, `🔍 Aguardando QA` — MIP (LOTE): criar/desfazer LOTE agrupando INEPs elegíveis (RN-098 nova), status do LOTE agora com 3 opções Em Andamento/Em Faturamento/Processo Concluído liberadas direto, sem depender de e-mail (RN-101 nova, e-mail do LOTE comentado no código, não usado por enquanto), Data inicial/final opcionais + modal de revisão dos INEPs antes de criar; `FEAT-051` criada, `🔍 Aguardando QA` — baixar planilhas de faturamento de implantação de vários LOTEs marcados de uma vez, em `.zip` (RN-102 nova — Município em maiúsculo no texto de observação da planilha); suíte completa de `apps.escolas` sem regressão | Todo o conjunto FEAT-044/045/046/049/050 já estava implementado e testado pelo Dev desde 2026-09-14, mas nunca tinha sido commitado nem documentado como feature própria — Orquestrador formaliza nesta sessão; usuário pediu, em turnos seguintes, para comentar o e-mail do LOTE e liberar a troca de status sem ele, criar o download em `.zip` de vários LOTEs e o Município em maiúsculo na observação; nenhum deploy em produção desta rodada ainda |
 | 2026-09-14 | `FEAT-047` criada, `🔍 Aguardando QA` — corrige bug real de regra de negócio (RN-099 nova): troca manual do RI para "Aguardando validação EACE" não conferia log de RPA EACE pendente/erro, deixando o INEP entrar no MIP sem o anexo de verdade confirmado (INEP 53005015 em produção); 3 testes novos, suíte completa `apps.ri`+`apps.escolas` sem regressão | Usuário reportou o INEP no servidor de produção (autorizou acesso via SSH); Dev investigou os dados reais e achou a causa raiz; Orquestrador formaliza RN-099 e esta feature, já corrigida e testada pelo Dev nesta mesma sessão; nenhum deploy em produção desta correção ainda; caso específico do INEP 53005015 (2 logs em erro) segue sem decisão do usuário |

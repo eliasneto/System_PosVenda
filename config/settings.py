@@ -207,6 +207,14 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Administrador > Backup: dump de segurança gravado automaticamente antes
+# de qualquer importação (`apps.core.services.criar_backup_seguranca`).
+# Pasta própria, FORA de `MEDIA_ROOT` — nginx serve `/media/` inteiro sem
+# autenticação (`docker/nginx/homolog.conf`), e um dump do banco é dado
+# sensível demais para herdar esse mesmo alcance; só a view autenticada
+# (`is_administrador`) lê este diretório.
+BACKUP_ROOT = BASE_DIR / "backups_banco"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CSRF_TRUSTED_ORIGINS = config(

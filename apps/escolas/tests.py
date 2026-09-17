@@ -313,9 +313,10 @@ class EscolaNobreakTests(TestCase):
 
 
 class MipInepViewTests(TestCase):
-    """Projeto > MIP: visão dos INEPs cujo RI atual está em "Aguardando
-    validação EACE" (RN-074, a criar) — deixou de listar todos os INEPs
-    cadastrados (RN-066), a pedido do usuário."""
+    """Projeto > MIP: visão dos INEPs com `Escola.status_mip ==
+    "Aguardando Validação EACE"` (RN-104, 2026-09-17, desfaz a RN-103,
+    2026-09-16, a pedido do usuário — o Grid de Equipamentos continua
+    mostrando toda Escola sempre, sem essa restrição)."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="analista", password="senha-teste-123")
@@ -355,23 +356,27 @@ class MipInepViewTests(TestCase):
         self.assertNotContains(resp, "<th class=\"px-4 py-2\">Município/UF</th>")
 
     def test_ri_fora_de_validacao_eace_nao_aparece(self):
-        """RN-074 (a criar): só entra na lista quem está em "Aguardando
-        validação EACE" — qualquer outro status do RI atual fica de fora."""
+        """RN-104 (2026-09-17): RI em outro status não aparece no grid do
+        MIP — continua sempre visível no Grid de Equipamentos."""
         escola_em_andamento = Escola.objects.create(inep="10000003", nome="Escola Em Andamento")
         Ri.objects.create(escola=escola_em_andamento, status=Ri.ANDAMENTO)
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"))
         self.assertContains(resp, self.escola.inep)
         self.assertNotContains(resp, escola_em_andamento.inep)
+        resp_ri = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp_ri, escola_em_andamento.inep)
 
     def test_sem_ri_nao_aparece(self):
-        """RN-074 (a criar): sem RI ainda não há status pra comparar — o
-        INEP não aparece na lista (mas continua acessível direto por
-        `mip_detail`, que não tem esse filtro)."""
+        """RN-104 (2026-09-17): sem RI, o INEP não aparece no grid do MIP
+        (sem handoff possível) — continua sempre visível no Grid de
+        Equipamentos."""
         escola_sem_ri = Escola.objects.create(inep="10000004", nome="Escola Sem RI")
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"))
         self.assertNotContains(resp, escola_sem_ri.inep)
+        resp_ri = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp_ri, escola_sem_ri.inep)
 
     def test_busca_por_inep_nome_municipio_ou_uf(self):
         outra_escola = Escola.objects.create(inep="10000002", nome="Escola Sobral", municipio="Sobral", estado="CE")
@@ -459,13 +464,18 @@ class StatusMipHandoffTests(TestCase):
 
 
 class MipInepStatusFiltroTests(TestCase):
-    """RN-092: grid do MIP passa a mostrar os 3 status (`Escola.
-    status_mip`), não só "Aguardando validação EACE" (RN-074, revista)."""
+    """RN-104 (2026-09-17, desfaz a RN-103/RN-092 nesse ponto): grid do
+    MIP volta a mostrar só quem está com `Escola.status_mip ==
+    "Aguardando Validação EACE"` — os demais valores do MIP (Em
+    Andamento, Aguardando Encerramento LOTE, Em Faturamento, Faturamento
+    Concluído) e quem ainda não passou pelo handoff saem da lista, mas
+    continuam sempre visíveis no Grid de Equipamentos
+    (`ri.views.grid_inep_view`, que a RN-104 não muda)."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="analista", password="senha-teste-123")
 
-    def test_mostra_ineps_nos_3_status(self):
+    def test_mostra_so_aguardando_validacao_eace(self):
         em_andamento = Escola.objects.create(inep="10000001", nome="Escola Andamento")
         Ri.objects.create(escola=em_andamento, status=Ri.ANDAMENTO)
         em_andamento.status_mip = Escola.EM_ANDAMENTO
@@ -479,36 +489,36 @@ class MipInepStatusFiltroTests(TestCase):
 
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"))
-        self.assertContains(resp, em_andamento.inep)
+        self.assertNotContains(resp, em_andamento.inep)
         self.assertContains(resp, aguardando.inep)
-        self.assertContains(resp, concluido.inep)
+        self.assertNotContains(resp, concluido.inep)
 
-    def test_filtro_por_status(self):
-        em_andamento = Escola.objects.create(
-            inep="10000001", nome="Escola Andamento", status_mip=Escola.EM_ANDAMENTO
-        )
-        aguardando = Escola.objects.create(inep="10000002", nome="Escola Validacao")
-        Ri.objects.create(escola=aguardando, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        # Nenhum dos 3 nunca sai do Grid de Equipamentos (RI) — RN-104 só
+        # mexe na visibilidade do MIP.
+        resp_ri = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp_ri, em_andamento.inep)
+        self.assertContains(resp_ri, aguardando.inep)
+        self.assertContains(resp_ri, concluido.inep)
 
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"status_mip": Escola.EM_ANDAMENTO})
-        self.assertContains(resp, em_andamento.inep)
-        self.assertNotContains(resp, aguardando.inep)
-
-    def test_sem_handoff_nao_aparece(self):
+    def test_sem_handoff_nao_aparece_no_mip(self):
+        """RN-104: sem handoff (`status_mip` `None`), o INEP não aparece
+        no grid do MIP — continua acessível direto por `/mip/<inep>/` e
+        sempre visível no Grid de Equipamentos."""
         escola = Escola.objects.create(inep="10000004", nome="Escola Sem Handoff")
-        Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+        Ri.objects.create(escola=escola, status=Ri.IMPLANTACAO_EACE)
 
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"))
         self.assertNotContains(resp, escola.inep)
 
+        resp_ri = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp_ri, escola.inep)
+
     def test_inep_legado_mostra_o_mesmo_destaque_do_grid_de_equipamentos(self):
         """Bug reportado pelo usuário (2026-09-10): o INEP legado
         (`Escola.legado=True`, `importar_ri_legado_eace`) nasce direto em
-        "Aguardando validação EACE" — nunca aparece no grid de
-        Equipamentos (RN-092), só aqui no MIP. O destaque em negrito/
-        branco precisa aparecer aqui também, não só lá."""
+        "Aguardando validação EACE". O destaque em negrito/branco
+        precisa aparecer aqui também, igual ao Grid de Equipamentos."""
         escola = Escola.objects.create(inep="10000005", nome="Escola Legado", legado=True)
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
 
@@ -945,7 +955,11 @@ class MipStatusPlanilhaMipTests(TestCase):
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "vermelho")
 
-    def test_encontrado_fora_da_validacao_eace_aparece_na_lista_a_parte(self):
+    def test_encontrado_fora_da_validacao_eace_aparece_so_na_lista_a_parte(self):
+        """RN-104 (2026-09-17): a escola NÃO aparece no grid principal
+        (RI em "Em Andamento", nunca fez handoff) — só na lista "Fora da
+        Validação EACE" (RN-081, sinaliza o descompasso da própria
+        sincronização, sem relação com a visibilidade do grid)."""
         escola = Escola.objects.create(
             inep="10000063", nome="Escola Fora Validacao", estado="SP", municipio="Campinas", lote=9,
             encontrado_relatorio_eace_mip=True,
@@ -958,7 +972,11 @@ class MipStatusPlanilhaMipTests(TestCase):
         self.assertContains(resp, "Fora da Validação EACE")
         self.assertContains(resp, escola.inep)
 
-    def test_nao_encontrado_e_fora_da_validacao_eace_nao_aparece_em_lugar_nenhum(self):
+    def test_nao_encontrado_nunca_aparece_na_lista_fora_da_validacao_eace(self):
+        """RN-081: sem ter sido encontrado na última sincronização
+        (`encontrado_relatorio_eace_mip=False`), o INEP nunca entra na
+        lista separada "Fora da Validação EACE" — mesmo sem aparecer no
+        grid principal (RN-104: sem RI, não há handoff)."""
         Escola.objects.create(
             inep="10000064", nome="Escola Irrelevante", lote=9, encontrado_relatorio_eace_mip=False,
         )
@@ -1309,8 +1327,9 @@ class MipFiltroDataAtivacaoTests(TestCase):
 
 class MipFiltroEstadoMunicipioTests(TestCase):
     """RN-079 (a criar): filtros Estado e Município (tipo lista) do grid
-    do MIP — Estado só lista as UFs que já têm INEP na base (Validação
-    EACE); Município só é filtrável depois de um Estado escolhido."""
+    do MIP — Estado só lista as UFs que já têm INEP na base do grid
+    ("Aguardando Validação EACE", RN-104); Município só é filtrável
+    depois de um Estado escolhido."""
 
     def setUp(self):
         self.user = User.objects.create_user(username="analista-estado-municipio", password="senha-teste-123")
@@ -1323,21 +1342,19 @@ class MipFiltroEstadoMunicipioTests(TestCase):
         self.escola_sp = Escola.objects.create(
             inep="10000042", nome="Escola SP", estado="SP", municipio="Campinas",
         )
-        self.escola_rj_sem_ri = Escola.objects.create(
-            inep="10000043", nome="Escola RJ Sem RI", estado="RJ", municipio="Niterói",
+        self.escola_rj = Escola.objects.create(
+            inep="10000043", nome="Escola RJ", estado="RJ", municipio="Niterói",
         )
-        for escola in (self.escola_ce_fortaleza, self.escola_ce_sobral, self.escola_sp):
+        for escola in (self.escola_ce_fortaleza, self.escola_ce_sobral, self.escola_sp, self.escola_rj):
             Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
-        # RJ fica de fora da base porque não tem RI em Validação EACE
-        # (RN-074) — por isso não deve aparecer nem como opção de Estado.
 
     def test_select_estado_so_lista_uf_com_inep_na_base(self):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_inep"))
-        self.assertEqual(sorted(resp.context["estados_disponiveis"]), ["CE", "SP"])
+        self.assertEqual(sorted(resp.context["estados_disponiveis"]), ["CE", "RJ", "SP"])
         self.assertContains(resp, '<option value="CE"')
         self.assertContains(resp, '<option value="SP"')
-        self.assertNotContains(resp, '<option value="RJ"')
+        self.assertContains(resp, '<option value="RJ"')
 
     def test_filtro_estado_mostra_so_escolas_daquele_estado(self):
         self.client.force_login(self.user)
@@ -1617,8 +1634,11 @@ class MipStatusUpdateViewTests(TestCase):
     """RN-092 (revista em 2026-09-10): troca do Status (MIP). "Aguardando
     Validação EACE"/"Faturamento Concluído" só mexem em `Escola.
     status_mip` (label do MIP). "Em Andamento" é diferente — é o mesmo
-    `Ri.status="andamento"` de sempre: o INEP volta a aparecer no grid de
-    Equipamentos, com todo o acesso normal de lá (RN-011/RN-052)."""
+    `Ri.status="andamento"` de sempre: libera todo o acesso de edição que
+    "Em Andamento" já tem hoje no grid de Equipamentos (RN-011/RN-052).
+    RN-104 (2026-09-17): essa troca tira o INEP do grid principal do MIP
+    (só lista "Aguardando Validação EACE"), mas ele nunca sai do Grid de
+    Equipamentos, que continua mostrando toda Escola sempre."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -1640,7 +1660,7 @@ class MipStatusUpdateViewTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertIn(reverse("login"), resp.url)
 
-    def test_em_andamento_volta_o_ri_de_verdade_e_reaparece_no_grid_de_equipamentos(self):
+    def test_em_andamento_muda_o_ri_de_verdade_e_continua_aparecendo_no_grid_de_equipamentos(self):
         self.client.force_login(self.user)
         self.client.post(
             reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
@@ -1655,6 +1675,8 @@ class MipStatusUpdateViewTests(TestCase):
         self.assertTrue(
             self.ri.historico.filter(tipo=RiHistorico.LOG_STATUS, campo="Status do RI").exists()
         )
+        # RN-103/ADR-006: o INEP já aparecia aqui antes da troca também —
+        # esta chamada só confirma que continua aparecendo, não que "voltou".
         resp = self.client.get(reverse("grid_inep"))
         self.assertContains(resp, self.escola.inep)
 
@@ -2324,6 +2346,252 @@ class RelatorioEaceMipSincronizarTodasViewTests(TestCase):
         self.escola.refresh_from_db()
         self.assertEqual(self.escola.cod_fornecedor, "19001")
 
+    def test_sobrepor_0_pula_escola_que_ja_tem_item_no_lado3(self):
+        """Pedido do usuário (2026-09-16): "Não, só os vazios" — Escola
+        cujo Lado 3 já tem item lançado é pulada inteira, itens mantidos
+        exatamente como estavam."""
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 3, "10.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+        item_original = EscolaItemRelatorioEaceMip.objects.get(escola=self.escola)
+
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 99, "10.00", "20/08/2026", "RJ", "Niterói"),
+        ])
+        resp = self.client.post(
+            reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "0"}, follow=True,
+        )
+        self.assertContains(resp, "0 INEP(s) atualizado(s)")
+        self.assertContains(resp, "1 INEP(s) que já tinham dado no Lado 3 foram mantidos sem alteração")
+        item_original.refresh_from_db()
+        self.assertEqual(item_original.quantidade, 3)
+        self.assertEqual(item_original.uf, "SP")
+
+    def test_sobrepor_0_ainda_cadastra_escola_com_lado3_vazio(self):
+        """"Não, só os vazios" não bloqueia quem ainda não tem nada no
+        Lado 3 — só protege quem já tem."""
+        escola_vazia = Escola.objects.create(inep="53004231", nome="Escola Vazia", lote=9)
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 3, "10.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 99, "10.00", "20/08/2026", "RJ", "Niterói"),
+            ("53004231", "19002", "Rack de parede", 5, "10.00", "20/08/2026", "RJ", "Niterói"),
+        ])
+        resp = self.client.post(
+            reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "0"}, follow=True,
+        )
+        self.assertContains(resp, "1 INEP(s) atualizado(s)")
+        self.assertContains(resp, "1 INEP(s) que já tinham dado no Lado 3 foram mantidos sem alteração")
+        item_novo = EscolaItemRelatorioEaceMip.objects.get(escola=escola_vazia)
+        self.assertEqual(item_novo.quantidade, 5)
+
+    def test_sobrepor_1_continua_atualizando_normalmente(self):
+        """"Sim, sobrepor" (ou o botão único de sempre, sem conflito) —
+        mesmo comportamento de antes desta mudança."""
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 3, "10.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 99, "10.00", "20/08/2026", "RJ", "Niterói"),
+        ])
+        resp = self.client.post(
+            reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "1"}, follow=True,
+        )
+        self.assertContains(resp, "1 INEP(s) atualizado(s)")
+        self.assertNotContains(resp, "mantidos sem alteração")
+        item = EscolaItemRelatorioEaceMip.objects.get(escola=self.escola)
+        self.assertEqual(item.quantidade, 99)
+        self.assertEqual(item.uf, "RJ")
+
+
+class RelatorioEaceMipSincronizarHistoricoTests(TestCase):
+    """Pedido do usuário (2026-09-16): item alterado pelo Sincronizador
+    do Lado 3 do MIP grava, no histórico do RI (`RiHistorico`, mesmo
+    painel compartilhado do RI e do MIP, RN-068), o antes/depois do item
+    e o usuário que rodou a sincronização."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_RELATORIO_EACE_MIP_SYNC, ignore_errors=True)
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-historico-lado3", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.escola = Escola.objects.create(inep="53004230", nome="Escola Teste Histórico", lote=9)
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.kit_2ap = KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        self.produto_avulso = KitPadrao.objects.create(
+            descricao="Rack de parede", lote=9,
+            valor_equipamento="50.00", valor_servico="10.00",
+        )
+
+    def _ativar_planilha(self, linhas):
+        PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip_com_linhas(linhas), self.admin)
+
+    def test_item_novo_grava_historico_com_autor_e_sem_item_antes(self):
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 3, "10.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+
+        entrada = self.ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="Relatório EACE (MIP) — Rack de parede")
+        self.assertEqual(entrada.autor, self.admin)
+        self.assertEqual(entrada.valor_anterior, "(sem item antes)")
+        self.assertIn("3 un.", entrada.valor_novo)
+        self.assertIn("R$ 10.00", entrada.valor_novo)
+        self.assertIn("SP/Atibaia", entrada.valor_novo)
+
+    def test_item_atualizado_grava_antes_e_depois(self):
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 3, "10.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 99, "10.00", "20/08/2026", "RJ", "Niterói"),
+        ])
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "1"})
+
+        entradas = list(
+            self.ri.historico.filter(
+                tipo=RiHistorico.LOG_CAMPO, campo="Relatório EACE (MIP) — Rack de parede",
+            ).order_by("criado_em")
+        )
+        self.assertEqual(len(entradas), 2)
+        entrada_atualizacao = entradas[1]
+        self.assertEqual(entrada_atualizacao.autor, self.admin)
+        self.assertIn("3 un.", entrada_atualizacao.valor_anterior)
+        self.assertIn("SP/Atibaia", entrada_atualizacao.valor_anterior)
+        self.assertIn("99 un.", entrada_atualizacao.valor_novo)
+        self.assertIn("RJ/Niterói", entrada_atualizacao.valor_novo)
+
+    def test_item_removido_grava_antes_e_removido(self):
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 3, "10.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+
+        # O INEP precisa continuar aparecendo na planilha (só sem mais
+        # essa Descrição) — um INEP totalmente ausente da planilha não é
+        # processado (`RI_SEM_LINHA_NA_PLANILHA`, itens antigos ficam
+        # intactos, ver `test_inep_sem_nenhuma_linha_na_planilha_
+        # preserva_itens_antigos`).
+        self._ativar_planilha([
+            ("53004230", "19001", "Produto que não existe no catálogo", 1, "1.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "1"})
+
+        entradas = list(
+            self.ri.historico.filter(
+                tipo=RiHistorico.LOG_CAMPO, campo="Relatório EACE (MIP) — Rack de parede",
+            ).order_by("criado_em")
+        )
+        self.assertEqual(len(entradas), 2)
+        entrada_remocao = entradas[1]
+        self.assertEqual(entrada_remocao.autor, self.admin)
+        self.assertIn("3 un.", entrada_remocao.valor_anterior)
+        self.assertEqual(entrada_remocao.valor_novo, "(removido)")
+
+    def test_escola_sem_ri_nao_gera_historico_mas_item_e_criado(self):
+        escola_sem_ri = Escola.objects.create(inep="53004299", nome="Escola Sem RI", lote=9)
+        self._ativar_planilha([
+            ("53004299", "19002", "Rack de parede", 3, "10.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+
+        self.assertTrue(EscolaItemRelatorioEaceMip.objects.filter(escola=escola_sem_ri).exists())
+        self.assertEqual(RiHistorico.objects.filter(campo__startswith="Relatório EACE (MIP)").count(), 0)
+
+    def test_item_pulado_por_sobrepor_0_nao_gera_historico(self):
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 3, "10.00", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+        total_antes = self.ri.historico.filter(campo__startswith="Relatório EACE (MIP)").count()
+
+        self._ativar_planilha([
+            ("53004230", "19001", "Rack de parede", 99, "10.00", "20/08/2026", "RJ", "Niterói"),
+        ])
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "0"})
+
+        self.assertEqual(
+            self.ri.historico.filter(campo__startswith="Relatório EACE (MIP)").count(), total_antes,
+        )
+
+
+class RelatorioEaceMipViewConflitoLado3Tests(TestCase):
+    """Tela "Administrador > Relatório EACE (MIP)" — pedido do usuário
+    (2026-09-16): quando o arquivo ativo tem INEP com o Lado 3 já
+    preenchido, o botão "Sincronizar todos os INEPs" vira uma pergunta
+    (2 botões) em vez de agir direto."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_RELATORIO_EACE_MIP_SYNC, ignore_errors=True)
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-conflito-lado3", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.escola = Escola.objects.create(inep="53004230", nome="Escola Teste Conflito", lote=9)
+        self.kit_2ap = KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+
+    def _ativar_planilha(self, linhas):
+        PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip_com_linhas(linhas), self.admin)
+
+    def test_sem_conflito_mostra_botao_unico(self):
+        self._ativar_planilha([
+            ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points", 1, "15728.61", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertEqual(resp.context["total_escolas_com_lado3_preenchido"], 0)
+        self.assertContains(resp, "Sincronizar todos os INEPs")
+        self.assertNotContains(resp, "Sim, sobrepor")
+
+    def test_com_conflito_mostra_2_botoes_e_o_total(self):
+        self._ativar_planilha([
+            ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points", 1, "15728.61", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
+
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertEqual(resp.context["total_escolas_com_lado3_preenchido"], 1)
+        self.assertContains(resp, "1 INEP(s) deste arquivo já tem dado lançado no Lado 3")
+        self.assertContains(resp, "Sim, sobrepor")
+        self.assertContains(resp, "Não, só os vazios")
+
+    def test_sem_planilha_ativa_total_e_zero(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertEqual(resp.context["total_escolas_com_lado3_preenchido"], 0)
+
 
 class GerarPlanilhaFaturamentoImplantacaoTests(TestCase):
     """Planilha de faturamento de implantação (`doc/FATURAMENTO
@@ -2922,12 +3190,15 @@ class MipLoteBotaoGridTests(TestCase):
         self.assertNotContains(resp, 'button" disabled')
 
     def test_filtro_completo_sem_elegivel_mostra_botao_desabilitado(self):
-        self.escola.status_mip = Escola.EM_ANDAMENTO
-        self.escola.save()
+        # Diverge o Valor Total (EACE) do (IXC) sem tirar a escola de
+        # "Aguardando Validação EACE" — RN-104: se ela saísse desse
+        # status, "GO" sumiria do `<select>` de Estado (RN-079, base é
+        # "Validação EACE") e o filtro seria ignorado, não "0 elegíveis".
+        EscolaItemRelatorioEaceMip.objects.filter(escola=self.escola).update(quantidade=2)
         self.client.force_login(self.usuario)
         resp = self.client.get(
             reverse("mip_inep"),
-            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026", "status_mip": "em_andamento"},
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
         )
         self.assertContains(resp, "Nenhum INEP elegível")
         self.assertContains(resp, 'button" disabled')

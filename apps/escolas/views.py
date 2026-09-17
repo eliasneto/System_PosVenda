@@ -18,7 +18,7 @@ from django.utils import timezone
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
 from apps.ri.forms import RiHistoricoForm, RiItemIxcProdutoFormSet, catalogo_ixc_somente_servico
-from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemIxc
+from apps.ri.models import Documento, EmailFinanceiroLog, KitPadrao, Ri, RiHistorico, RiItemIxc
 from apps.ri.services import sincronizar_divergencia_kit_relatorio, trocar_status_com_log
 from apps.ri.views import _validar_transicao_status_ri
 
@@ -38,6 +38,7 @@ from .services import (
     criar_lote_mip,
     desfazer_lote_mip,
     # enviar_email_lote, montar_assunto_email_lote, montar_corpo_email_lote — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.services`).
+    escolas_com_lado3_preenchido_no_arquivo_ativo,
     escolas_elegiveis_lote_mip,
     gerar_planilha_faturamento_implantacao_lote,
     nome_arquivo_planilha_faturamento_implantacao,
@@ -125,17 +126,24 @@ def mip_inep_view(request):
     "Aguardando Validação EACE" — sinaliza um descompasso da própria
     sincronização, não tem relação com o valor de nenhum INEP.
 
-    RN-074 (a criar): usuário pediu para a lista deixar de mostrar todos
-    os INEPs cadastrados (RN-066) e passar a mostrar só os que estão na
-    etapa "Aguardando validação EACE" do RI — esse status é do RI
-    (`Ri.status`), não da Escola. "RI atual" segue o mesmo critério já
-    usado pelas RN-068/RN-072 (o mais recente por `criado_em`); sem RI
-    ainda, ou com RI em qualquer outro status, o INEP não aparece nesta
-    lista (mas continua acessível direto por `/mip/<inep>/`,
-    `mip_detail_view`, que não tem esse filtro). Filtro resolvido no
-    banco (Subquery pelo status do RI mais recente por Escola) para não
-    carregar/paginar em memória as milhares de Escolas que nunca
-    apareceriam na lista.
+    RN-074 (revista por RN-092, e de novo por RN-104): usuário pediu para
+    a lista deixar de mostrar todos os INEPs cadastrados (RN-066) e
+    passar a mostrar só os que estão na etapa "Aguardando validação
+    EACE". RN-103 (2026-09-16) tinha revisado isso para mostrar todo
+    mundo (mesmo universo do Grid de Equipamentos); RN-104 (2026-09-17,
+    a formalizar pelo Orquestrador em business_rules.md) desfaz essa
+    parte a pedido do usuário — o grid do MIP volta a mostrar só
+    `Escola.status_mip == "Aguardando Validação EACE"` (campo próprio do
+    MIP, RN-092 — não mais `Ri.status` direto como na RN-074 original).
+    Sem esse status (nenhum RI ainda, RI em outra etapa, "Em Andamento",
+    ou já no ciclo do LOTE), o INEP não aparece nesta lista, mas continua
+    acessível direto por `/mip/<inep>/` (`mip_detail_view`, sem esse
+    filtro) e sempre visível no Grid de Equipamentos
+    (`ri.views.grid_inep_view`, que a RN-104 NÃO mexe — usuário pediu
+    explicitamente que o INEP não suma de lá ao entrar em "Aguardando
+    Validação EACE"). LOTE (Aguardando Encerramento/Em Faturamento/
+    Processo Concluído) continua com tela própria ("MIP (LOTE)",
+    `mip_lote_inep_view`), sem relação com este filtro.
 
     3º lado (Relatório EACE) vem de `EscolaItemRelatorioEaceMip`, lançado
     pelo Sincronizador da planilha do MIP (RN-069/RN-070, "Administrador
@@ -194,22 +202,18 @@ def mip_inep_view(request):
             ).values_list("escola_id", flat=True)
         )
 
-    # RN-092 (2026-09-10): o grid deixa de filtrar por `Ri.status` e passa
-    # a filtrar por `Escola.status_mip` — campo próprio do MIP, gravado no
-    # handoff automático (`apps.ri.services.trocar_status_com_log`) quando
-    # o RI chega em "Aguardando validação EACE" pela 1ª vez, e daí em
-    # diante controlado só por aqui. `status_mip` preenchido (qualquer um
-    # dos 3 valores) é o que faz o INEP aparecer neste grid — não é mais
-    # só "Aguardando validação EACE" (RN-074, substituída por esta).
+    # RN-104 (2026-09-17, a formalizar pelo Orquestrador em
+    # business_rules.md; desfaz a RN-103, 2026-09-16, a pedido do
+    # usuário): o grid volta a exigir `Escola.status_mip ==
+    # "Aguardando Validação EACE"` — não mostra mais toda Escola
+    # cadastrada. Sem filtro/coluna "Status" aqui: como só existe esse
+    # único valor na lista, mostrá-lo em toda linha não agregaria nada
+    # (mesmo raciocínio da RN-074 original, antes da RN-092 introduzir o
+    # campo `status_mip` com mais valores). O Grid de Equipamentos
+    # (`ri.views.grid_inep_view`) continua mostrando toda Escola sempre —
+    # RN-104 não mexe nele.
     ri_atual_qs = Ri.objects.filter(escola=OuterRef("pk")).order_by("-criado_em")
-    status_mip_filtro = (request.GET.get("status_mip") or "").strip()
-    escolas = Escola.objects.annotate(
-        ri_atual_id=Subquery(ri_atual_qs.values("pk")[:1]),
-    ).filter(status_mip__isnull=False)
-    if status_mip_filtro not in dict(Escola.STATUS_MIP_CHOICES):
-        status_mip_filtro = ""
-    if status_mip_filtro:
-        escolas = escolas.filter(status_mip=status_mip_filtro)
+    escolas = Escola.objects.filter(status_mip=Escola.AGUARDANDO_VALIDACAO_EACE)
 
     # RN-079 (a criar): opções do filtro Estado — só os estados que já
     # têm pelo menos 1 INEP na base do grid ("Validação EACE"), calculado
@@ -270,7 +274,20 @@ def mip_inep_view(request):
     escolas = escolas.prefetch_related(
         Prefetch(
             "ris",
-            queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_eace", "itens_ixc"),
+            queryset=Ri.objects.order_by("-criado_em").prefetch_related(
+                "itens_eace",
+                "itens_ixc",
+                # Data em que o financeiro respondeu o e-mail (RF-08) —
+                # `to_attr` evita nova consulta por linha (mesmo padrão do
+                # Grid de Equipamentos, `ri.views.grid_inep_view`).
+                Prefetch(
+                    "emails_financeiro",
+                    queryset=EmailFinanceiroLog.objects.filter(
+                        direcao=EmailFinanceiroLog.RECEBIDO
+                    ).order_by("-data_hora"),
+                    to_attr="respostas_financeiro_recebidas",
+                ),
+            ),
         ),
         "itens_relatorio_eace_mip",
     )
@@ -332,6 +349,14 @@ def mip_inep_view(request):
             and valor_total_lado3 is not None
             and valor_total_lado2 != valor_total_lado3
         )
+        # Data em que o financeiro respondeu o e-mail (RF-08) — mesmo dado
+        # do Grid de Equipamentos (`ri.views.grid_inep_view`), lido do RI
+        # atual deste INEP (RN-068: RI e MIP compartilham o mesmo RI).
+        data_resposta_financeiro = (
+            ri_atual.respostas_financeiro_recebidas[0].data_hora
+            if ri_atual and ri_atual.respostas_financeiro_recebidas
+            else None
+        )
         linhas.append(
             {
                 "escola": escola,
@@ -347,6 +372,7 @@ def mip_inep_view(request):
                 "divergencia_aberta": divergencia["diverge"],
                 "itens_ixc_divergentes_pks": divergencia["itens_ixc_divergentes_pks"],
                 "itens_mip_divergentes_pks": divergencia["itens_mip_divergentes_pks"],
+                "data_resposta_financeiro": data_resposta_financeiro,
             }
         )
 
@@ -426,8 +452,6 @@ def mip_inep_view(request):
         {
             "page_obj": page_obj,
             "total_inep": total_inep,
-            "status_mip_filtro": status_mip_filtro,
-            "status_mip_opcoes": Escola.STATUS_MIP_CHOICES,
             "total_divergencia": total_divergencia,
             "divergencia_filtro": divergencia_filtro,
             "planilha_ativa": planilha_ativa,
@@ -544,7 +568,7 @@ def mip_lote_inep_view(request):
         for escola in registro_lote.escolas.all():
             ris_da_escola = list(escola.ris.all())
             ri_atual = ris_da_escola[0] if ris_da_escola else None
-            valor_total_lado2, _incompleto2 = _valor_total_itens(
+            valor_total_lado2, incompleto2 = _valor_total_itens(
                 _resolver_lado_ixc(ri_atual, escola.lote, catalogo_kits)
             )
             valor_total_lado3, _incompleto3 = _valor_total_itens(
@@ -554,22 +578,49 @@ def mip_lote_inep_view(request):
                 {
                     "escola": escola,
                     "valor_total_lado2": valor_total_lado2,
+                    "valor_total_lado2_incompleto": incompleto2,
                     "valor_total_lado3": valor_total_lado3,
                 }
             )
+        # Pedido do usuário (2026-09-16): coluna "Valor Total do LOTE" na
+        # tabela principal — soma o Valor Total (IXC) de todos os INEPs do
+        # LOTE (mesmo valor que vai pra planilha de faturamento,
+        # `gerar_planilha_faturamento_implantacao_lote`/H10), não o EACE.
+        # Mesmo padrão de "Total geral" do grid `mip_inep.html` (RN-080):
+        # ignora INEP sem total (None) na soma e marca com "*" quando
+        # algum item ficou incompleto (sem Valor de serviço no catálogo).
+        valor_total_lote = sum(
+            (item["valor_total_lado2"] for item in escolas_do_lote if item["valor_total_lado2"] is not None),
+            Decimal("0.00"),
+        )
+        valor_total_lote_incompleto = any(item["valor_total_lado2_incompleto"] for item in escolas_do_lote)
         linhas_lote.append(
             {
                 "lote": registro_lote,
                 "escolas": escolas_do_lote,
+                "valor_total_lote": valor_total_lote,
+                # Valor "cru" (`str(Decimal)`, sem separador de milhar/
+                # localização) pro JS somar via `parseFloat` — pedido do
+                # usuário (2026-09-16): resumo abaixo da tabela soma só os
+                # LOTEs marcados no checkbox (mesmo checkbox do "Baixar
+                # planilhas (.zip)"); sem nenhum marcado, soma todos os
+                # desta página.
+                "valor_total_lote_str": str(valor_total_lote),
+                "valor_total_lote_incompleto": valor_total_lote_incompleto,
                 # "assunto_sugerido"/"corpo_sugerido" — e-mail do LOTE comentado (pedido do usuário, 2026-09-15).
             }
         )
+
+    valor_total_pagina = sum((linha["valor_total_lote"] for linha in linhas_lote), Decimal("0.00"))
+    valor_total_pagina_incompleto = any(linha["valor_total_lote_incompleto"] for linha in linhas_lote)
 
     return render(
         request,
         "escolas/mip_lote_inep.html",
         {
             "page_obj": page_obj,
+            "valor_total_pagina": valor_total_pagina,
+            "valor_total_pagina_incompleto": valor_total_pagina_incompleto,
             "linhas_lote": linhas_lote,
             # "remetente_lote": settings.DEFAULT_FROM_EMAIL,  # só usado pelo modal de e-mail comentado (pedido do usuário, 2026-09-15)
         },
@@ -873,11 +924,15 @@ def mip_detail_view(request, inep):
 
     RN-092 (2026-09-10; revista no mesmo dia): os 3 lados continuam só
     leitura aqui — igual a antes. A tela ganha um controle pra trocar o
-    Status (MIP) entre os 3 valores; ao escolher "Em Andamento", o INEP
-    volta a aparecer no grid de Equipamentos (Projeto > Equipamentos,
-    `Ri.status="andamento"` de verdade) e o lançamento/edição do Lado IXC
-    volta a acontecer lá, com o mesmo formulário e acesso de sempre
-    (RN-011/RN-052) — não duplicado aqui.
+    Status (MIP) entre os 3 valores; ao escolher "Em Andamento", o
+    `Ri.status` muda de verdade para "andamento" e o lançamento/edição do
+    Lado IXC passa a ficar liberado em Projeto > Equipamentos, com o
+    mesmo formulário e acesso de sempre (RN-011/RN-052) — não duplicado
+    aqui. RN-104 (2026-09-17): essa troca tira o INEP do grid principal
+    do MIP (`mip_inep_view`, que só lista "Aguardando Validação EACE"),
+    mas ele nunca sai do Grid de Equipamentos (`ri.views.grid_inep_view`,
+    que continua mostrando toda Escola sempre) — a edição continua
+    exclusiva do RI (RN-067).
 
     RN-092 (ampliação, 2026-09-10, mesmo dia): exceção pontual — com
     `Escola.status_mip == "Aguardando Validação EACE"`, a tela ganha um
@@ -1036,10 +1091,13 @@ def mip_status_update_view(request, inep):
         trocar_status_com_log(ri, Ri.ANDAMENTO, request.user)
         # `Ri.save()` (RN-092) só sincroniza `status_mip` para "Aguardando
         # Validação EACE"/"Faturamento Concluído" — "Em Andamento" é
-        # gravado aqui, de propósito (é o próprio MIP mandando pra lá).
+        # gravado aqui, de propósito.
         escola.status_mip = Escola.EM_ANDAMENTO
         escola.save(update_fields=["status_mip"])
-        messages.success(request, 'Status (MIP) atualizado — RI voltou para "Em Andamento".')
+        messages.success(
+            request,
+            'Status (MIP) atualizado para "Em Andamento" — campos liberados para atualização em Projeto > Equipamentos.',
+        )
     else:
         status_anterior = escola.get_status_mip_display()
         escola.status_mip = novo_status
@@ -1164,9 +1222,19 @@ def relatorio_eace_mip_view(request):
     else:
         upload_form = PlanilhaRelatorioEaceMipUploadForm()
 
+    # Pedido do usuário (2026-09-16): quando o arquivo ativo tem INEP com
+    # o Lado 3 já preenchido, o botão "Sincronizar todos os INEPs"
+    # pergunta se é pra sobrepor esses dados — calculado aqui (e não só
+    # na hora de sincronizar de verdade) pra tela já nascer sabendo se
+    # mostra a pergunta ou o botão direto de sempre.
+    total_escolas_com_lado3_preenchido = (
+        escolas_com_lado3_preenchido_no_arquivo_ativo() if planilha_ativa else 0
+    )
+
     return render(request, "escolas/relatorio_eace_mip.html", {
         "form": upload_form,
         "planilha_ativa": planilha_ativa,
+        "total_escolas_com_lado3_preenchido": total_escolas_com_lado3_preenchido,
     })
 
 
@@ -1177,22 +1245,35 @@ def relatorio_eace_mip_sincronizar_todas_view(request):
     `sincronizar_relatorio_eace_mip_de_todas_as_escolas` (RN-070) ao
     arquivo ativo (RN-069), lançando os itens do Lado 3 do MIP por
     Escola. Ação restrita a Administrador, mesmo critério da tela
-    (RN-004)."""
+    (RN-004).
+
+    Pedido do usuário (2026-09-16): quando existe INEP do arquivo com o
+    Lado 3 já preenchido, o template mostra 2 botões em vez de 1 —
+    "Sobrepor" (`sobrepor=1`) e "Somente cadastrar os vazios"
+    (`sobrepor=0`) — o valor clicado vem neste campo do POST. Sem
+    conflito nenhum no arquivo, o template manda só o botão de sempre,
+    já com `sobrepor=1` (comportamento idêntico ao de antes desta
+    mudança). Repassa `request.user` ao service — cada item alterado
+    grava o antes/depois e o autor no histórico do RI (RN-068)."""
     if not request.user.is_administrador:
         return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
     if request.method != "POST":
         return redirect("relatorio_eace_mip")
 
+    sobrepor = (request.POST.get("sobrepor") or "1") == "1"
     try:
-        resultado = sincronizar_relatorio_eace_mip_de_todas_as_escolas()
+        resultado = sincronizar_relatorio_eace_mip_de_todas_as_escolas(sobrepor=sobrepor, usuario=request.user)
     except RelatorioEaceMipSincronizacaoError as erro:
         messages.error(request, str(erro))
         return redirect("relatorio_eace_mip")
 
-    messages.success(
-        request,
-        f"Sincronização em lote: {resultado['escolas_atualizadas']} INEP(s) atualizado(s).",
-    )
+    mensagem = f"Sincronização em lote: {resultado['escolas_atualizadas']} INEP(s) atualizado(s)."
+    if resultado["escolas_puladas_ja_preenchidas"]:
+        mensagem += (
+            f" {resultado['escolas_puladas_ja_preenchidas']} INEP(s) que já tinham dado no Lado 3 "
+            "foram mantidos sem alteração."
+        )
+    messages.success(request, mensagem)
     return redirect("relatorio_eace_mip")
 
 

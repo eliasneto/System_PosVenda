@@ -82,6 +82,7 @@
                     <th class="px-4 py-2">Nome da Escola</th>
                     <th class="px-4 py-2">Endereço</th>
                     <th class="px-4 py-2" title="Status de conexão da Escola (RF-20)">Conexão</th>
+                    <th class="px-4 py-2" title="Data em que o financeiro respondeu o e-mail (RF-08)">Data Faturamento</th>
                     <!-- RN-093/FEAT-040: Visualizador não vê Status do RI. -->
                     {% if not request.user.is_visualizador %}
                     <th class="px-4 py-2" title="Status do RI (RN-001); vermelho na linha = divergência aberta (RN-003)">Status do RI</th>
@@ -111,6 +112,9 @@
                             <span class="text-[11px] font-bold text-gray-800 dark:text-gray-200">{{ linha.escola.get_status_conexao_display }}</span>
                         </span>
                     </td>
+                    <td class="px-4 py-2">
+                        <span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_resposta_financeiro|date:"d/m/Y"|default:"—" }}</span>
+                    </td>
                     {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2">
                         {% include "ri/_status_badge_grid.html" with ri=linha.ri escola=linha.escola divergencia_aberta=linha.divergencia_aberta %}
@@ -118,7 +122,7 @@
                     {% endif %}
                 </tr>
                 <tr class="hidden" data-inep-detalhe>
-                    <td colspan="{% if request.user.is_visualizador %}4{% else %}5{% endif %}" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
+                    <td colspan="{% if request.user.is_visualizador %}5{% else %}6{% endif %}" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
                         {% if not linha.ri %}
                         <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">RI ainda não iniciado para este INEP.</p>
                         {% if not request.user.is_visualizador %}
@@ -203,7 +207,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="{% if request.user.is_visualizador %}4{% else %}5{% endif %}" class="px-8 py-20 text-center">
+                    <td colspan="{% if request.user.is_visualizador %}5{% else %}6{% endif %}" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="search-x" class="w-8 h-8"></i>
