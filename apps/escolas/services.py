@@ -11,6 +11,7 @@ planilha são independentes, RN-067)."""
 
 import datetime
 import io
+import logging
 import re
 from decimal import Decimal
 
@@ -28,6 +29,8 @@ from apps.ri.models import KitPadrao, Ri, RiHistorico
 from apps.ri.services import casar_planilha_eace_com_catalogo, quantidade_planilha_eace
 
 from .models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
+
+logger = logging.getLogger(__name__)
 
 
 class RelatorioEaceMipSincronizacaoError(Exception):
@@ -306,11 +309,28 @@ def escolas_com_lado3_preenchido_no_arquivo_ativo():
     para decidir se o botão "Sincronizar todos os INEPs" precisa
     perguntar ao usuário se quer sobrepor os dados existentes (pedido do
     usuário, 2026-09-16) antes de rodar de verdade. `0` sem planilha
-    ativa ou sem nenhum INEP dela batendo com uma Escola já preenchida."""
+    ativa, sem nenhum INEP dela batendo com uma Escola já preenchida, ou
+    quando o arquivo ativo já teve essa pergunta respondida uma vez
+    (`planilha.sincronizacao_confirmada`, pedido do usuário, 2026-09-17
+    — sem isso, a própria sincronização preenche o Lado 3 e a pergunta
+    voltava a aparecer pra sempre, mesmo depois do usuário já ter
+    escolhido).
+
+    `0` também quando o arquivo do registro ativo sumiu do storage (bug
+    real reportado pelo usuário, 2026-09-18: `FileNotFoundError` travava a
+    tela inteira, sem forma de nem reenviar o arquivo) — mesmo critério de
+    "sem planilha para consultar" já usado acima; a tela volta a carregar,
+    o usuário reenvia a planilha quando puder."""
     planilha = PlanilhaRelatorioEaceMip.ativa()
-    if not planilha:
+    if not planilha or planilha.sincronizacao_confirmada:
         return 0
-    ineps_da_planilha = _agrupar_linhas_relatorio_eace_mip_por_inep(planilha).keys()
+    try:
+        ineps_da_planilha = _agrupar_linhas_relatorio_eace_mip_por_inep(planilha).keys()
+    except (FileNotFoundError, OSError):
+        logger.error(
+            "Arquivo da Planilha EACE (MIP) ativa (id=%s) não encontrado no storage.", planilha.pk
+        )
+        return 0
     if not ineps_da_planilha:
         return 0
     return (
@@ -338,6 +358,13 @@ def sincronizar_relatorio_eace_mip_de_todas_as_escolas(sobrepor=True, usuario=No
     `_sincronizar_relatorio_eace_mip_da_escola` — cada item alterado
     grava, no histórico do RI daquela Escola, o antes/depois e quem
     rodou esta sincronização em lote.
+
+    Pedido do usuário (2026-09-17): ao final desta rodada, marca
+    `planilha.sincronizacao_confirmada = True` — a pergunta "sobrepor?"
+    (ver `escolas_com_lado3_preenchido_no_arquivo_ativo`) só aparece de
+    novo depois de um novo upload (`PlanilhaRelatorioEaceMip.substituir`
+    cria um registro novo, com a flag em `False` de novo), nunca só por
+    rodar esta sincronização de novo no mesmo arquivo.
 
     RN-081 (a criar): também grava, em toda Escola, se o INEP apareceu ou
     não na planilha desta rodada (`Escola.encontrado_relatorio_eace_mip`)
@@ -391,6 +418,10 @@ def sincronizar_relatorio_eace_mip_de_todas_as_escolas(sobrepor=True, usuario=No
             escolas_puladas_ja_preenchidas += 1
         elif mudou:
             escolas_atualizadas += 1
+
+    if not planilha.sincronizacao_confirmada:
+        planilha.sincronizacao_confirmada = True
+        planilha.save(update_fields=["sincronizacao_confirmada"])
 
     return {
         "escolas_atualizadas": escolas_atualizadas,

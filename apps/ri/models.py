@@ -720,12 +720,21 @@ class RiHistorico(models.Model):
     LOG_STATUS = "log_status"
     LOG_CAMPO = "log_campo"
     EMAIL = "email"
+    # Botão "Validar Notas Fiscais" (a formalizar pelo Orquestrador em
+    # business_rules.md): confere se o financeiro faturou a Nota Fiscal
+    # (PDF recebido por e-mail, RN-016) conforme os itens já confirmados
+    # no Lado Relatório EACE (3º lado) — ver `apps.ri.services.
+    # validar_notas_fiscais_financeiro`. `resultado_validacao_nf` guarda o
+    # detalhe estruturado (por PDF: OK/divergente + motivos); `mensagem`
+    # (limite de 250 caracteres) só guarda o resumo.
+    VALIDACAO_NF = "validacao_nf"
     TIPO_CHOICES = [
         (MENSAGEM, "Mensagem"),
         (ANEXO, "Anexo"),
         (LOG_STATUS, "Mudança de status"),
         (LOG_CAMPO, "Mudança de campo"),
         (EMAIL, "E-mail"),
+        (VALIDACAO_NF, "Validação de Nota Fiscal"),
     ]
 
     ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="historico")
@@ -760,6 +769,12 @@ class RiHistorico(models.Model):
     campo = models.CharField("Campo alterado", max_length=100, blank=True)
     valor_anterior = models.CharField("Valor anterior", max_length=255, blank=True)
     valor_novo = models.CharField("Valor novo", max_length=255, blank=True)
+    # Tipo `validacao_nf`: detalhe estruturado por Nota Fiscal (PDF)
+    # conferida — lista de dicts (arquivo, número da NF, ok, motivos das
+    # divergências) — não cabe no limite de 250 caracteres de `mensagem`.
+    resultado_validacao_nf = models.JSONField(
+        "Resultado da validação de Nota Fiscal", null=True, blank=True
+    )
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:

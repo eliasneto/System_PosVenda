@@ -75,6 +75,7 @@ from .services import (
     # Escola de uma vez, a partir do card "Arquivo ativo".
     sincronizar_relatorio_eace_de_todas_as_ri,
     trocar_status_com_log,
+    validar_notas_fiscais_financeiro,
     # RN-018: mesma resolução de preço por catálogo já usada na planilha de
     # faturamento (RN-013) — reaproveitada aqui para o Valor Unitário do
     # Lado Relatório EACE, que (diferente do Lado IXC) precisa de um valor
@@ -1061,6 +1062,51 @@ def ri_consultar_pendencias_eace_view(request, pk):
 
     if _requisicao_htmx(request):
         return _fragmento_logs_rpa_eace_htmx(request, ri, next_url)
+    return redirect(next_url)
+
+
+@login_required
+def ri_validar_notas_fiscais_view(request, pk):
+    """Botão "Validar Notas Fiscais" (tela do RI, após resposta do
+    financeiro, RN-016): roda `validar_notas_fiscais_financeiro` (apps/ri/
+    services.py), que confere se o financeiro faturou a Nota Fiscal (PDF
+    recebido por e-mail) conforme os itens já confirmados no Lado
+    Relatório EACE (3º lado). Roda na hora, dentro da própria requisição
+    (mesmo padrão de "Consultar pendências no portal EACE") — só lê
+    arquivos já salvos localmente, sem abrir navegador nem rede. Resultado
+    fica gravado no histórico do RI (`RiHistorico.VALIDACAO_NF`); nunca
+    bloqueia o fluxo do RI."""
+    ri = get_object_or_404(Ri.objects.select_related("escola"), pk=pk)
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
+
+    if request.method == "POST":
+        resultados = validar_notas_fiscais_financeiro(ri, request.user)
+        if not resultados:
+            messages.error(
+                request, "Nenhuma Nota Fiscal (PDF) recebida do financeiro para validar."
+            )
+        else:
+            divergentes = [r for r in resultados if not r["ok"]]
+            if divergentes:
+                messages.error(
+                    request,
+                    f"{len(divergentes)} de {len(resultados)} Nota(s) Fiscal(is) com "
+                    "divergência — ver detalhes no Histórico de comunicação.",
+                )
+            else:
+                messages.success(
+                    request,
+                    f"{len(resultados)} Nota(s) Fiscal(is) conferem com o Relatório EACE.",
+                )
+
+    if _requisicao_htmx(request):
+        historico_page_obj = Paginator(
+            ri.historico.select_related("autor").prefetch_related("documentos"),
+            HISTORICO_ITENS_POR_PAGINA,
+        ).get_page(1)
+        return _fragmento_historico_htmx(request, ri, RiHistoricoForm(), historico_page_obj)
     return redirect(next_url)
 
 

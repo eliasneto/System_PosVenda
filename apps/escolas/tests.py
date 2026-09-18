@@ -8,6 +8,7 @@ from pathlib import Path
 
 import openpyxl
 from django.contrib.auth import get_user_model
+from django.contrib.messages import get_messages
 from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
@@ -2575,21 +2576,81 @@ class RelatorioEaceMipViewConflitoLado3Tests(TestCase):
         self.assertNotContains(resp, "Sim, sobrepor")
 
     def test_com_conflito_mostra_2_botoes_e_o_total(self):
+        """Conflito de verdade: um NOVO arquivo importado depois de uma
+        sincronização anterior já ter preenchido o Lado 3 do mesmo INEP
+        — a pergunta é sobre este arquivo (recém chegado), não sobre a
+        sincronização de antes."""
         self._ativar_planilha([
             ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points", 1, "15728.61", "19/08/2026", "SP", "Atibaia"),
         ])
         self.client.force_login(self.admin)
         self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"))
 
+        self._ativar_planilha([
+            ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points", 2, "15728.61", "20/08/2026", "SP", "Atibaia"),
+        ])
         resp = self.client.get(reverse("relatorio_eace_mip"))
         self.assertEqual(resp.context["total_escolas_com_lado3_preenchido"], 1)
         self.assertContains(resp, "1 INEP(s) deste arquivo já tem dado lançado no Lado 3")
         self.assertContains(resp, "Sim, sobrepor")
         self.assertContains(resp, "Não, só os vazios")
 
+    def test_apos_escolher_pergunta_some_no_mesmo_arquivo(self):
+        """Pedido do usuário (2026-09-17): depois de clicar em "Sim,
+        sobrepor" ou "Não, só os vazios", a pergunta não pode voltar a
+        aparecer pro MESMO arquivo — a própria sincronização preenche o
+        Lado 3, então sem essa trava a tela ficaria perguntando de novo
+        pra sempre. Só some de vez quando um arquivo novo é importado
+        (`test_novo_upload_faz_pergunta_voltar_a_aparecer`)."""
+        self._ativar_planilha([
+            ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points", 1, "15728.61", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "1"})
+
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertEqual(resp.context["total_escolas_com_lado3_preenchido"], 0)
+        self.assertContains(resp, "Sincronizar todos os INEPs")
+        self.assertNotContains(resp, "Sim, sobrepor")
+        self.assertNotContains(resp, "Não, só os vazios")
+
+    def test_novo_upload_faz_pergunta_voltar_a_aparecer(self):
+        """Um novo arquivo importado em "Substituir arquivo" reseta a
+        confirmação — mesmo repetindo um INEP já sincronizado antes, a
+        pergunta é por arquivo, não por INEP."""
+        self._ativar_planilha([
+            ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points", 1, "15728.61", "19/08/2026", "SP", "Atibaia"),
+        ])
+        self.client.force_login(self.admin)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "1"})
+
+        self._ativar_planilha([
+            ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points", 2, "15728.61", "20/08/2026", "SP", "Atibaia"),
+        ])
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertEqual(resp.context["total_escolas_com_lado3_preenchido"], 1)
+        self.assertContains(resp, "Sim, sobrepor")
+
     def test_sem_planilha_ativa_total_e_zero(self):
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertEqual(resp.context["total_escolas_com_lado3_preenchido"], 0)
+
+    def test_arquivo_ativo_sumiu_do_storage_nao_quebra_a_tela(self):
+        """Bug real reportado pelo usuário (2026-09-18): o registro da
+        Planilha ativa continua no banco, mas o `.xlsx` sumiu do storage
+        (`FileNotFoundError` travava a tela inteira) — tratado como "sem
+        planilha para consultar", mesmo critério de `sincronizacao_
+        confirmada`/planilha ausente já usado acima."""
+        self._ativar_planilha([
+            ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points", 1, "15728.61", "19/08/2026", "SP", "Atibaia"),
+        ])
+        planilha = PlanilhaRelatorioEaceMip.ativa()
+        Path(planilha.arquivo.path).unlink()
+
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.context["total_escolas_com_lado3_preenchido"], 0)
 
 
@@ -3691,6 +3752,81 @@ class MipLoteBaixarPlanilhaViewTests(TestCase):
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_baixar_planilha", kwargs={"pk": self.lote.pk}))
         self.assertRedirects(resp, reverse("mip_lote_inep"))
+
+
+_MEDIA_ROOT_TESTE_NOTAS_FISCAIS_LOTE = tempfile.mkdtemp()
+
+
+def _gerar_zip_teste():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
+        arquivo_zip.writestr("nota1.pdf", b"conteudo fake")
+    return buffer.getvalue()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_NOTAS_FISCAIS_LOTE)
+class MipLoteNotasFiscaisUploadViewTests(TestCase):
+    """Pedido do usuário (2026-09-17): botão de upload do .zip de Notas
+    Fiscais que o financeiro devolve para todo o LOTE de uma vez — 1
+    arquivo por LOTE, substituível (`Lote.substituir_notas_fiscais_zip`).
+    MEDIA_ROOT isolado num diretório temporário (arquivo de verdade no
+    disco, mesmo padrão de `MipLoteBaixarPlanilhaViewTests`)."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_NOTAS_FISCAIS_LOTE, ignore_errors=True)
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-nf-lote", password="senha-teste-123")
+        self.lote = Lote.objects.create(estado="GO", municipio="Abadiânia")
+
+    def _enviar(self, nome="notas.zip", conteudo=None):
+        conteudo = conteudo if conteudo is not None else _gerar_zip_teste()
+        return self.client.post(
+            reverse("mip_lote_notas_fiscais_upload", kwargs={"pk": self.lote.pk}),
+            {"arquivo": SimpleUploadedFile(nome, conteudo), "next": ""},
+        )
+
+    def test_exige_login(self):
+        resp = self._enviar()
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_envia_o_primeiro_arquivo(self):
+        self.client.force_login(self.usuario)
+        self._enviar()
+        self.lote.refresh_from_db()
+        self.assertTrue(self.lote.arquivo_notas_fiscais_zip.name)
+        self.assertEqual(self.lote.nome_original_notas_fiscais_zip, "notas.zip")
+        self.assertEqual(self.lote.notas_fiscais_zip_enviado_por, self.usuario)
+        self.assertIsNotNone(self.lote.notas_fiscais_zip_enviado_em)
+
+    def test_substitui_sem_manter_2_arquivos(self):
+        self.client.force_login(self.usuario)
+        self._enviar(nome="notas-v1.zip")
+        self.lote.refresh_from_db()
+        caminho_v1 = self.lote.arquivo_notas_fiscais_zip.path
+        self.assertTrue(Path(caminho_v1).exists())
+
+        self._enviar(nome="notas-v2.zip")
+        self.lote.refresh_from_db()
+        self.assertEqual(self.lote.nome_original_notas_fiscais_zip, "notas-v2.zip")
+        self.assertFalse(Path(caminho_v1).exists())  # arquivo antigo apagado do disco (só 1 por vez)
+
+    def test_recusa_arquivo_que_nao_e_zip_de_verdade(self):
+        self.client.force_login(self.usuario)
+        resp = self._enviar(nome="notas.zip", conteudo=b"nao e um zip de verdade")
+        self.lote.refresh_from_db()
+        self.assertFalse(self.lote.arquivo_notas_fiscais_zip.name)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("zip" in m.lower() for m in mensagens))
+
+    def test_recusa_extensao_diferente_de_zip(self):
+        self.client.force_login(self.usuario)
+        self._enviar(nome="notas.pdf", conteudo=b"conteudo qualquer")
+        self.lote.refresh_from_db()
+        self.assertFalse(self.lote.arquivo_notas_fiscais_zip.name)
 
 
 class MipLoteBaixarPlanilhasZipViewTests(TestCase):

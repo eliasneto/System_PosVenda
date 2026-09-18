@@ -90,4 +90,9 @@ urlpatterns = [
         views.ri_consultar_pendencias_eace_view,
         name="ri_consultar_pendencias_eace",
     ),
+    path(
+        "ri/<int:pk>/notas-fiscais/validar/",
+        views.ri_validar_notas_fiscais_view,
+        name="ri_validar_notas_fiscais",
+    ),
 ]

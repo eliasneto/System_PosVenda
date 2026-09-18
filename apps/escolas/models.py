@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Escola(models.Model):
@@ -214,6 +215,16 @@ class PlanilhaRelatorioEaceMip(models.Model):
         verbose_name="Enviado por",
     )
     enviado_em = models.DateTimeField("Enviado em", auto_now_add=True)
+    sincronizacao_confirmada = models.BooleanField(
+        "Sincronização já confirmada",
+        default=False,
+        help_text=(
+            "Marca se o usuário já escolheu sobrepor ou não os INEPs "
+            "deste arquivo com Lado 3 já preenchido — depois de "
+            "marcado, a tela para de perguntar de novo até um novo "
+            "arquivo ser importado."
+        ),
+    )
 
     class Meta:
         verbose_name = "Relatório EACE (MIP)"
@@ -415,6 +426,29 @@ class Lote(models.Model):
     status = models.CharField(
         "Status", max_length=30, choices=STATUS_CHOICES, default=AGUARDANDO_ENCERRAMENTO
     )
+    # Pedido do usuário (2026-09-17): depois que o financeiro gera as Notas
+    # Fiscais de todo o LOTE, ele devolve tudo junto num único .zip — este
+    # campo deixa esse arquivo disponível para download na tela "Projeto >
+    # MIP (LOTE)". No máximo 1 arquivo por LOTE — um novo upload substitui
+    # o anterior (`substituir_notas_fiscais_zip`), mesmo padrão de arquivo
+    # único já usado em `PlanilhaEace`/`PlanilhaRelatorioEaceMip` (RN-021).
+    arquivo_notas_fiscais_zip = models.FileField(
+        "Notas Fiscais (.zip)", upload_to="lotes_notas_fiscais/%Y/%m/", max_length=255, blank=True
+    )
+    nome_original_notas_fiscais_zip = models.CharField(
+        "Nome original do arquivo de Notas Fiscais", max_length=255, blank=True
+    )
+    notas_fiscais_zip_enviado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Notas Fiscais (.zip) enviado por",
+    )
+    notas_fiscais_zip_enviado_em = models.DateTimeField(
+        "Notas Fiscais (.zip) enviado em", null=True, blank=True
+    )
 
     class Meta:
         verbose_name = "Lote"
@@ -423,3 +457,19 @@ class Lote(models.Model):
 
     def __str__(self):
         return f"LOTE-{self.pk:04d}"
+
+    def substituir_notas_fiscais_zip(self, arquivo, usuario):
+        """Substitui o .zip de Notas Fiscais deste LOTE (pedido do usuário,
+        2026-09-17) — no máximo 1 arquivo por vez; apaga o anterior do
+        disco antes de gravar o novo (mesmo padrão de `PlanilhaEace.
+        substituir`, RN-021)."""
+        if self.arquivo_notas_fiscais_zip:
+            self.arquivo_notas_fiscais_zip.delete(save=False)
+        self.arquivo_notas_fiscais_zip = arquivo
+        self.nome_original_notas_fiscais_zip = arquivo.name
+        self.notas_fiscais_zip_enviado_por = usuario
+        self.notas_fiscais_zip_enviado_em = timezone.now()
+        self.save(update_fields=[
+            "arquivo_notas_fiscais_zip", "nome_original_notas_fiscais_zip",
+            "notas_fiscais_zip_enviado_por", "notas_fiscais_zip_enviado_em",
+        ])

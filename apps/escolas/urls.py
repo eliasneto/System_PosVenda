@@ -20,6 +20,11 @@ urlpatterns = [
     ),
     path("mip/lote/<int:pk>/status/", views.mip_lote_status_update_view, name="mip_lote_status_update"),
     path("mip/lote/<int:pk>/desfazer/", views.mip_lote_desfazer_view, name="mip_lote_desfazer"),
+    path(
+        "mip/lote/<int:pk>/notas-fiscais/",
+        views.mip_lote_notas_fiscais_upload_view,
+        name="mip_lote_notas_fiscais_upload",
+    ),
     path("mip/<str:inep>/", views.mip_detail_view, name="mip_detail"),
     path("mip/<str:inep>/status/", views.mip_status_update_view, name="mip_status_update"),
     path(

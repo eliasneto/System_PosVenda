@@ -1,4 +1,5 @@
 # import re  # só usado por `_limpar_lista_emails_lote` — e-mail do LOTE comentado (pedido do usuário, 2026-09-15)
+import zipfile
 
 from django import forms
 # from django.core.validators import validate_email  # idem acima
@@ -10,6 +11,30 @@ except ImportError:
 
 from .models import PlanilhaRelatorioEaceMip
 from .services import aba_relatorio_eace_mip_com_colunas
+
+
+class LoteNotasFiscaisZipUploadForm(forms.Form):
+    """Pedido do usuário (2026-09-17): upload do .zip de Notas Fiscais que
+    o financeiro devolve para todo o LOTE de uma vez, tela "Projeto > MIP
+    (LOTE)" — 1 arquivo por LOTE, substituível (`Lote.substituir_notas_
+    fiscais_zip`). Validação leve (extensão + `zipfile.is_zipfile`), sem
+    exigir nenhum conteúdo/estrutura interna do .zip — diferente da
+    Planilha EACE (MIP), aqui o sistema só guarda o arquivo para download,
+    não lê nada de dentro dele."""
+
+    arquivo = forms.FileField(
+        label="Notas Fiscais (.zip)",
+        widget=forms.ClearableFileInput(attrs={"class": "sr-only", "accept": ".zip"}),
+    )
+
+    def clean_arquivo(self):
+        arquivo = self.cleaned_data["arquivo"]
+        if not arquivo.name.lower().endswith(".zip"):
+            raise forms.ValidationError("Envie um arquivo .zip.")
+        if not zipfile.is_zipfile(arquivo):
+            raise forms.ValidationError("Não foi possível ler o arquivo — verifique se é um .zip válido.")
+        arquivo.seek(0)
+        return arquivo
 
 
 class PlanilhaRelatorioEaceMipUploadForm(forms.Form):

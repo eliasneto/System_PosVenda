@@ -56,6 +56,35 @@ ficam intactos. `existe_log_ativo` continua calculado (usado em
 `ContextoLogsRpaEaceTests`) mas não liga mais polling aqui.
 {% endcomment %}
 <div id="logs-rpa-eace-{{ ri.pk }}" {% if oob %}hx-swap-oob="true"{% endif %}>
+{% if documentos_pdf %}
+{% comment %}
+Botão "Validar Notas Fiscais" (a formalizar pelo Orquestrador em
+business_rules.md/checklist.md): confere se o financeiro faturou a Nota
+Fiscal (PDF recebido por e-mail, RN-016) conforme os itens já confirmados
+no Lado Relatório EACE — `apps.ri.services.validar_notas_fiscais_financeiro`.
+Roda na hora (só lê arquivo local); resultado fica no Histórico de
+comunicação, abaixo — este botão não bloqueia o fluxo do RI.
+{% endcomment %}
+<div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6 mt-6">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+            <h2 class="text-sm font-black uppercase italic text-gray-400 dark:text-gray-500">
+                Validar Notas Fiscais
+            </h2>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold mt-1">
+                Confere Descrição, Quantidade, Valor Unitário e Valor Total de cada Nota Fiscal recebida contra o Relatório EACE (resultado no Histórico, abaixo).
+            </p>
+        </div>
+        <form method="POST" action="{% url 'ri_validar_notas_fiscais' pk=ri.pk %}" hx-post="{% url 'ri_validar_notas_fiscais' pk=ri.pk %}" hx-swap="none">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next_url }}">
+            <button type="submit" class="px-5 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-xl hover:bg-gray-800 transition shadow">
+                Validar Notas Fiscais
+            </button>
+        </form>
+    </div>
+</div>
+{% endif %}
 {% if logs_rpa_eace %}
 <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6 mt-6">
     <h2 class="text-sm font-black uppercase italic text-gray-400 dark:text-gray-500 mb-4">

@@ -13,7 +13,7 @@ import zipfile
 from collections import OrderedDict, defaultdict
 from datetime import timedelta
 from datetime import timezone as dt_timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from email import message_from_bytes, policy
 from email.header import decode_header
 from email.utils import parseaddr
@@ -661,6 +661,262 @@ def sincronizar_divergencia_kit_relatorio(ri):
             ri=ri, tipo=RiDivergencia.TIPO_KIT_RELATORIO, bloqueia=True, descricao=descricao,
         )
     return resultado
+
+
+# ==========================================
+# Botão "Validar Notas Fiscais" (a formalizar pelo Orquestrador em
+# business_rules.md/checklist.md): confere se o financeiro faturou a Nota
+# Fiscal (PDF recebido por e-mail, RN-016) conforme os itens já
+# confirmados no Lado Relatório EACE (3º lado, RN-088/RN-046).
+# ==========================================
+
+
+def _valor_brl_para_decimal(valor):
+    """Converte "1.733,47" (formato BR, mesmo do DANFE) em
+    Decimal("1733.47") — `None` quando inválido/vazio, nunca inventa valor
+    (CLAUDE.md §9)."""
+    if not valor:
+        return None
+    try:
+        return Decimal(str(valor).strip().replace(".", "").replace(",", "."))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _valores_decimais_iguais(v1, v2, tolerancia=Decimal("0.01")):
+    if v1 is None or v2 is None:
+        return False
+    return abs(v1 - v2) < tolerancia
+
+
+def _item_lpu_esperado(item, catalogo, lote):
+    """Texto "ITEM LPU" que a Nota Fiscal deste item deveria trazer — mesmo
+    cálculo usado para nomear a aba da planilha de faturamento enviada ao
+    financeiro (RN-013, `_item_lpu_e_aba`) — conferido contra o que a
+    automação de validação lê do DANFE (`extrair_item_lpu`)."""
+    catalogo_resolvido = KitPadrao.resolver_por_item(
+        item.descricao_item, eh_kit=item.eh_kit, lote=lote, catalogo=catalogo
+    )
+    texto_item_lpu, _aba = _item_lpu_e_aba(item.descricao_item, item.eh_kit, catalogo_resolvido)
+    return texto_item_lpu
+
+
+def _itens_relatorio_eace_candidatos_por_item_lpu(ri, item_lpu_pdf, catalogo):
+    """Fallback de casamento (pedido do usuário, 2026-09-17 — INEP
+    53005090/NF 1622: Descrição, Quantidade e Valor batiam certinho, mas o
+    sistema acusava "nenhum item vinculado" só porque o Sincronizador
+    ainda não tinha preenchido `nota_fiscal`, RN-046 — a Planilha EACE nem
+    sempre traz a coluna "Nota Fiscal" já preenchida no momento da
+    sincronização). Casa pelo mesmo texto "ITEM LPU" entre os itens que
+    ainda não têm NENHUMA Nota Fiscal vinculada — só usado quando o
+    casamento é único; mais de 1 candidato é ambíguo, não arrisca escolher
+    errado."""
+    if not item_lpu_pdf:
+        return []
+    lote = ri.escola.lote
+    return [
+        item for item in ri.itens_relatorio_eace.filter(nota_fiscal="")
+        if _item_lpu_esperado(item, catalogo, lote) == item_lpu_pdf
+    ]
+
+
+def _comparar_nota_fiscal_com_relatorio_eace(ri, documento, dados, catalogo):
+    """1 Nota Fiscal (PDF) contra os itens do Lado Relatório EACE (3º
+    lado) — casada de preferência pelo número da Nota Fiscal (RN-046,
+    `RiItemRelatorioEace.nota_fiscal`), com fallback por Produto/
+    Equipamento (ITEM LPU, `_itens_relatorio_eace_candidatos_por_item_lpu`)
+    quando esse vínculo ainda não existe. Mesmo lado que origina a
+    planilha de faturamento enviada ao financeiro (RN-088). Retorna
+    sempre o mesmo formato de dict (`documento_id`, `arquivo`,
+    `numero_nf`, `ok`, `motivos`, `avisos`), usado tanto para o resumo
+    quanto para o detalhe gravado no histórico
+    (`_registrar_historico_validacao_nf`)."""
+    base = {"documento_id": documento.pk, "arquivo": documento.arquivo.name}
+
+    if dados["ilegivel"]:
+        return {
+            **base, "numero_nf": "", "ok": False, "avisos": [],
+            "motivos": ["PDF ilegível (arquivo ausente, corrompido ou sem texto)."],
+        }
+
+    numero_nf = dados["numero_nf"]
+    motivos = []
+    if not numero_nf:
+        motivos.append("Número da Nota Fiscal não encontrado no PDF.")
+    if not dados["itens"]:
+        motivos.append("Nenhum item de produto/serviço encontrado no PDF.")
+    if motivos:
+        return {**base, "numero_nf": numero_nf, "ok": False, "motivos": motivos, "avisos": []}
+
+    itens_sistema = list(ri.itens_relatorio_eace.filter(nota_fiscal=numero_nf))
+    casado_por_item_lpu = False
+    if not itens_sistema:
+        candidatos = _itens_relatorio_eace_candidatos_por_item_lpu(ri, dados["item_lpu"], catalogo)
+        if len(candidatos) == 1:
+            itens_sistema = candidatos
+            casado_por_item_lpu = True
+
+    if not itens_sistema:
+        return {
+            **base, "numero_nf": numero_nf, "ok": False, "avisos": [],
+            "motivos": [
+                f'Nenhum item do Relatório EACE (3º lado) está vinculado à Nota Fiscal Nº '
+                f'"{numero_nf}", nem foi possível casar com segurança pelo Produto/Equipamento '
+                "(ITEM LPU) — confira manualmente."
+            ],
+        }
+
+    quantidade_sistema = sum(item.quantidade for item in itens_sistema)
+    valor_total_sistema = sum(item.quantidade * item.valor_unitario for item in itens_sistema)
+    quantidade_pdf = sum(_valor_brl_para_decimal(item["quantidade"]) or Decimal("0") for item in dados["itens"])
+    valor_total_pdf = sum(_valor_brl_para_decimal(item["valor_total"]) or Decimal("0") for item in dados["itens"])
+
+    if quantidade_pdf != quantidade_sistema:
+        motivos.append(f"Quantidade: NF traz {quantidade_pdf}, sistema espera {quantidade_sistema}.")
+    if not _valores_decimais_iguais(valor_total_pdf, valor_total_sistema):
+        motivos.append(f"Valor Total: NF traz R$ {valor_total_pdf}, sistema espera R$ {valor_total_sistema}.")
+
+    # Valor Unitário só é comparável de forma direta no caso mais comum (1
+    # item do sistema casado com 1 item na NF — RN-046: a Nota Fiscal
+    # "cobre a Quantidade inteira daquele item, não por unidade"). Com mais
+    # de 1 item somado na mesma Nota Fiscal, fica só a checagem de
+    # Quantidade/Valor Total acima — não há como casar cada item da NF com
+    # o item certo do sistema sem arriscar um falso positivo.
+    if len(itens_sistema) == 1 and len(dados["itens"]) == 1:
+        valor_unitario_sistema = itens_sistema[0].valor_unitario
+        valor_unitario_pdf = _valor_brl_para_decimal(dados["itens"][0]["valor_unitario"])
+        if not _valores_decimais_iguais(valor_unitario_pdf, valor_unitario_sistema):
+            motivos.append(
+                f"Valor Unitário: NF traz R$ {valor_unitario_pdf}, sistema espera R$ {valor_unitario_sistema}."
+            )
+
+    item_lpu_pdf = dados["item_lpu"]
+    itens_lpu_esperados = sorted(
+        {_item_lpu_esperado(item, catalogo, ri.escola.lote) for item in itens_sistema}
+    )
+    if item_lpu_pdf and itens_lpu_esperados and item_lpu_pdf not in itens_lpu_esperados:
+        motivos.append(
+            f'Produto/Equipamento: NF traz "{item_lpu_pdf}", sistema espera '
+            f"{' ou '.join(itens_lpu_esperados)}."
+        )
+
+    avisos = []
+    if casado_por_item_lpu:
+        avisos.append(
+            "Casado pelo Produto/Equipamento (ITEM LPU), não pelo Número da Nota Fiscal — "
+            "este item ainda não está vinculado a esta Nota Fiscal no Relatório EACE "
+            "(rode o Sincronizador para confirmar)."
+        )
+
+    return {
+        **base, "numero_nf": numero_nf, "ok": not motivos, "motivos": motivos, "avisos": avisos,
+        "quantidade_pdf": str(quantidade_pdf), "quantidade_sistema": str(quantidade_sistema),
+        "valor_total_pdf": str(valor_total_pdf), "valor_total_sistema": str(valor_total_sistema),
+        "item_lpu_pdf": item_lpu_pdf,
+    }
+
+
+def _registrar_historico_validacao_nf(ri, usuario, resultados):
+    """Grava o resultado do botão "Validar Notas Fiscais" na linha do
+    tempo do RI (`RiHistorico.VALIDACAO_NF`) — resumo curto em `mensagem`
+    (limite de 250 caracteres), detalhe completo por Nota Fiscal em
+    `resultado_validacao_nf` (JSON). Nunca bloqueia o fluxo do RI — é só
+    um registro para o usuário decidir o que fazer com uma divergência
+    encontrada (decisão explícita do usuário, 2026-09-17).
+
+    Só grava entrada nova quando o resultado muda em relação à última
+    validação já registrada (pedido do usuário, 2026-09-17: clicar várias
+    vezes sem nada ter mudado não pode gerar histórico infinito) — a
+    mensagem de sucesso/erro na tela (`ri_validar_notas_fiscais_view`)
+    continua aparecendo normalmente mesmo quando nada é gravado."""
+    ultima_entrada = (
+        ri.historico.filter(tipo=RiHistorico.VALIDACAO_NF).order_by("-criado_em").first()
+    )
+    if ultima_entrada and ultima_entrada.resultado_validacao_nf == resultados:
+        return
+
+    divergentes = [r for r in resultados if not r["ok"]]
+    if resultados:
+        resumo = (
+            f"{len(resultados)} Nota(s) Fiscal(is) validada(s) contra o Relatório EACE — "
+            f"{len(resultados) - len(divergentes)} OK, {len(divergentes)} com divergência."
+        )
+    else:
+        resumo = "Nenhuma Nota Fiscal (PDF) recebida do financeiro para validar."
+    entrada = RiHistorico.objects.create(
+        ri=ri, tipo=RiHistorico.VALIDACAO_NF, autor=usuario,
+        mensagem=resumo[:250], resultado_validacao_nf=resultados,
+    )
+    documentos_ids = [r["documento_id"] for r in resultados if r.get("documento_id")]
+    if documentos_ids:
+        entrada.documentos.set(documentos_ids)
+
+
+def _documentos_nf_do_ultimo_email_financeiro(ri):
+    """RN-005/RN-016: só os PDF de Nota Fiscal do ÚLTIMO e-mail de resposta
+    do financeiro — nunca de uma resposta anterior. Necessário porque
+    `Documento.ativo` fica sempre `True` para todo PDF já recebido
+    (`_salvar_documento`, correção 2026-09-02: o financeiro pode responder
+    com mais de 1 Nota Fiscal no mesmo e-mail, então salvar uma nova NF não
+    pode aposentar a anterior) — filtrar só por `ativo=True` acumularia
+    Notas Fiscais de respostas antigas junto da mais recente (pedido do
+    usuário, 2026-09-17: NF enviada errada pro RPA, corrigida e reenviada
+    pelo financeiro não pode continuar aparecendo na validação ao lado da
+    corrigida). Usa a entrada `RiHistorico.EMAIL` mais recente — cada
+    resposta do financeiro grava 1 entrada dessas, com só os `Documento`
+    daquela resposta vinculados (`entrada_email.documentos.set(...)`,
+    `_processar_mensagem`); um envio AO financeiro (FEAT-008) também usa
+    `tipo=EMAIL`, mas nunca preenche `documentos` (usa `anexo`), então não
+    interfere aqui — só devolve lista vazia até a próxima resposta chegar."""
+    ultimo_email = ri.historico.filter(tipo=RiHistorico.EMAIL).order_by("-criado_em").first()
+    if not ultimo_email:
+        return []
+    return list(ultimo_email.documentos.filter(tipo=Documento.NOTA_FISCAL_PDF).order_by("id"))
+
+
+def validar_notas_fiscais_financeiro(ri, usuario):
+    """Botão "Validar Notas Fiscais" (tela do RI, a formalizar pelo
+    Orquestrador em business_rules.md): confere se o financeiro faturou a
+    Nota Fiscal (PDF recebido por e-mail, RN-016) conforme os itens já
+    confirmados no Lado Relatório EACE (3º lado) — mesmo lado que origina
+    a planilha de faturamento enviada ao financeiro (RN-088) e que carrega
+    o número da Nota Fiscal por item (RN-046). O casamento entre o PDF e o
+    item do sistema é feito pelo número da Nota Fiscal (lido do cabeçalho
+    do DANFE, `extrair_numero_nf`) — dentro dele, confere Quantidade,
+    Valor Unitário e Valor Total; o texto "ITEM LPU" (Dados Adicionais do
+    DANFE) é conferido no lugar da Descrição fiscal do produto, que não
+    bate com o nome interno do equipamento (ex.: NF mostra "Conversor de
+    Mídia", sistema usa "Switch" — confirmado lendo um DANFE real,
+    `doc/Nota Fiscal.pdf`, decisão do usuário em 2026-09-17).
+
+    Roda 1 vez por clique, para os PDF de Nota Fiscal do ÚLTIMO e-mail de
+    resposta do financeiro (`_documentos_nf_do_ultimo_email_financeiro`) —
+    nunca de uma resposta anterior já corrigida/substituída. Só lê arquivo
+    já salvo localmente, sem abrir portal nem gastar rede. Resultado (por
+    PDF: OK/divergente + motivos) fica gravado no histórico do RI, nunca
+    bloqueia o fluxo — `RiDivergencia.TIPO_NF_FINANCEIRO` (catálogo
+    formal, P-03) fica fora deste primeiro corte, decisão técnica
+    reversível e conservadora (CLAUDE.md §9)."""
+    from apps.integracoes.eace.extrair_dados_pdf import extrair_dados_validacao_nf
+
+    documentos_nf = _documentos_nf_do_ultimo_email_financeiro(ri)
+    catalogo = list(KitPadrao.objects.all())
+    resultados = []
+    for documento in documentos_nf:
+        try:
+            dados = extrair_dados_validacao_nf(documento.arquivo.path)
+        except Exception:
+            logger.exception("Falha ao ler PDF da NF %s para validação.", documento.pk)
+            resultados.append({
+                "documento_id": documento.pk, "arquivo": documento.arquivo.name,
+                "numero_nf": "", "ok": False, "avisos": [],
+                "motivos": ["Não foi possível ler o arquivo PDF (ver logs)."],
+            })
+            continue
+        resultados.append(_comparar_nota_fiscal_com_relatorio_eace(ri, documento, dados, catalogo))
+
+    _registrar_historico_validacao_nf(ri, usuario, resultados)
+    return resultados
 
 
 # ==========================================
@@ -3131,6 +3387,51 @@ def _kit_wifi_estimado_relatorio_faturamento(escola, catalogo):
     return _derivar_numero_access_points(kit_inicial)
 
 
+def _resolver_notas_fiscais_por_item_lpu(ri, catalogo):
+    """Fallback de leitura, só para o relatório "Faturamento EACE
+    Materiais" (pedido do usuário, 2026-09-17) — nunca grava nada no
+    banco. `RiItemRelatorioEace.nota_fiscal` é um campo fechado (RN-022:
+    só o Sincronizador preenche, a partir da coluna "Nota Fiscal" da
+    Planilha EACE) — quando essa coluna ainda não veio preenchida, o item
+    fica sem Nota Fiscal ali mesmo já existindo uma de verdade (PDF já
+    recebido do financeiro). Resolve lendo os PDF do último e-mail do
+    financeiro (`_documentos_nf_do_ultimo_email_financeiro`) e casando
+    pelo texto "ITEM LPU" — mesmo critério de `validar_notas_fiscais_
+    financeiro`, inclusive a mesma regra de não escolher em caso de
+    ambiguidade (mais de 1 PDF com o mesmo ITEM LPU).
+
+    Retorna `{item.pk: numero_nf}` só para os itens sem `nota_fiscal`
+    próprio; item já vinculado pelo Sincronizador nem entra aqui."""
+    itens_sem_nf = [item for item in ri.itens_relatorio_eace.all() if not item.nota_fiscal]
+    if not itens_sem_nf:
+        return {}
+
+    documentos_nf = _documentos_nf_do_ultimo_email_financeiro(ri)
+    if not documentos_nf:
+        return {}
+
+    from apps.integracoes.eace.extrair_dados_pdf import extrair_dados_validacao_nf
+
+    numeros_por_item_lpu = {}
+    for documento in documentos_nf:
+        try:
+            dados = extrair_dados_validacao_nf(documento.arquivo.path)
+        except Exception:
+            logger.exception(
+                "Falha ao ler PDF da NF %s para o relatório de faturamento.", documento.pk
+            )
+            continue
+        if dados["item_lpu"] and dados["numero_nf"]:
+            numeros_por_item_lpu.setdefault(dados["item_lpu"], set()).add(dados["numero_nf"])
+
+    resolvidos = {}
+    for item in itens_sem_nf:
+        numeros = numeros_por_item_lpu.get(_item_lpu_esperado(item, catalogo, ri.escola.lote))
+        if numeros and len(numeros) == 1:
+            resolvidos[item.pk] = next(iter(numeros))
+    return resolvidos
+
+
 def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
     """FEAT-037: linhas do relatório "Faturamento EACE Materiais" para o
     período [`data_inicio`, `data_fim`] (ambos `date`, inclusive) — 1 linha
@@ -3151,7 +3452,11 @@ def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
       RN-011).
     - Nota Fiscal (por tipo de equipamento) e Número de OSP: Lado
       Relatório EACE (3º lado, `RiItemRelatorioEace`) — único lado que
-      guarda esses 2 dados (RN-018/RN-022).
+      guarda esses 2 dados (RN-018/RN-022). Quando `nota_fiscal` do item
+      ainda está vazio (Sincronizador não vinculou), tenta resolver pelo
+      PDF do último e-mail do financeiro antes de deixar em branco
+      (`_resolver_notas_fiscais_por_item_lpu`, pedido do usuário,
+      2026-09-17) — só leitura, não grava nada no campo fechado.
     - Status: sempre "ATIVO" — Observação: sempre em branco, o sistema não
       guarda um dado equivalente (RN-084)."""
     transicoes_no_periodo = (
@@ -3214,16 +3519,23 @@ def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
         nota_fiscal_por_categoria = {
             "NOBREAK": [], "CONVERSOR": [], "RACK": [], "SWITCH": [], "ACCESS POINT": [],
         }
+        # RN nova (pedido do usuário, 2026-09-17): quando o Sincronizador
+        # ainda não vinculou `nota_fiscal` (campo fechado, RN-022), resolve
+        # pelo ITEM LPU lendo o PDF do último e-mail do financeiro — não
+        # grava nada no banco, só evita a coluna ficar em branco na tela/
+        # `.xlsx` quando a Nota Fiscal já existe de verdade.
+        notas_fiscais_resolvidas = _resolver_notas_fiscais_por_item_lpu(ri, catalogo)
         for item in ri.itens_relatorio_eace.all():
             if item.num_osp:
                 num_osps.append(item.num_osp)
+            numero_nf = item.nota_fiscal or notas_fiscais_resolvidas.get(item.pk, "")
             if item.eh_kit:
-                if item.nota_fiscal:
-                    nota_fiscal_kit.append(item.nota_fiscal)
+                if numero_nf:
+                    nota_fiscal_kit.append(numero_nf)
                 continue
             categoria = _categoria_equipamento_relatorio_faturamento(item.descricao_item)
-            if categoria and item.nota_fiscal:
-                nota_fiscal_por_categoria[categoria].append(item.nota_fiscal)
+            if categoria and numero_nf:
+                nota_fiscal_por_categoria[categoria].append(numero_nf)
 
         linhas.append({
             "lote": escola.lote,

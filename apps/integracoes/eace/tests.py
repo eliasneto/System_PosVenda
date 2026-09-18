@@ -24,6 +24,37 @@ from apps.integracoes.eace import extrair_dados_pdf
 from apps.integracoes.eace.rpa import ResultadoRpaEace, RpaEaceIndisponivel, anexar_nota_fiscal
 
 
+def _gerar_pdf_nota_fiscal_validacao(
+    caminho, numero_nf="1365", inep="53008464", item_lpu="SWITCH", itens=None
+):
+    """PDF sintético com o layout da tabela "DADOS DO PRODUTO/SERVIÇO" e do
+    campo "ITEM LPU" (Dados Adicionais) do DANFE — usado para testar a
+    extração do botão "Validar Notas Fiscais" (apps.ri.services.
+    validar_notas_fiscais_financeiro), sem depender de PDF real. Layout
+    confirmado lendo um DANFE real (`doc/Nota Fiscal.pdf`, INEP 53008464,
+    Nota Fiscal Nº 1365, "CONVERSOR DE MIDIA"/"ITEM LPU: SWITCH")."""
+    itens = itens if itens is not None else [("CONVERSOR DE MIDIA", "1,00", "1.733,47", "1.733,47")]
+    c = canvas.Canvas(str(caminho))
+    y = 750
+    linhas = [
+        f"No {numero_nf}",
+        "Chave de acesso",
+        "3526 0807 5252 6200 0461 5500 1000 0013 6512 2382 3046",
+        "DADOS DO PRODUTO / SERVICO",
+        "COD. PROD. DESCRICAO DO PRODUTO / SERVICO NCM CST CFOP UNID. QUANT. V. UNITARIO V. TOTAL",
+    ]
+    for descricao, quantidade, valor_unitario, valor_total in itens:
+        linhas.append(
+            f"ITM001 {descricao} 8517.62.59 000 5117 UN {quantidade} {valor_unitario} "
+            f"{valor_total} 0,00 0,00 0,00 0,00 0,00"
+        )
+    linhas.append(f"INEP: {inep} ITEM LPU: {item_lpu} MUNICIPIO/UF: BRASILIA/DF VENCIMENTO: 26/09/2026")
+    for linha in linhas:
+        c.drawString(50, y, linha)
+        y -= 20
+    c.save()
+
+
 def _gerar_pdf_nota_fiscal(caminho, inep="35083938", valor="22.644,43", com_inep=True, com_valor=True):
     """Gera um PDF minimo com o mesmo formato que `extrair_dados_pdf`
     procura - usado para testar a extracao de ponta a ponta, sem
@@ -122,6 +153,90 @@ class ExtrairDadosNotaFiscalPdfRealTests(SimpleTestCase):
         caminho_inexistente = str(Path(self._tmp.name) / "nao-existe.pdf")
         dados = extrair_dados_pdf.extrair_dados_nota_fiscal(caminho_inexistente)
         self.assertEqual(dados, {"inep": "", "produto": "", "valor": "", "ilegivel": True})
+
+
+class ExtrairDadosValidacaoNfTests(SimpleTestCase):
+    """Botão "Validar Notas Fiscais" (a formalizar pelo Orquestrador em
+    business_rules.md): regex de extração da tabela "DADOS DO PRODUTO/
+    SERVIÇO" e do campo "ITEM LPU", isoladas (só o texto, sem PDF)."""
+
+    def test_extrai_item_lpu(self):
+        texto = "INEP: 53008464 ITEM LPU: SWITCH MUNICIPIO/UF: BRASILIA/DF VENCIMENTO: 26/09/2026"
+        self.assertEqual(extrair_dados_pdf.extrair_item_lpu(texto), "SWITCH")
+
+    def test_item_lpu_ausente_retorna_vazio(self):
+        self.assertEqual(extrair_dados_pdf.extrair_item_lpu("nada aqui"), "")
+
+    def test_extrai_numero_nf_pela_vizinhanca_da_chave_de_acesso(self):
+        texto = "Telefone: 8530820505 No 1365 Chave de acesso\n3526 0807 5252 6200"
+        self.assertEqual(extrair_dados_pdf.extrair_numero_nf(texto), "1365")
+
+    def test_numero_nf_ausente_retorna_vazio(self):
+        self.assertEqual(extrair_dados_pdf.extrair_numero_nf("sem chave de acesso aqui"), "")
+
+    def test_extrai_1_item_da_tabela_de_produtos(self):
+        texto = (
+            "COD. PROD. DESCRICAO DO PRODUTO / SERVICO NCM CST CFOP UNID. QUANT. "
+            "V. UNITARIO V. TOTAL\n"
+            "ITM001765 CONVERSOR DE MIDIA 8517.62.59 000 5117 UN 1,00 1.733,47 "
+            "1.733,47 1.733,47 312,02 0,00 18,00 0,00"
+        )
+        itens = extrair_dados_pdf.extrair_itens_produto_nf(texto)
+        self.assertEqual(len(itens), 1)
+        self.assertEqual(
+            itens[0],
+            {
+                "descricao": "CONVERSOR DE MIDIA",
+                "quantidade": "1,00",
+                "valor_unitario": "1.733,47",
+                "valor_total": "1.733,47",
+            },
+        )
+
+    def test_extrai_varios_itens_da_tabela_de_produtos(self):
+        texto = (
+            "ITM001 CONVERSOR DE MIDIA 8517.62.59 000 5117 UN 1,00 1.733,47 1.733,47 0,00\n"
+            "ITM002 SWITCH 24 PORTAS 8517.62.59 000 5117 UN 2,00 500,00 1.000,00 0,00"
+        )
+        itens = extrair_dados_pdf.extrair_itens_produto_nf(texto)
+        self.assertEqual(len(itens), 2)
+        self.assertEqual(itens[1]["descricao"], "SWITCH 24 PORTAS")
+        self.assertEqual(itens[1]["valor_total"], "1.000,00")
+
+    def test_sem_tabela_de_produtos_retorna_lista_vazia(self):
+        self.assertEqual(extrair_dados_pdf.extrair_itens_produto_nf("nada aqui"), [])
+
+
+class ExtrairDadosValidacaoNfPdfRealTests(SimpleTestCase):
+    """Mesmo pipeline completo (PDF real via reportlab + pdfplumber) de
+    `ExtrairDadosNotaFiscalPdfRealTests`, agora para `extrair_dados_
+    validacao_nf` (Descrição/Quantidade/Valor Unitário/Valor Total por
+    item + Número da NF + ITEM LPU)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.pdf = Path(self._tmp.name) / "nota.pdf"
+
+    def test_extrai_numero_nf_inep_item_lpu_e_itens(self):
+        _gerar_pdf_nota_fiscal_validacao(self.pdf, numero_nf="1365", inep="53008464", item_lpu="SWITCH")
+        dados = extrair_dados_pdf.extrair_dados_validacao_nf(str(self.pdf))
+        self.assertEqual(dados["numero_nf"], "1365")
+        self.assertEqual(dados["inep"], "53008464")
+        self.assertEqual(dados["item_lpu"], "SWITCH")
+        self.assertFalse(dados["ilegivel"])
+        self.assertEqual(len(dados["itens"]), 1)
+        self.assertEqual(dados["itens"][0]["descricao"], "CONVERSOR DE MIDIA")
+        self.assertEqual(dados["itens"][0]["quantidade"], "1,00")
+        self.assertEqual(dados["itens"][0]["valor_unitario"], "1.733,47")
+        self.assertEqual(dados["itens"][0]["valor_total"], "1.733,47")
+
+    def test_pdf_ilegivel_nao_estoura_excecao(self):
+        arquivo_invalido = Path(self._tmp.name) / "nao-e-pdf.pdf"
+        arquivo_invalido.write_bytes(b"isto nao e um PDF de verdade")
+        dados = extrair_dados_pdf.extrair_dados_validacao_nf(str(arquivo_invalido))
+        self.assertTrue(dados["ilegivel"])
+        self.assertEqual(dados["itens"], [])
 
 
 class AnexarNotaFiscalValidacaoAntecipadaTests(SimpleTestCase):

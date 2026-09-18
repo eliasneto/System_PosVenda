@@ -23,7 +23,7 @@ from apps.ri.services import sincronizar_divergencia_kit_relatorio, trocar_statu
 from apps.ri.views import _validar_transicao_status_ri
 
 # `LoteEmailForm` — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.forms`).
-from .forms import PlanilhaRelatorioEaceMipUploadForm
+from .forms import LoteNotasFiscaisZipUploadForm, PlanilhaRelatorioEaceMipUploadForm
 from .models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
 from .services import (
     MIME_PLANILHA_FATURAMENTO_IMPLANTACAO,
@@ -744,6 +744,35 @@ def mip_lote_baixar_planilhas_zip_view(request):
     resposta = HttpResponse(zip_stream.getvalue(), content_type="application/zip")
     resposta["Content-Disposition"] = 'attachment; filename="faturamento_implantacao_lotes.zip"'
     return resposta
+
+
+@login_required
+def mip_lote_notas_fiscais_upload_view(request, pk):
+    """Pedido do usuário (2026-09-17): depois que o financeiro gera as
+    Notas Fiscais de todo o LOTE, ele devolve tudo junto num único .zip —
+    esta view recebe esse arquivo e deixa disponível para download na
+    tela "Projeto > MIP (LOTE)" (`lote.arquivo_notas_fiscais_zip.url`, sem
+    view própria de download). No máximo 1 arquivo por LOTE — um novo
+    upload substitui o anterior (`Lote.substituir_notas_fiscais_zip`), o
+    mesmo botão serve tanto para o primeiro envio quanto para trocar o
+    arquivo depois."""
+    lote = get_object_or_404(Lote, pk=pk)
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("mip_lote_inep")
+
+    if request.method != "POST":
+        return redirect(next_url)
+
+    form = LoteNotasFiscaisZipUploadForm(request.POST, request.FILES)
+    if not form.is_valid():
+        mensagens_erro = [erro for erros in form.errors.values() for erro in erros]
+        messages.error(request, "Não foi possível enviar o arquivo: " + " ".join(mensagens_erro))
+        return redirect(next_url)
+
+    lote.substituir_notas_fiscais_zip(form.cleaned_data["arquivo"], request.user)
+    messages.success(request, f"Notas Fiscais (.zip) de {lote} enviado com sucesso.")
+    return redirect(next_url)
 
 
 @login_required

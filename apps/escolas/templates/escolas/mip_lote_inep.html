@@ -20,8 +20,18 @@
     <div class="flex gap-4 items-end">
         {% if not request.user.is_visualizador %}
         {# Pedido do usuário (2026-09-15): baixar em .zip a planilha de faturamento de vários LOTEs marcados de uma vez (1 arquivo por LOTE dentro do .zip). Os checkboxes ficam nas linhas da tabela, fora deste form, e usam o atributo HTML form="form-baixar-planilhas-lotes" pra submeter aqui — cada linha já tem forms próprios (status, desfazer), então não dá pra aninhar um <form> em volta da tabela inteira. #}
-        <form id="form-baixar-planilhas-lotes" method="POST" action="{% url 'mip_lote_baixar_planilhas_zip' %}" target="_blank"
-              onsubmit="return document.querySelectorAll('input[name=lote_ids]:checked').length > 0 || (alert('Selecione ao menos um LOTE para baixar.'), false);">
+        {% comment %}
+        Correção (pedido do usuário, 2026-09-18): sem "target=_blank" — um
+        download com Content-Disposition: attachment não navega para fora
+        da página mesmo num <form> comum (o navegador só abre o diálogo de
+        salvar), então não precisa de aba nova; sem ela, um erro do
+        servidor (ex.: LOTE sem planilha gerável) mostra o toast padrão
+        (core/_messages.html) na própria página, em vez de abrir e
+        recarregar numa aba em branco à parte. A validação "selecione ao
+        menos 1 LOTE" também deixou de usar alert() nativo — o servidor já
+        mostra a mesma mensagem no toast padrão.
+        {% endcomment %}
+        <form id="form-baixar-planilhas-lotes" method="POST" action="{% url 'mip_lote_baixar_planilhas_zip' %}">
             {% csrf_token %}
             <button type="submit" class="inline-flex items-center gap-1.5 px-4 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg">
                 <i data-lucide="download" class="w-4 h-4"></i> Baixar planilhas (.zip)
@@ -118,6 +128,53 @@
                                class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
                                 <i data-lucide="download" class="w-3.5 h-3.5"></i> Baixar planilha
                             </a>
+                            {% comment %}
+                            Pedido do usuário (2026-09-17): .zip de Notas
+                            Fiscais que o financeiro devolve para todo o
+                            LOTE — 1 arquivo por LOTE, substituível
+                            (`Lote.substituir_notas_fiscais_zip`). Link de
+                            download só aparece com arquivo já enviado; o
+                            botão de upload muda de rótulo ("Enviar"/
+                            "Substituir") conforme já existir um.
+                            {% endcomment %}
+                            {% if linha.lote.arquivo_notas_fiscais_zip %}
+                            <a href="{{ linha.lote.arquivo_notas_fiscais_zip.url }}" target="_blank"
+                               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                                <i data-lucide="file-archive" class="w-3.5 h-3.5"></i> Notas Fiscais (.zip)
+                            </a>
+                            {% endif %}
+                            <form method="POST" action="{% url 'mip_lote_notas_fiscais_upload' pk=linha.lote.pk %}"
+                                  enctype="multipart/form-data" class="flex flex-col gap-1">
+                                {% csrf_token %}
+                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                <div class="flex items-center gap-1.5">
+                                    <label for="notas-fiscais-zip-{{ linha.lote.pk }}"
+                                           class="shrink-0 px-3 py-1.5 border-2 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+                                        Escolher .zip
+                                    </label>
+                                    <input type="file" id="notas-fiscais-zip-{{ linha.lote.pk }}" name="arquivo"
+                                           accept=".zip" class="sr-only" required>
+                                    <button type="submit"
+                                            class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                                        <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+                                        {% if linha.lote.arquivo_notas_fiscais_zip %}Substituir{% else %}Enviar NF{% endif %}
+                                    </button>
+                                </div>
+                                <span id="notas-fiscais-zip-nome-{{ linha.lote.pk }}" class="text-[9px] font-bold text-gray-400 dark:text-gray-500 truncate max-w-[9rem]">
+                                    Nenhum arquivo selecionado
+                                </span>
+                            </form>
+                            <script>
+                                (function () {
+                                    var input = document.getElementById("notas-fiscais-zip-{{ linha.lote.pk }}");
+                                    var nome = document.getElementById("notas-fiscais-zip-nome-{{ linha.lote.pk }}");
+                                    if (input && nome) {
+                                        input.addEventListener("change", function () {
+                                            nome.textContent = input.files.length ? input.files[0].name : "Nenhum arquivo selecionado";
+                                        });
+                                    }
+                                })();
+                            </script>
                             <!-- FEAT-049 (a formalizar pelo Orquestrador em
                                  business_rules.md; pedido do usuário,
                                  2026-09-14): "Desfazer LOTE" — mesma

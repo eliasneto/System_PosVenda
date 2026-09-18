@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import openpyxl
 from django.contrib.auth import get_user_model
+from django.contrib.messages import get_messages
 from django.core import mail
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -65,6 +66,7 @@ from .services import (
     sincronizar_relatorio_eace_de_todas_as_ri,
     sincronizar_respostas_financeiro,
     trocar_status_com_log,
+    validar_notas_fiscais_financeiro,
 )
 
 User = get_user_model()
@@ -8150,6 +8152,70 @@ class MontarRelatorioFaturamentoEaceMateriaisTests(TestCase):
         linhas = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))
         self.assertEqual(len(linhas), 1)
 
+    def test_resolve_nota_fiscal_por_item_lpu_quando_sincronizador_nao_vinculou(self):
+        """Pedido do usuário (2026-09-17): a coluna de Nota Fiscal não pode
+        ficar em branco quando a nota já existe de verdade (PDF recebido
+        do financeiro), só ainda sem o vínculo formal do Sincronizador
+        (`nota_fiscal` vazio, campo fechado, RN-022) — mesmo critério
+        (ITEM LPU) já usado em `validar_notas_fiscais_financeiro`; não
+        grava nada no banco, só resolve na hora de montar o relatório."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Switch 8 portas", quantidade=1, valor_unitario="300.00",
+        )
+        documento = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-switch.pdf", b"conteudo-fake"), ativo=True,
+        )
+        email = RiHistorico.objects.create(ri=self.ri, tipo=RiHistorico.EMAIL, mensagem="Resposta do financeiro.")
+        email.documentos.set([documento])
+
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_validacao_nf",
+            return_value={
+                "numero_nf": "1004", "inep": "60000020", "item_lpu": "Switch 8 portas",
+                "itens": [], "ilegivel": False,
+            },
+        ):
+            linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["nota_fiscal_switch"], "1004")
+
+        item = RiItemRelatorioEace.objects.get(ri=self.ri, descricao_item="Switch 8 portas")
+        self.assertEqual(item.nota_fiscal, "")  # continua vazio - fallback só de leitura
+
+    def test_nao_resolve_por_item_lpu_quando_ambiguo(self):
+        """2 PDFs do mesmo e-mail com o mesmo ITEM LPU — casamento ambíguo,
+        não arrisca escolher o número errado; coluna continua em branco."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Switch 8 portas", quantidade=1, valor_unitario="300.00",
+        )
+        doc1 = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-switch-1.pdf", b"conteudo-fake-1"), ativo=True,
+        )
+        doc2 = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-switch-2.pdf", b"conteudo-fake-2"), ativo=True,
+        )
+        email = RiHistorico.objects.create(ri=self.ri, tipo=RiHistorico.EMAIL, mensagem="Resposta do financeiro.")
+        email.documentos.set([doc1, doc2])
+
+        respostas = {
+            str(doc1.arquivo.path): {
+                "numero_nf": "1004", "inep": "60000020", "item_lpu": "Switch 8 portas",
+                "itens": [], "ilegivel": False,
+            },
+            str(doc2.arquivo.path): {
+                "numero_nf": "1005", "inep": "60000020", "item_lpu": "Switch 8 portas",
+                "itens": [], "ilegivel": False,
+            },
+        }
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_validacao_nf",
+            side_effect=lambda caminho: respostas[caminho],
+        ):
+            linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+        self.assertEqual(linha["nota_fiscal_switch"], "")
+
     def test_reabertura_de_ri_concluido_nao_conta_como_envio(self):
         """RN-082 (revista, 2026-09-09): reabrir um RI já concluído pra
         correção ("Faturamento Concluído" → "Aguardando validação EACE")
@@ -8827,3 +8893,281 @@ class ImportarRiLegadoEaceTests(TestCase):
 
         with self.assertRaises(Exception):
             call_command("importar_ri_legado_eace", str(caminho))
+
+
+_MEDIA_ROOT_TESTE_VALIDACAO_NF = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_VALIDACAO_NF)
+class ValidarNotasFiscaisFinanceiroServiceTests(TestCase):
+    """Botão "Validar Notas Fiscais" (a formalizar pelo Orquestrador em
+    business_rules.md/checklist.md): confere a Nota Fiscal (PDF do
+    financeiro) contra os itens do Lado Relatório EACE (3º lado), casando
+    pelo número da Nota Fiscal (RN-046, `RiItemRelatorioEace.nota_fiscal`).
+    A extração do PDF em si (regex/pdfplumber) já é coberta em
+    `apps.integracoes.eace.tests.ExtrairDadosValidacaoNfPdfRealTests` —
+    aqui ela é mockada, para testar só a comparação/gravação no histórico.
+    MEDIA_ROOT isolado porque `Documento` grava um arquivo de verdade no
+    disco (mesmo padrão de `RiHistoricoTests`)."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_VALIDACAO_NF, ignore_errors=True)
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(
+            username="analista-validar-nf", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="53008464", nome="Escola Validar NF", lote=9)
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        # Descrição igual ao ITEM LPU do PDF (sem KitPadrao cadastrado, o
+        # ITEM LPU esperado cai na própria descrição do item, ver
+        # `_item_lpu_e_aba`) — mesmo padrão do DANFE real usado de
+        # referência (`doc/Nota Fiscal.pdf`: NF traz "CONVERSOR DE MIDIA"
+        # na Descrição fiscal e "SWITCH" no ITEM LPU).
+        self.item = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="SWITCH", quantidade=1,
+            valor_unitario=Decimal("1733.47"), nota_fiscal="1365",
+        )
+        self.documento = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota.pdf", b"conteudo-fake"), ativo=True,
+        )
+        # A validação só considera PDF do ÚLTIMO e-mail de resposta do
+        # financeiro (`_documentos_nf_do_ultimo_email_financeiro`) — precisa
+        # da entrada `RiHistorico.EMAIL` com o documento vinculado, mesmo
+        # padrão gravado por `_processar_mensagem` numa resposta real.
+        email = RiHistorico.objects.create(ri=self.ri, tipo=RiHistorico.EMAIL, mensagem="Resposta do financeiro.")
+        email.documentos.set([self.documento])
+
+    def _dados_pdf(self, **overrides):
+        dados = {
+            "numero_nf": "1365",
+            "inep": "53008464",
+            "item_lpu": "SWITCH",
+            "itens": [{
+                "descricao": "CONVERSOR DE MIDIA", "quantidade": "1,00",
+                "valor_unitario": "1.733,47", "valor_total": "1.733,47",
+            }],
+            "ilegivel": False,
+        }
+        dados.update(overrides)
+        return dados
+
+    def _validar(self, dados_pdf):
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_validacao_nf",
+            return_value=dados_pdf,
+        ):
+            return validar_notas_fiscais_financeiro(self.ri, self.usuario)
+
+    def test_ok_quando_tudo_bate(self):
+        resultados = self._validar(self._dados_pdf())
+        self.assertEqual(len(resultados), 1)
+        self.assertTrue(resultados[0]["ok"])
+        self.assertEqual(resultados[0]["motivos"], [])
+
+        entrada = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.VALIDACAO_NF)
+        self.assertEqual(entrada.autor, self.usuario)
+        self.assertIn("1 OK, 0 com divergência", entrada.mensagem)
+        self.assertEqual(entrada.resultado_validacao_nf, resultados)
+        self.assertIn(self.documento, entrada.documentos.all())
+
+    def test_clicar_de_novo_sem_mudanca_nao_duplica_historico(self):
+        """Pedido do usuário (2026-09-17): clicar várias vezes no botão sem
+        nada ter mudado não pode gerar histórico infinito."""
+        self._validar(self._dados_pdf())
+        self._validar(self._dados_pdf())
+        self._validar(self._dados_pdf())
+        self.assertEqual(RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.VALIDACAO_NF).count(), 1)
+
+    def test_mudanca_de_resultado_grava_nova_entrada(self):
+        self._validar(self._dados_pdf())
+        self._validar(self._dados_pdf(itens=[{
+            "descricao": "CONVERSOR DE MIDIA", "quantidade": "2,00",
+            "valor_unitario": "1.733,47", "valor_total": "3.466,94",
+        }]))
+        self.assertEqual(RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.VALIDACAO_NF).count(), 2)
+
+    def test_sem_documentos_repetido_tambem_nao_duplica(self):
+        self.documento.delete()
+        validar_notas_fiscais_financeiro(self.ri, self.usuario)
+        validar_notas_fiscais_financeiro(self.ri, self.usuario)
+        self.assertEqual(RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.VALIDACAO_NF).count(), 1)
+
+    def test_quantidade_divergente(self):
+        dados = self._dados_pdf(itens=[{
+            "descricao": "CONVERSOR DE MIDIA", "quantidade": "2,00",
+            "valor_unitario": "1.733,47", "valor_total": "3.466,94",
+        }])
+        resultados = self._validar(dados)
+        self.assertFalse(resultados[0]["ok"])
+        self.assertTrue(any("Quantidade" in motivo for motivo in resultados[0]["motivos"]))
+
+    def test_valor_total_divergente(self):
+        dados = self._dados_pdf(itens=[{
+            "descricao": "CONVERSOR DE MIDIA", "quantidade": "1,00",
+            "valor_unitario": "999,99", "valor_total": "999,99",
+        }])
+        resultados = self._validar(dados)
+        self.assertFalse(resultados[0]["ok"])
+        motivos = " ".join(resultados[0]["motivos"])
+        self.assertIn("Valor Total", motivos)
+        self.assertIn("Valor Unitário", motivos)
+
+    def test_produto_divergente_via_item_lpu(self):
+        """RN nova: a Descrição fiscal ("CONVERSOR DE MIDIA") nunca é
+        comparada direto — só o ITEM LPU (Dados Adicionais do DANFE)."""
+        dados = self._dados_pdf(item_lpu="NOBREAK")
+        resultados = self._validar(dados)
+        self.assertFalse(resultados[0]["ok"])
+        self.assertTrue(any("Produto/Equipamento" in motivo for motivo in resultados[0]["motivos"]))
+
+    def test_sem_item_vinculado_a_nota_fiscal(self):
+        self.item.nota_fiscal = "9999"
+        self.item.save(update_fields=["nota_fiscal"])
+        resultados = self._validar(self._dados_pdf())
+        self.assertFalse(resultados[0]["ok"])
+        self.assertTrue(
+            any("Nenhum item do Relatório EACE" in motivo for motivo in resultados[0]["motivos"])
+        )
+
+    def test_casa_por_item_lpu_quando_nota_fiscal_ainda_nao_vinculada(self):
+        """Caso real reportado pelo usuário (2026-09-17, INEP 53005090, NF
+        1622): Descrição/Quantidade/Valor batiam certinho, mas
+        `RiItemRelatorioEace.nota_fiscal` ainda estava vazio (Sincronizador
+        não linkou) — o sistema acusava "nenhum item vinculado" apesar do
+        conteúdo bater. Fallback casa pelo ITEM LPU quando `nota_fiscal`
+        está vazio e o casamento é único."""
+        self.item.nota_fiscal = ""
+        self.item.save(update_fields=["nota_fiscal"])
+        dados = self._dados_pdf(numero_nf="9999")  # número não bate com nenhum item
+        resultados = self._validar(dados)
+        self.assertTrue(resultados[0]["ok"])
+        self.assertEqual(resultados[0]["motivos"], [])
+        self.assertTrue(any("ITEM LPU" in aviso for aviso in resultados[0]["avisos"]))
+
+    def test_nao_casa_por_item_lpu_quando_ambiguo(self):
+        """2 itens sem Nota Fiscal vinculada com o mesmo ITEM LPU — casamento
+        ambíguo, não arrisca escolher o item errado."""
+        self.item.nota_fiscal = ""
+        self.item.save(update_fields=["nota_fiscal"])
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="SWITCH", quantidade=1,
+            valor_unitario=Decimal("1733.47"), nota_fiscal="",
+        )
+        dados = self._dados_pdf(numero_nf="9999")
+        resultados = self._validar(dados)
+        self.assertFalse(resultados[0]["ok"])
+        self.assertTrue(
+            any("Nenhum item do Relatório EACE" in motivo for motivo in resultados[0]["motivos"])
+        )
+
+    def test_numero_nf_ausente_no_pdf(self):
+        resultados = self._validar(self._dados_pdf(numero_nf=""))
+        self.assertFalse(resultados[0]["ok"])
+        self.assertTrue(
+            any("Número da Nota Fiscal não encontrado" in motivo for motivo in resultados[0]["motivos"])
+        )
+
+    def test_pdf_ilegivel(self):
+        resultados = self._validar(self._dados_pdf(ilegivel=True, itens=[], numero_nf=""))
+        self.assertFalse(resultados[0]["ok"])
+        self.assertIn("PDF ilegível", resultados[0]["motivos"][0])
+
+    def test_sem_documentos_grava_historico_de_nenhuma_nota(self):
+        self.documento.delete()
+        resultados = validar_notas_fiscais_financeiro(self.ri, self.usuario)
+        self.assertEqual(resultados, [])
+        entrada = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.VALIDACAO_NF)
+        self.assertIn("Nenhuma Nota Fiscal", entrada.mensagem)
+
+    def test_ignora_pdf_de_email_anterior_ja_corrigido(self):
+        """Cenário reportado pelo usuário (2026-09-17): NF errada enviada
+        pro RPA, corrigida e reenviada pelo financeiro num e-mail novo — o
+        PDF antigo continua com `Documento.ativo=True` (nunca é aposentado,
+        `_salvar_documento`), mas não pode mais entrar na validação; só o
+        PDF do ÚLTIMO e-mail de resposta do financeiro conta."""
+        documento_antigo = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-antiga.pdf", b"conteudo-fake-antigo"), ativo=True,
+        )
+        email_antigo = RiHistorico.objects.create(
+            ri=self.ri, tipo=RiHistorico.EMAIL, mensagem="Resposta antiga (NF errada)."
+        )
+        email_antigo.documentos.set([documento_antigo])
+        RiHistorico.objects.filter(pk=email_antigo.pk).update(
+            criado_em=timezone.now() - timedelta(days=1)
+        )
+
+        resultados = self._validar(self._dados_pdf())
+        self.assertEqual(len(resultados), 1)
+        self.assertEqual(resultados[0]["documento_id"], self.documento.pk)
+
+    def test_sem_entrada_de_email_nao_valida_nada(self):
+        """Sem nenhuma entrada `RiHistorico.EMAIL` (ex.: RI antigo/
+        importado sem esse rastro), não há como saber qual é "o último
+        e-mail" — não arrisca validar o PDF errado, simplesmente não
+        valida nada."""
+        RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.EMAIL).delete()
+        resultados = validar_notas_fiscais_financeiro(self.ri, self.usuario)
+        self.assertEqual(resultados, [])
+
+
+class RiValidarNotasFiscaisViewTests(TestCase):
+    """Botão "Validar Notas Fiscais" na tela do RI — a automação em si
+    (`validar_notas_fiscais_financeiro`) já é testada à parte em
+    `ValidarNotasFiscaisFinanceiroServiceTests`; aqui só a view (login,
+    mensagens de sucesso/erro)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(
+            username="analista-validar-nf-view", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.escola = Escola.objects.create(inep="53008465", nome="Escola Validar NF View")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def _validar(self):
+        return self.client.post(
+            reverse("ri_validar_notas_fiscais", kwargs={"pk": self.ri.pk}), {"next": ""}
+        )
+
+    def test_exige_login(self):
+        resp = self._validar()
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_sem_documentos_mostra_mensagem_de_erro(self):
+        self.client.force_login(self.usuario)
+        resp = self._validar()
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("Nenhuma Nota Fiscal" in m for m in mensagens))
+
+    def test_sucesso_mostra_mensagem_de_sucesso(self):
+        self.client.force_login(self.usuario)
+        with patch(
+            "apps.ri.views.validar_notas_fiscais_financeiro",
+            return_value=[
+                {"documento_id": 1, "arquivo": "nota.pdf", "numero_nf": "1365", "ok": True, "motivos": []},
+            ],
+        ) as mock_validar:
+            resp = self._validar()
+        mock_validar.assert_called_once_with(self.ri, self.usuario)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("conferem com o Relatório EACE" in m for m in mensagens))
+
+    def test_divergencia_mostra_mensagem_de_erro(self):
+        self.client.force_login(self.usuario)
+        with patch(
+            "apps.ri.views.validar_notas_fiscais_financeiro",
+            return_value=[
+                {
+                    "documento_id": 1, "arquivo": "nota.pdf", "numero_nf": "1365",
+                    "ok": False, "motivos": ["Quantidade diverge"],
+                },
+            ],
+        ):
+            resp = self._validar()
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("com divergência" in m for m in mensagens))
