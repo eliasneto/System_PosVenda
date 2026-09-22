@@ -53,12 +53,14 @@ from .services import (
     detectar_delimitador_planilha_eace,
     gerar_planilha_faturamento,
     gerar_planilha_relatorio_faturamento_eace_materiais,
+    gerar_planilha_relatorio_faturamento_eace_materiais_novo,
     gerar_zip_arquivos_relatorio_faturamento_eace_materiais,
     montar_corpo_email_financeiro,
     montar_dashboard_financeiro,
     montar_faturamento_por_estado,
     montar_faturamento_por_municipio,
     montar_relatorio_faturamento_eace_materiais,
+    montar_relatorio_faturamento_eace_materiais_novo,
     nome_arquivo_planilha_faturamento,
     recuperar_documentos_perdidos,
     sincronizar_divergencia_kit_relatorio,
@@ -8477,6 +8479,12 @@ class RelatorioAdministradorViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Faturamento EACE Materiais")
 
+    def test_admin_ve_o_card_faturamento_eace_materiais_novo(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_administrador"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Faturamento EACE Materiais (NOVO)")
+
     def test_analista_nao_acessa(self):
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("relatorio_administrador"))
@@ -8573,6 +8581,197 @@ class RelatorioFaturamentoEaceMateriaisViewTests(TestCase):
     def test_analista_nao_exporta(self):
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_exportar"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 403)
+
+
+class MontarRelatorioFaturamentoEaceMateriaisNovoTests(TestCase):
+    """Versão "(NOVO)" do relatório "Faturamento EACE Materiais" (pedido do
+    usuário, 2026-09-22) — mesma seleção de RI do relatório original
+    (RN-082), mas 1 linha por item do Lado Relatório EACE (3º lado): um
+    INEP com mais de 1 equipamento/Nota Fiscal/Nº OSP aparece repetido,
+    sem deduplicar."""
+
+    def setUp(self):
+        self.escola = Escola.objects.create(
+            inep="60000021", nome="Escola Faturamento Materiais Novo", estado="PE", lote=9,
+        )
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1, valor_unitario="3000.00", eh_kit=True, nota_fiscal="1001", num_osp="4001",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="200.00",
+            nota_fiscal="1002", num_osp="4001",
+        )
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Rack 5U", quantidade=2, valor_unitario="500.00",
+            nota_fiscal="1003", num_osp="4002",
+        )
+        _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 15))
+
+    def test_ri_fora_do_periodo_nao_aparece(self):
+        linhas = montar_relatorio_faturamento_eace_materiais_novo(date(2026, 9, 1), date(2026, 9, 30))
+        self.assertEqual(linhas, [])
+
+    def test_uma_linha_por_item_sem_deduplicar(self):
+        """3 itens do Lado Relatório EACE no mesmo INEP = 3 linhas, não 1
+        linha só com os valores juntados (diferença do relatório original)."""
+        linhas = montar_relatorio_faturamento_eace_materiais_novo(date(2026, 8, 1), date(2026, 8, 31))
+        self.assertEqual(len(linhas), 3)
+        self.assertTrue(all(linha["inep"] == "60000021" for linha in linhas))
+
+    def test_valor_da_linha_e_quantidade_vezes_valor_unitario_do_item(self):
+        linhas = montar_relatorio_faturamento_eace_materiais_novo(date(2026, 8, 1), date(2026, 8, 31))
+        linha_rack = next(linha for linha in linhas if linha["nota_fiscal"] == "1003")
+        self.assertEqual(linha_rack["valor"], Decimal("1000.00"))  # 2 x 500.00
+        self.assertEqual(linha_rack["numero_osp"], "4002")
+
+    def test_resolve_nota_fiscal_por_item_lpu_quando_sincronizador_nao_vinculou(self):
+        """Mesmo fallback de leitura do relatório original (pedido do
+        usuário, 2026-09-17): não deixa a coluna NF em branco quando a
+        nota já existe de verdade (PDF recebido do financeiro), só ainda
+        sem o vínculo formal do Sincronizador."""
+        item_sem_nf = RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Switch 8 portas", quantidade=1, valor_unitario="300.00",
+        )
+        documento = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-switch-novo.pdf", b"conteudo-fake"), ativo=True,
+        )
+        email = RiHistorico.objects.create(ri=self.ri, tipo=RiHistorico.EMAIL, mensagem="Resposta do financeiro.")
+        email.documentos.set([documento])
+
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_validacao_nf",
+            return_value={
+                "numero_nf": "1004", "inep": "60000021", "item_lpu": "Switch 8 portas",
+                "itens": [], "ilegivel": False,
+            },
+        ):
+            linhas = montar_relatorio_faturamento_eace_materiais_novo(date(2026, 8, 1), date(2026, 8, 31))
+        linha_switch = next(linha for linha in linhas if linha["valor"] == Decimal("300.00"))
+        self.assertEqual(linha_switch["nota_fiscal"], "1004")
+        item_sem_nf.refresh_from_db()
+        self.assertEqual(item_sem_nf.nota_fiscal, "")  # continua vazio - fallback só de leitura
+
+
+_LINHA_BASE_TESTE_PLANILHA_NOVO = {
+    "inep": "60000021", "nota_fiscal": "1001", "valor": Decimal("3000.00"), "numero_osp": "4001",
+}
+
+
+class GerarPlanilhaRelatorioFaturamentoEaceMateriaisNovoTests(TestCase):
+    """`.xlsx` do relatório "Faturamento EACE Materiais (NOVO)" — mesmo
+    padrão visual do relatório original (RN-085), só com as colunas INEP,
+    NF, VALOR e Nº OSP."""
+
+    def test_planilha_gerada_tem_cabecalho_e_linhas(self):
+        linhas = [dict(_LINHA_BASE_TESTE_PLANILHA_NOVO)]
+        conteudo = gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas)
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba = workbook["CONSOLIDADO"]
+        # RN-085: linha 1 é a faixa de título, linha 2 é o cabeçalho, dados
+        # a partir da linha 3 — mesmo padrão do relatório original.
+        self.assertEqual(aba["A1"].value, "EACE - APRENDER CONECTADO")
+        self.assertEqual(aba["A2"].value, "INEP")
+        self.assertEqual(aba["B2"].value, "NF")
+        self.assertEqual(aba["C2"].value, "VALOR")
+        self.assertEqual(aba["D2"].value, "Nº OSP")
+        self.assertEqual(aba["A3"].value, "60000021")
+        self.assertEqual(aba["B3"].value, "1001")
+        self.assertEqual(aba["C3"].value, 3000.0)
+        self.assertEqual(aba["D3"].value, "4001")
+
+    def test_planilha_com_linhas_tem_total_do_periodo_no_final(self):
+        linhas = [
+            {**_LINHA_BASE_TESTE_PLANILHA_NOVO, "valor": Decimal("3000.00")},
+            {**_LINHA_BASE_TESTE_PLANILHA_NOVO, "nota_fiscal": "1002", "valor": Decimal("200.00")},
+        ]
+        conteudo = gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas)
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba = workbook["CONSOLIDADO"]
+        # 2 linhas de dado (3 e 4) + 1 linha de total (5).
+        self.assertEqual(aba["A5"].value, "TOTAL DO PERÍODO")
+        self.assertEqual(aba["C5"].value, 3200.0)
+
+    def test_planilha_sem_linhas_nao_tem_linha_de_total(self):
+        conteudo = gerar_planilha_relatorio_faturamento_eace_materiais_novo([])
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        aba = workbook["CONSOLIDADO"]
+        self.assertEqual(aba.max_row, 2)  # só título + cabeçalho
+
+
+class RelatorioFaturamentoEaceMateriaisNovoViewTests(TestCase):
+    """Tela e download `.xlsx` de "Faturamento EACE Materiais (NOVO)" —
+    restritos a Administrador (RN-004), mesmo formulário de período do
+    relatório original."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-faturamento-materiais-novo", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-faturamento-materiais-novo", password="senha-teste-123",
+            perfil=User.PERFIL_ANALISTA,
+        )
+        self.escola = Escola.objects.create(inep="60000031", nome="Escola View Teste Novo", estado="PE")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="500.00",
+            nota_fiscal="2001", num_osp="9001",
+        )
+        _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 15))
+
+    def test_sem_periodo_mostra_apenas_o_formulario(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Gerar relatório")
+        self.assertNotContains(resp, "60000031")
+
+    def test_periodo_valido_mostra_a_tabela_com_o_ri(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "60000031")
+        self.assertContains(resp, "2001")
+        self.assertContains(resp, "9001")
+        self.assertContains(resp, "Exportar Excel")
+
+    def test_analista_nao_acessa(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_exportar_gera_xlsx_com_o_ri_do_periodo(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn("FATURAMENTO EACE MATERIAIS (NOVO)", resp["Content-Disposition"])
+        workbook = openpyxl.load_workbook(BytesIO(resp.content))
+        aba = workbook["CONSOLIDADO"]
+        self.assertEqual(aba["A3"].value, "60000031")  # linha 1 = título, linha 2 = cabeçalho
+
+    def test_exportar_sem_periodo_retorna_400(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar"))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_analista_nao_exporta(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar"), {
             "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
         })
         self.assertEqual(resp.status_code, 403)

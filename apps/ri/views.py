@@ -65,6 +65,11 @@ from .services import (
     # Fiscal (documentos de verdade, não só o número da coluna).
     gerar_zip_arquivos_relatorio_faturamento_eace_materiais,
     montar_relatorio_faturamento_eace_materiais,
+    # Versão "(NOVO)" do relatório acima: mesma seleção de RI, só com as
+    # colunas INEP/NF/VALOR/Nº OSP, 1 linha por item (pedido do usuário,
+    # 2026-09-22).
+    gerar_planilha_relatorio_faturamento_eace_materiais_novo,
+    montar_relatorio_faturamento_eace_materiais_novo,
     montar_corpo_email_financeiro,
     nome_arquivo_planilha_faturamento,
     sincronizar_divergencia_kit_relatorio,
@@ -2163,8 +2168,9 @@ def planilha_eace_sincronizar_todas_view(request):
 @login_required
 def relatorio_administrador_view(request):
     """FEAT-037: tela "Administrador > Relatório" — página com os cards de
-    relatório disponíveis (só "Faturamento EACE Materiais" por enquanto),
-    mesmo padrão de submenu com cards já usado em "Dashboard > Relatórios"
+    relatório disponíveis ("Faturamento EACE Materiais" e a versão
+    "(NOVO)", resumida em INEP/NF/VALOR/Nº OSP), mesmo padrão de submenu
+    com cards já usado em "Dashboard > Relatórios"
     (`core/dashboard_relatorios.html`). Ação restrita a Administrador,
     mesmo critério das demais telas administrativas (RN-004)."""
     if not request.user.is_administrador:
@@ -2252,6 +2258,59 @@ def relatorio_faturamento_eace_materiais_exportar_arquivos_view(request):
 
     resposta = HttpResponse(conteudo, content_type="application/zip")
     nome_arquivo = f"FATURAMENTO EACE MATERIAIS - ARQUIVOS - {data_inicio:%d-%m-%Y} a {data_fim:%d-%m-%Y}.zip"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def relatorio_faturamento_eace_materiais_novo_view(request):
+    """Card "Faturamento EACE Materiais (NOVO)" — mesmo formulário de
+    período (Data início/Data fim, GET) do relatório original, tabela
+    resumida em INEP/NF/VALOR/Nº OSP (pedido do usuário, 2026-09-22). Ação
+    restrita a Administrador, mesmo critério das demais telas
+    administrativas (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+
+    form = RelatorioFaturamentoEaceMateriaisForm(request.GET or None)
+    linhas = None
+    total_valor = None
+    if form.is_bound and form.is_valid():
+        linhas = montar_relatorio_faturamento_eace_materiais_novo(
+            form.cleaned_data["data_inicio"], form.cleaned_data["data_fim"]
+        )
+        total_valor = sum((linha["valor"] for linha in linhas), Decimal("0"))
+
+    return render(request, "ri/relatorio_faturamento_eace_materiais_novo.html", {
+        "form": form,
+        "linhas": linhas,
+        "total_valor": total_valor,
+    })
+
+
+@login_required
+def relatorio_faturamento_eace_materiais_novo_exportar_view(request):
+    """Botão "Exportar Excel" da tela acima — mesmo filtro (querystring),
+    gera o `.xlsx` na hora, sem guardar arquivo (mesmo padrão do
+    relatório original). Ação restrita a Administrador, mesmo critério da
+    tela (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+
+    form = RelatorioFaturamentoEaceMateriaisForm(request.GET or None)
+    if not form.is_valid():
+        return HttpResponseBadRequest("Informe Data início e Data fim válidas.")
+
+    data_inicio = form.cleaned_data["data_inicio"]
+    data_fim = form.cleaned_data["data_fim"]
+    linhas = montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim)
+    conteudo = gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas)
+
+    resposta = HttpResponse(
+        conteudo,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    nome_arquivo = f"FATURAMENTO EACE MATERIAIS (NOVO) - {data_inicio:%d-%m-%Y} a {data_fim:%d-%m-%Y}.xlsx"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
     return resposta
 

@@ -3432,6 +3432,42 @@ def _resolver_notas_fiscais_por_item_lpu(ri, catalogo):
     return resolvidos
 
 
+def _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
+    """RI e data da transição para "Aguardando validação EACE" (RN-082) no
+    período [`data_inicio`, `data_fim`] — mesma seleção usada pelo
+    relatório "Faturamento EACE Materiais" original e pela versão "(NOVO)"
+    (`montar_relatorio_faturamento_eace_materiais_novo`), 1 fonte só para
+    garantir que os 2 relatórios sempre listem os mesmos RI."""
+    transicoes_no_periodo = (
+        RiHistorico.objects.filter(
+            tipo=RiHistorico.LOG_STATUS,
+            campo="Status do RI",
+            valor_novo=_LABEL_AGUARDANDO_VALIDACAO_EACE,
+            # RN-082 (revista): só a transição vinda de "Resposta
+            # Financeiro" é um envio de verdade ao portal EACE — exclui
+            # reabertura de RI já concluído ("Faturamento Concluído" →
+            # "Aguardando validação EACE"), que não é um envio novo.
+            valor_anterior=_LABEL_RESPOSTA_FINANCEIRO,
+            criado_em__date__gte=data_inicio,
+            criado_em__date__lte=data_fim,
+        )
+        .values("ri_id")
+        .annotate(data_transicao=Max("criado_em"))
+    )
+    data_transicao_por_ri = {
+        linha["ri_id"]: linha["data_transicao"] for linha in transicoes_no_periodo
+    }
+    if not data_transicao_por_ri:
+        return [], {}
+
+    ris = list(
+        Ri.objects.filter(pk__in=data_transicao_por_ri.keys())
+        .select_related("escola")
+        .prefetch_related("itens_ixc", "itens_relatorio_eace")
+    )
+    return ris, data_transicao_por_ri
+
+
 def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
     """FEAT-037: linhas do relatório "Faturamento EACE Materiais" para o
     período [`data_inicio`, `data_fim`] (ambos `date`, inclusive) — 1 linha
@@ -3459,33 +3495,10 @@ def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
       2026-09-17) — só leitura, não grava nada no campo fechado.
     - Status: sempre "ATIVO" — Observação: sempre em branco, o sistema não
       guarda um dado equivalente (RN-084)."""
-    transicoes_no_periodo = (
-        RiHistorico.objects.filter(
-            tipo=RiHistorico.LOG_STATUS,
-            campo="Status do RI",
-            valor_novo=_LABEL_AGUARDANDO_VALIDACAO_EACE,
-            # RN-082 (revista): só a transição vinda de "Resposta
-            # Financeiro" é um envio de verdade ao portal EACE — exclui
-            # reabertura de RI já concluído ("Faturamento Concluído" →
-            # "Aguardando validação EACE"), que não é um envio novo.
-            valor_anterior=_LABEL_RESPOSTA_FINANCEIRO,
-            criado_em__date__gte=data_inicio,
-            criado_em__date__lte=data_fim,
-        )
-        .values("ri_id")
-        .annotate(data_transicao=Max("criado_em"))
-    )
-    data_transicao_por_ri = {
-        linha["ri_id"]: linha["data_transicao"] for linha in transicoes_no_periodo
-    }
-    if not data_transicao_por_ri:
+    ris, data_transicao_por_ri = _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim)
+    if not ris:
         return []
 
-    ris = (
-        Ri.objects.filter(pk__in=data_transicao_por_ri.keys())
-        .select_related("escola")
-        .prefetch_related("itens_ixc", "itens_relatorio_eace")
-    )
     catalogo = list(KitPadrao.objects.all())
 
     linhas = []
@@ -3571,6 +3584,49 @@ def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
     return linhas
 
 
+# RN nova (a formalizar pelo Orquestrador; pedido do usuário, 2026-09-22):
+# versão "(NOVO)" do relatório "Faturamento EACE Materiais" — mesma
+# seleção de RI do relatório original (`_ris_relatorio_faturamento_eace_
+# materiais`, mesmo período/RN-082), só que resumida em 4 colunas (INEP,
+# Nota Fiscal, Valor, Nº OSP). Nota Fiscal e Nº OSP só existem por item no
+# Lado Relatório EACE (3º lado, RN-018/RN-022) — o relatório original junta
+# vários números num só texto por categoria de equipamento
+# (`_juntar_valores_unicos`); aqui, ao contrário, cada item vira 1 linha,
+# então um INEP com mais de 1 equipamento/Nota Fiscal/Nº OSP aparece
+# repetido, sem deduplicar. O Valor de cada linha é o do próprio item
+# (Quantidade × Valor Unitário, já resolvido pelo catálogo no lançamento —
+# RN-018), não a soma "Equipamentos R$" do RI inteiro do relatório
+# original (que usa o Lado IXC).
+def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim):
+    """FEAT-XXX: linhas do relatório "Faturamento EACE Materiais (NOVO)"
+    para o período [`data_inicio`, `data_fim`] (ambos `date`, inclusive) —
+    1 linha por item do Lado Relatório EACE (3º lado) de cada RI que
+    entrou em "Aguardando validação EACE" nesse período (mesma seleção do
+    relatório original, RN-082)."""
+    ris, data_transicao_por_ri = _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim)
+    if not ris:
+        return []
+
+    catalogo = list(KitPadrao.objects.all())
+
+    linhas = []
+    for ri in ris:
+        inep = ri.escola.inep
+        notas_fiscais_resolvidas = _resolver_notas_fiscais_por_item_lpu(ri, catalogo)
+        for item in ri.itens_relatorio_eace.all():
+            numero_nf = item.nota_fiscal or notas_fiscais_resolvidas.get(item.pk, "")
+            linhas.append({
+                "inep": inep,
+                "nota_fiscal": numero_nf,
+                "valor": Decimal(item.quantidade) * item.valor_unitario,
+                "numero_osp": item.num_osp,
+                "data_transicao": data_transicao_por_ri[ri.pk],
+            })
+
+    linhas.sort(key=lambda linha: (linha["data_transicao"], linha["inep"]))
+    return linhas
+
+
 # Mesma lista de colunas usada pela tela (`ri/relatorio_faturamento_eace_
 # materiais.html`) e pelo export `.xlsx` — 1 fonte só, ordem garantida
 # igual nos 2 lugares.
@@ -3634,29 +3690,18 @@ _BORDA_LINHA_DADO = Border(left=_BORDA_FINA, right=_BORDA_FINA, top=_BORDA_FINA,
 _BORDA_CABECALHO = Border(left=_BORDA_MEDIA, right=_BORDA_MEDIA, top=_BORDA_MEDIA, bottom=_BORDA_MEDIA)
 
 
-def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
-    """FEAT-037: cópia em `.xlsx` do relatório mostrado na tela — mesmas
-    colunas e o mesmo padrão visual de `doc/FATURAMENTO EACE VALIDAÇÃO
-    FINANCEIRA.xlsx` (RN-085). Conteúdo gerado do zero (não clona o
-    arquivo modelo — ele só tinha valores digitados à mão, sem nenhuma
-    fórmula para reaproveitar)."""
-    chaves = [chave for chave, _ in COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS]
-    total_colunas = len(chaves)
+def _escrever_cabecalho_planilha_faturamento_eace_materiais(aba, total_colunas, titulos_colunas):
+    """Faixa de título (linha 1, mesclada) + cabeçalho das colunas (linha
+    2), mesmo padrão visual de `doc/FATURAMENTO EACE VALIDAÇÃO
+    FINANCEIRA.xlsx` (RN-085) — compartilhado pelo `.xlsx` do relatório
+    "Faturamento EACE Materiais" original e da versão "(NOVO)"."""
     ultima_coluna = get_column_letter(total_colunas)
 
-    workbook = openpyxl.Workbook()
-    aba = workbook.active
-    aba.title = "CONSOLIDADO"
-    aba.sheet_view.showGridLines = False
-
-    # Linha 1: faixa de título, mesclada por toda a largura da tabela —
-    # mesmo texto/marca do arquivo original.
     aba.append(["EACE - APRENDER CONECTADO"] + [None] * (total_colunas - 1))
     aba.merge_cells(f"A1:{ultima_coluna}1")
     aba.row_dimensions[1].height = 15
 
-    # Linha 2: cabeçalho das colunas.
-    aba.append([titulo for _, titulo in COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS])
+    aba.append(list(titulos_colunas))
     aba.row_dimensions[2].height = 29.4
 
     for numero_coluna in range(1, total_colunas + 1):
@@ -3666,6 +3711,24 @@ def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
             celula.fill = PatternFill(fill_type="solid", fgColor=_COR_FAIXA_TITULO)
             celula.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         aba.cell(row=2, column=numero_coluna).border = _BORDA_CABECALHO
+
+
+def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
+    """FEAT-037: cópia em `.xlsx` do relatório mostrado na tela — mesmas
+    colunas e o mesmo padrão visual de `doc/FATURAMENTO EACE VALIDAÇÃO
+    FINANCEIRA.xlsx` (RN-085). Conteúdo gerado do zero (não clona o
+    arquivo modelo — ele só tinha valores digitados à mão, sem nenhuma
+    fórmula para reaproveitar)."""
+    chaves = [chave for chave, _ in COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS]
+    titulos = [titulo for _, titulo in COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS]
+    total_colunas = len(chaves)
+
+    workbook = openpyxl.Workbook()
+    aba = workbook.active
+    aba.title = "CONSOLIDADO"
+    aba.sheet_view.showGridLines = False
+
+    _escrever_cabecalho_planilha_faturamento_eace_materiais(aba, total_colunas, titulos)
 
     coluna_data_ativacao = chaves.index("data_ativacao") + 1
     coluna_valor = chaves.index("equipamentos_valor") + 1
@@ -3703,6 +3766,69 @@ def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
         aba.cell(row=linha_total, column=coluna_valor).number_format = _FORMATO_MOEDA_PLANILHA
 
     for letra, largura in _LARGURA_COLUNAS_PLANILHA.items():
+        aba.column_dimensions[letra].width = largura
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+# Mesma lista de colunas usada pela tela e pelo export `.xlsx` do
+# relatório "Faturamento EACE Materiais (NOVO)" — 1 fonte só, ordem
+# garantida igual nos 2 lugares (mesmo padrão da versão original, acima).
+COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS_NOVO = (
+    ("inep", "INEP"),
+    ("nota_fiscal", "NF"),
+    ("valor", "VALOR"),
+    ("numero_osp", "Nº OSP"),
+)
+
+_LARGURA_COLUNAS_PLANILHA_NOVO = {"A": 14.0, "B": 13.44, "C": 19.22, "D": 14.44}
+
+
+def gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas):
+    """FEAT-XXX: `.xlsx` do relatório "Faturamento EACE Materiais (NOVO)"
+    — mesmo padrão visual do `.xlsx` original (RN-085: fonte, cores,
+    bordas, gridlines ocultas), só com as 4 colunas de `montar_relatorio_
+    faturamento_eace_materiais_novo` (1 linha por item, sem deduplicar)."""
+    chaves = [chave for chave, _ in COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS_NOVO]
+    titulos = [titulo for _, titulo in COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS_NOVO]
+    total_colunas = len(chaves)
+
+    workbook = openpyxl.Workbook()
+    aba = workbook.active
+    aba.title = "CONSOLIDADO"
+    aba.sheet_view.showGridLines = False
+
+    _escrever_cabecalho_planilha_faturamento_eace_materiais(aba, total_colunas, titulos)
+
+    coluna_valor = chaves.index("valor") + 1
+    for linha in linhas:
+        aba.append([linha.get(chave) for chave in chaves])
+        numero_linha = aba.max_row
+        for numero_coluna in range(1, total_colunas + 1):
+            celula = aba.cell(row=numero_linha, column=numero_coluna)
+            celula.font = Font(name=_FONTE_PLANILHA, size=11)
+            celula.border = _BORDA_LINHA_DADO
+            celula.alignment = Alignment(horizontal="center")
+        aba.cell(row=numero_linha, column=coluna_valor).number_format = _FORMATO_MOEDA_PLANILHA
+
+    # Mesmo padrão da versão original (RN-086): linha de total do Valor,
+    # somando só as linhas do período filtrado.
+    if linhas:
+        total_valor = sum((linha["valor"] for linha in linhas), Decimal("0"))
+        aba.append([None] * total_colunas)
+        linha_total = aba.max_row
+        aba.cell(row=linha_total, column=1, value="TOTAL DO PERÍODO")
+        aba.cell(row=linha_total, column=coluna_valor, value=float(total_valor))
+        for numero_coluna in (1, coluna_valor):
+            celula = aba.cell(row=linha_total, column=numero_coluna)
+            celula.font = Font(name=_FONTE_PLANILHA, size=11, bold=True)
+            celula.border = Border(top=_BORDA_MEDIA)
+            celula.alignment = Alignment(horizontal="center")
+        aba.cell(row=linha_total, column=coluna_valor).number_format = _FORMATO_MOEDA_PLANILHA
+
+    for letra, largura in _LARGURA_COLUNAS_PLANILHA_NOVO.items():
         aba.column_dimensions[letra].width = largura
 
     buffer = io.BytesIO()

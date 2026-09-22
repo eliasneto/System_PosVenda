@@ -27,6 +27,16 @@ urlpatterns = [
         views.relatorio_faturamento_eace_materiais_exportar_arquivos_view,
         name="relatorio_faturamento_eace_materiais_exportar_arquivos",
     ),
+    path(
+        "administrador/relatorio/faturamento-eace-materiais-novo/",
+        views.relatorio_faturamento_eace_materiais_novo_view,
+        name="relatorio_faturamento_eace_materiais_novo",
+    ),
+    path(
+        "administrador/relatorio/faturamento-eace-materiais-novo/exportar/",
+        views.relatorio_faturamento_eace_materiais_novo_exportar_view,
+        name="relatorio_faturamento_eace_materiais_novo_exportar",
+    ),
     path("inep/<str:inep>/", views.ri_detail_view, name="ri_detail"),
     path("inep/<str:inep>/iniciar/", views.ri_iniciar_view, name="ri_iniciar"),
     path("ri/<int:pk>/status/", views.ri_status_update_view, name="ri_status_update"),
