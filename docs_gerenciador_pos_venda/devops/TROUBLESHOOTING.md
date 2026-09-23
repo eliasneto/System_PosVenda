@@ -1,5 +1,86 @@
 # Troubleshooting — Gerenciador Pós-Venda
-_Última atualização: 2026-08-31_
+_Última atualização: 2026-09-23_
+
+### `doc/` não atualiza depois do deploy — mesmo com `--build`/`--no-cache` (arquivo novo não aparece na imagem)
+
+**Caso real confirmado (2026-09-23, servidor `192.168.90.109:8000`,
+`FEAT-053`):** botão "Baixar modelo" de uma automação nova devolvia
+`500` (arquivo não encontrado). Rebuild com `--build` e depois com
+`--no-cache` — nenhum dos dois trouxe os arquivos novos de `doc/` para
+dentro do container (`docker compose exec web ls doc/` sempre mostrava
+os 2 arquivos antigos, com o mtime do dia em que o volume nasceu, `Sep
+8`).
+
+**Causa:** `docker-compose.hml.override.yml` (arquivo local do
+servidor, não commitado) tinha uma entrada extra —
+```yaml
+services:
+  web:
+    volumes:
+      - doc_hml:/app/doc
+```
+— um **volume nomeado montado por cima de `/app/doc`**, criado em algum
+deploy antigo (quando `doc/` tinha só 2 arquivos) e nunca removido.
+Docker só popula um volume nomeado a partir do conteúdo da imagem na
+**primeira vez** que ele é criado (se estiver vazio); depois disso, o
+conteúdo do volume sempre vence sobre o que está na imagem, não importa
+quantos rebuilds aconteçam — `doc/` parou de refletir o código
+versionado sozinho, silenciosamente, desde que esse volume nasceu.
+Diferente do `media_hml`/`staticfiles_hml`/`backups_banco_hml` (que
+*precisam* ser voláteis/persistentes de propósito, ver `CONTAINERS.md`),
+`doc/` não tem nenhum motivo de negócio para ser um volume — são
+planilhas-modelo e documentos que fazem parte do próprio código.
+
+**Correção:** removida a entrada `doc_hml:/app/doc` (e a declaração do
+volume) do `docker-compose.hml.override.yml`; backup do arquivo antigo
+guardado ao lado
+(`docker-compose.hml.override.yml.bak-remove-doc-volume-TIMESTAMP`).
+Depois de `docker compose ... up -d web` (recriar, sem precisar
+rebuildar de novo) + `restart nginx`, `doc/` passou a refletir o
+checkout normalmente. O volume órfão `sistema_posvenda_hml_doc_hml`
+(≈72KB) ficou para trás, sem uso — seguro remover com `docker volume rm`
+quando conveniente (não é referenciado por nenhum serviço mais).
+
+**Prevenção:** ao investigar "arquivo novo não aparece depois do
+deploy", sempre conferir `docker-compose.hml.override.yml` **inteiro**
+(`cat`, não só a seção de `posvenda_db_data_hml` já documentada acima) —
+qualquer `volumes:` extra ali pode estar sombreando um diretório da
+imagem silenciosamente, sem erro nenhum no build.
+
+### Disco cheio derruba builds silenciosamente (`doc/` incompleto sem nenhum erro no `up -d --build`)
+
+**Caso real confirmado (2026-09-23, mesmo incidente acima):** antes de
+achar a causa real (volume, seção anterior), um `docker compose ...
+build --no-cache` chegou a falhar de verdade com `no space left on
+device` — o disco do servidor (23G, **compartilhado com outros
+projetos**: `gerenciadorprovedoresspeed`/"speed", `jira_eace`, `adminer`)
+estava em **100%**. Builds anteriores com `--build` (sem `--no-cache`)
+não erram visivelmente nesse caso — o `up -d --build` do primeiro
+deploy desta feature "funcionou" (sem erro na tela), mas é bem possível
+que tenha silenciosamente deixado a camada de `COPY . /app/` incompleta
+por falta de espaço, mascarado pelo fato de o volume da seção acima já
+estar shadowing `doc/` de qualquer forma (então ninguém notou).
+
+**Diagnóstico:** `df -h /` (uso do filesystem) e `docker system df -v`
+(o que o Docker está usando: imagens, containers, volumes, build cache).
+
+**Mitigação usada:** `docker builder prune -a -f` (sempre seguro — só
+cache de build, não afeta container rodando) liberou ~5.45GB. **Cuidado
+ao rebuildar mais de uma imagem grande de uma vez neste servidor** (as 3
+imagens deste projeto têm Playwright/Chromium, ~2.7GB cada) — buildar
+`web`, `rpa_eace_worker` e `email_scheduler` juntos ou em sequência sem
+espaço de sobra o suficiente derruba o build no meio da exportação da
+camada (`failed to extract layer ... no space left on device`), e pode
+deixar a tag `latest` apontando para uma imagem **incompleta**
+(reconstruir 1 serviço por vez resolveu). Isso é um servidor
+compartilhado com outros projetos — nunca remover imagem/volume de
+container que não seja `sistema_posvenda_hml-*`/`sistema_posvenda-*`
+sem confirmar com quem é dono do outro projeto.
+
+**Pendência:** espaço em disco deste servidor está no limite mesmo
+depois da limpeza (~1.2GB livres logo após o deploy) — avaliar aumento
+do disco ou limpeza mais ampla (imagens antigas de MySQL duplicadas,
+etc.) antes do próximo deploy grande.
 
 ### Banco vazio depois do deploy em produção (`migrate` aplica tudo do zero, escolas somem)
 
