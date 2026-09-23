@@ -1,0 +1,29 @@
+{% extends "core/base.html" %}
+
+{% block title %}Gerenciador Pós Venda | Atendimentos{% endblock %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li>Automações IXC</li>
+                <li>/</li>
+                <li class="text-gray-900 dark:text-gray-100">Atendimentos</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            Atendimentos
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+            Criação em massa de atendimentos no IXC
+        </p>
+    </div>
+</div>
+
+<div class="flex flex-col gap-6">
+    {% include "ixc/_grid_automacao.html" with titulo="Processamento 1" tipo=tipo slot=1 execucao=execucoes.1 %}
+    {% include "ixc/_grid_automacao.html" with titulo="Processamento 2" tipo=tipo slot=2 execucao=execucoes.2 %}
+    {% include "ixc/_historico_execucoes.html" %}
+</div>
+{% endblock %}

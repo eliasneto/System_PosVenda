@@ -568,14 +568,17 @@ cadastro de usuário; view da tela "Administrador > Usuários" (FEAT-028)
 bloqueia troca de perfil da própria conta logada.
 
 **Features relacionadas:** FEAT-003, FEAT-004, FEAT-006, FEAT-010, FEAT-027,
-FEAT-028.
+FEAT-028, FEAT-053.
 
 **Status:** Ativa — **extensão (RN-021, 2026-08-27):** upload/gestão da
 Planilha EACE (Administrador > Planilha EACE) também restrita a
 Administrador. **Exceção (RN-043, 2026-08-28):** criação automática de
 usuário via login AD, sempre com perfil Analista. **Ampliação (FEAT-028,
 2026-08-28):** tela interna para trocar perfil de outro usuário, com bloqueio
-de autopromoção/autorrebaixamento.
+de autopromoção/autorrebaixamento. **Ampliação (FEAT-053, 2026-09-23):** as
+telas "Automações IXC" (Login/Endereços, Atendimentos) e todas as suas ações
+(upload de planilha, iniciar, parar, baixar modelo/planilha de saída) seguem
+o mesmo critério — restritas a Administrador.
 
 ### RN-045 — Liberação de acesso aos dados (liga/desliga)
 **Descrição:** Além do perfil (RN-004), toda conta de usuário tem um segundo
@@ -3743,9 +3746,92 @@ RN-098.
 
 **Status:** Ativa.
 
+## Automações IXC
+
+### RN-105 — Regra "tudo ou nada" da automação Atendimentos IXC
+**Descrição:** Antes de aceitar o upload da planilha de Atendimentos,
+TODAS as linhas passam pela validação `Tipo_Processo` × `Workflow_ID`;
+se qualquer linha falhar, a planilha inteira é rejeitada — nenhuma
+linha é gravada nem enviada ao IXC.
+
+**Contexto:** Regra trazida junto com a automação do projeto sgpspeed
+(pasta `IXC/`, removida do repositório em 2026-09-23 depois de
+migrada) — evita abrir parte dos atendimentos de um lote e deixar o
+resto para trás por erro de preenchimento, o que geraria inconsistência
+difícil de rastrear depois, já dentro do IXC.
+
+**Critérios:** `Tipo_Processo` deve ser um de `Avulso`/`Cotacao
+Parceiro`/`Outro`; `Avulso` exige `Workflow_ID` vazio; `Cotacao
+Parceiro` exige `Workflow_ID = 18`; `Outro` exige `Workflow_ID`
+preenchido. Falha em qualquer linha rejeita o arquivo inteiro, com a
+lista de linhas e motivos na mensagem de erro do upload.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:**
+`apps.integracoes.ixc.services.criacao_atendimento_ixc.validar_tipo_processo`;
+`apps.ixc.forms.PlanilhaIxcAtendimentosUploadForm.clean_arquivo` roda a
+validação em todas as linhas antes de `apps.ixc.services.criar_execucao`
+gravar qualquer coisa no banco.
+
+**Features relacionadas:** FEAT-053 (nova).
+
+**Status:** Ativa.
+
+### RN-106 — Usuário responsável fixo no IXC para Atendimentos abertos pela automação
+**Descrição:** Todo atendimento (ticket) aberto no IXC pela automação
+de Atendimentos é gravado com `id_usuarios = "76"` como responsável —
+mesmo ID já usado no sistema de origem (sgpspeed).
+
+**Contexto:** O material trazido sinalizava que esse ID precisava ser
+confirmado para o ambiente do Sistema_posvenda antes de ir pra
+produção; perguntado diretamente ao usuário (CLAUDE.md §9 — integração
+externa), que confirmou manter "76" em 2026-09-23.
+
+**Critérios:** Constante `USUARIO_IXC_PADRAO = "76"`, fixa no código —
+não é lida de planilha nem de configuração por execução.
+
+**Exceções:** Nenhuma — se o ID correto no ambiente real do IXC for
+outro, é uma alteração de código/configuração, não um dado variável por
+linha ou por execução.
+
+**Impacto técnico:**
+`apps.integracoes.ixc.services.criacao_atendimento_ixc.USUARIO_IXC_PADRAO`.
+
+**Features relacionadas:** FEAT-053 (nova).
+
+**Status:** Ativa.
+
+### RN-107 — Automações IXC: 2 execuções independentes por tela (Processamento 1/2)
+**Descrição:** Cada tela de Automação IXC (Login/Endereços,
+Atendimentos) mostra 2 grids — "Processamento 1" e "Processamento 2" —
+cada um com sua própria planilha/execução. Permite ter 2 lotes em
+andamento ao mesmo tempo, um em cada grid, sem um bloquear ou
+substituir o outro.
+
+**Contexto:** Pedido explícito do usuário, direto na tela (frontend),
+em 2026-09-23: "quero que cada submenu crie dois grids".
+
+**Critérios:** Cada grid é identificado por `(tipo, slot)`, com `slot`
+fixo em 1 ou 2. Um novo upload num slot cria uma execução nova, que
+passa a ser a exibida naquele grid; a execução anterior daquele slot
+não é apagada, só deixa de aparecer na tela (fica no banco como
+histórico/auditoria).
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `ExecucaoAutomacaoIxc.slot` (`apps/ixc/models.py`);
+`ExecucaoAutomacaoIxc.slot_atual(tipo, slot)` resolve a execução mais
+recente daquele slot para exibição na tela.
+
+**Features relacionadas:** FEAT-053 (nova).
+
+**Status:** Ativa.
+
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-23 | RN-105 criada (regra "tudo ou nada" da automação Atendimentos IXC); RN-106 criada (usuário responsável fixo `"76"` no IXC para Atendimentos abertos pela automação); RN-107 criada (2 execuções independentes por tela — Processamento 1/2); RN-004 ganha ampliação (Automações IXC também restritas a Administrador) | Dev implementou e testou `FEAT-053` (Automações IXC: Login/Endereços e Atendimentos) nesta mesma sessão, a partir de material trazido do projeto sgpspeed (pasta `IXC/`, removida do repositório depois de migrada) — Orquestrador formaliza as regras; usuário confirmou manter `USUARIO_IXC_PADRAO="76"` e escolheu processamento em chunks sem fila dedicada (ver `ADR-007`) quando perguntado |
 | 2026-09-16 | RN-103 criada (Grid de Equipamentos deixa de excluir INEP pelo `status_mip`; grid do MIP passa a mostrar toda Escola cadastrada, não só quem já passou pelo handoff; coluna/filtro "Status (MIP)" passa a mostrar o Status do RI real enquanto não há handoff; RN-092 ganha emenda registrando a revisão parcial) | Usuário pediu para o INEP deixar de "sumir" do Grid de Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como imagem do RI (todos os INEPs, mesmo card, mesmo histórico); Orquestrador registrou a regra e `ADR-006`/`FEAT-052` nesta sessão; implementação ainda não iniciada |
 | 2026-09-16 | RN-098 criada (criação/desfazer de LOTE — elegibilidade e agrupamento de INEPs, FEAT-044/049/050); RN-101 criada (ciclo de status do LOTE — Em Andamento/Em Faturamento/Processo Concluído — e-mail do LOTE comentado, não usado por enquanto, FEAT-045/046); RN-102 criada (nome do Município em maiúsculo no texto de observação da planilha de faturamento de implantação) | Todo o conjunto (FEAT-044 a FEAT-046, FEAT-049, FEAT-050) já estava implementado e testado pelo Dev desde 2026-09-14, mas nunca tinha sido formalizado em `business_rules.md`/`checklist.md` — Orquestrador formaliza nesta sessão; usuário pediu, em turnos seguintes, para comentar o e-mail do LOTE e liberar a troca de status sem ele (RN-101), criar o download de planilhas de vários LOTEs em `.zip` (FEAT-051 nova) e o Município em maiúsculo na observação (RN-102); nenhum deploy em produção desta rodada ainda |
 | 2026-09-14 | RN-100 criada (disparo manual do RPA EACE — "Disparar RPA"/"Tentar novamente" — passa a gravar quem clicou na linha do tempo/Auditoria; corrigido bug de exibição que mostrava sempre "Sistema" mesmo com autor real gravado; caso reportado: INEP 35203185) | Usuário pediu para aparecer quem iniciou o robô; achado que a correção já estava implementada e testada pelo Dev antes desta sessão (não commitada nem documentada) — Orquestrador formaliza a regra; ainda sem deploy em produção |

@@ -1,0 +1,28 @@
+{% comment %}
+Grid de automação em massa (planilha modelo / upload / planilha de saída /
+progresso / start-stop), reaproveitado pelas telas de Automações IXC
+(FEAT-053). Parâmetros: `titulo` (rótulo do bloco), `tipo` e `slot`
+(identificam qual `ExecucaoAutomacaoIxc` mostrar — `execucoes` no contexto
+da view). A parte viva (upload/progresso/ações) fica em `_grid_linha.html`,
+que também é devolvida sozinha pelas respostas de iniciar/chunk/parar.
+{% endcomment %}
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="px-6 pt-5 pb-3">
+        <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100">{{ titulo }}</h2>
+    </div>
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    <th class="px-4 py-2">Planilha modelo</th>
+                    <th class="px-4 py-2">Upload da planilha</th>
+                    <th class="px-4 py-2">Progresso</th>
+                    <th class="px-4 py-2">Ações</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
+                {% include "ixc/_grid_linha.html" %}
+            </tbody>
+        </table>
+    </div>
+</div>

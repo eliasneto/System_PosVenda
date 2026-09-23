@@ -1,0 +1,111 @@
+{% comment %}
+Linha viva de 1 grid de Automações IXC (FEAT-053) — mesmo padrão de "card
+que só faz polling de si mesmo" do RPA EACE (`ri/_log_rpa_eace_card.html`):
+só quando `execucao.status == "processando"` a própria linha chama de novo
+`ixc_processar_chunk` (`hx-trigger=load`), sem mexer nas outras linhas da
+tela. Includada tanto pela tela cheia (`_grid_automacao.html`) quanto pela
+resposta direta de iniciar/chunk/parar — mesmo `pk`, fragmento idêntico.
+
+RN a formalizar (pedido do usuário, 2026-09-23): a planilha de saída não
+fica mais aqui — só no Histórico de execuções (`_historico_execucoes.
+html`), depois que a execução aparece como `Concluído`. Ao recarregar a
+tela, `slot_atual` (`apps/ixc/models.py`) já não devolve execução
+`Concluído`/`Cancelado` — o grid volta a aparecer vazio/pronto para um
+novo upload; só a resposta ao vivo do último chunk (esta mesma página,
+sem reload) ainda mostra 100%/Concluído por um instante.
+{% endcomment %}
+<tr id="linha-ixc-{{ tipo }}-{{ slot }}"
+    class="divide-x divide-gray-300 dark:divide-gray-700"
+    {% if execucao.status == "processando" %}
+    hx-post="{% url 'ixc_processar_chunk' pk=execucao.pk %}"
+    hx-trigger="load delay:400ms" hx-swap="outerHTML"
+    {% endif %}>
+    <td class="px-4 py-2 align-middle">
+        <a href="{% url 'ixc_baixar_modelo' tipo=tipo %}" class="inline-flex items-center gap-2 px-4 py-2 border-2 border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-black uppercase text-[10px] rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+            <i data-lucide="download" class="w-3.5 h-3.5"></i>
+            Baixar modelo
+        </a>
+    </td>
+    <td class="px-4 py-2 align-middle">
+        {% if execucao.status == "processando" %}
+        <span class="inline-flex items-center gap-2 px-4 py-2 border-2 border-gray-200 dark:border-gray-700 text-gray-300 dark:text-gray-600 font-black uppercase text-[10px] rounded-lg cursor-not-allowed" title="Travado enquanto este processamento estiver em andamento">
+            <i data-lucide="lock" class="w-3.5 h-3.5"></i>
+            Travado
+        </span>
+        <span class="block mt-1.5 text-[10px] font-bold text-gray-500 dark:text-gray-400">
+            Em processamento — espere terminar ou pare para enviar outra.
+        </span>
+        {% else %}
+        <form method="POST" action="{% url 'ixc_upload' tipo=tipo slot=slot %}" enctype="multipart/form-data" class="flex items-center gap-2">
+            {% csrf_token %}
+            <label for="arquivo-ixc-{{ tipo }}-{{ slot }}" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-lg cursor-pointer hover:bg-gray-800 transition">
+                <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+                Escolher arquivo
+            </label>
+            <input type="file" id="arquivo-ixc-{{ tipo }}-{{ slot }}" name="arquivo" accept=".xlsx" class="sr-only" onchange="this.form.requestSubmit()">
+        </form>
+        <span class="block mt-1.5 text-[10px] font-bold text-gray-500 dark:text-gray-400">
+            {{ execucao.nome_arquivo_original|default:"Nenhum arquivo selecionado" }}
+        </span>
+        {% endif %}
+    </td>
+    <td class="px-4 py-2 align-middle min-w-[11rem]">
+        <div class="w-full h-2 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+            <div class="h-full transition-all duration-500 {% if execucao.linhas_erro %}bg-red-500{% else %}bg-pv-yellow{% endif %}" style="width: {{ execucao.progresso_pct|default:0 }}%"></div>
+        </div>
+        <p class="mt-1.5 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">
+            {% if execucao %}
+            {{ execucao.progresso_pct }}% — {{ execucao.linhas_processadas }}/{{ execucao.total_linhas }} linhas
+            ({{ execucao.get_status_display }}{% if execucao.linhas_erro %}, {{ execucao.linhas_erro }} com erro{% endif %})
+            {% else %}
+            0% <span class="normal-case text-gray-300 dark:text-gray-600">— envie uma planilha</span>
+            {% endif %}
+        </p>
+        {% if execucao.status == "concluido" %}
+        <p class="mt-1 text-[10px] font-bold text-green-600 dark:text-green-400 normal-case">
+            Planilha de saída disponível no histórico, abaixo.
+        </p>
+        {% endif %}
+    </td>
+    <td class="px-4 py-2 align-middle">
+        <div class="flex items-center gap-2">
+            <form method="POST" {% if execucao %}action="{% url 'ixc_iniciar' pk=execucao.pk %}" hx-post="{% url 'ixc_iniciar' pk=execucao.pk %}" hx-target="#linha-ixc-{{ tipo }}-{{ slot }}" hx-swap="outerHTML"{% endif %}>
+                {% csrf_token %}
+                <button type="submit" {% if not execucao or execucao.status != "pendente" %}disabled{% endif %} class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-lg hover:bg-gray-800 transition disabled:opacity-30 disabled:cursor-not-allowed">
+                    <i data-lucide="play" class="w-3.5 h-3.5"></i>
+                    Start
+                </button>
+            </form>
+            {% comment %}
+            RN a formalizar (pedido do usuário, 2026-09-23): só quem
+            iniciou o processamento (`criado_por`) ou o superadmin do
+            sistema (`is_superuser`) pode pará-lo — para os demais
+            Administradores o botão nem aparece habilitado. Condição em
+            `{% if %}` aninhados (em vez de 1 expressão só) de propósito,
+            para não depender de precedência de `and`/`or` do motor de
+            template.
+            {% endcomment %}
+            <form method="POST" {% if execucao %}action="{% url 'ixc_parar' pk=execucao.pk %}" hx-post="{% url 'ixc_parar' pk=execucao.pk %}" hx-target="#linha-ixc-{{ tipo }}-{{ slot }}" hx-swap="outerHTML"{% endif %}>
+                {% csrf_token %}
+                {% if execucao.status == "processando" %}
+                    {% if user.is_superuser or execucao.criado_por_id == user.pk %}
+                    <button type="submit" class="inline-flex items-center gap-2 px-4 py-2 border-2 border-red-500 text-red-500 font-black uppercase text-[10px] rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition">
+                        <i data-lucide="square" class="w-3.5 h-3.5"></i>
+                        Stop
+                    </button>
+                    {% else %}
+                    <button type="button" disabled title="Só quem iniciou este processamento (ou o superadmin) pode pará-lo" class="inline-flex items-center gap-2 px-4 py-2 border-2 border-red-500 text-red-500 font-black uppercase text-[10px] rounded-lg opacity-30 cursor-not-allowed">
+                        <i data-lucide="square" class="w-3.5 h-3.5"></i>
+                        Stop
+                    </button>
+                    {% endif %}
+                {% else %}
+                <button type="button" disabled class="inline-flex items-center gap-2 px-4 py-2 border-2 border-red-500 text-red-500 font-black uppercase text-[10px] rounded-lg opacity-30 cursor-not-allowed">
+                    <i data-lucide="square" class="w-3.5 h-3.5"></i>
+                    Stop
+                </button>
+                {% endif %}
+            </form>
+        </div>
+    </td>
+</tr>

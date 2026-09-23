@@ -307,9 +307,33 @@ INEP é considerado concluído (Faturado).
 
 **Versão 3 — entrega 10/09/2026:**
 - Integração automática com o IXC via API/parsing de atendimento
-  (substitui a digitação manual do "lado IXC"); client já existe em
-  `apps/integracoes/ixc` no `modulo-posVenda` original, reaproveitável
-  quando isso for retomado.
+  (substitui a digitação manual do "lado IXC" do RI/MIP) — **ainda um
+  gap real**, sem decisão nem implementação. A nota original desta
+  seção apontava um client em `apps/integracoes/ixc` do
+  `modulo-posVenda`; esse client nunca foi trazido — o que existe hoje
+  em `apps/integracoes/ixc/` (ver item abaixo) veio de um projeto
+  diferente (sgpspeed) e resolve um problema diferente (escrita em
+  massa no IXC, não leitura/parsing para preencher o Lado IXC do RI).
+  Quando este gap for retomado, avaliar se dá para reaproveitar o
+  mesmo `IXCClient` (`apps/integracoes/ixc/client.py`) para ler dados,
+  em vez de criar um segundo cliente HTTP para o mesmo sistema externo.
+- **Automações IXC (`FEAT-053`, entregue em 2026-09-23)** — escopo
+  diferente do gap acima: **escrita** em massa no IXC, por planilha,
+  sem relação com o Lado IXC do RI/MIP. Menu "Automações IXC" (2
+  telas): **Login (Endereços)** — cria login/radusuário
+  (`POST radusuarios`) — e **Atendimentos** — abre ticket
+  (`POST su_ticket`). Material de origem (client HTTP + automações de
+  negócio) trazido do projeto sgpspeed em 2026-09-23, adaptado para não
+  depender de `pandas` (o projeto usa `openpyxl`); planilhas modelo
+  reais também trazidas de lá (`doc/Modelo Login Enderecos IXC.xlsx`/
+  `Modelo Atendimento IXC.xlsx`). Estrutura: `apps/integracoes/ixc/`
+  (client HTTP + regras de negócio das 2 automações, sem model/view
+  próprios — mesmo padrão de `apps/integracoes/eace/`) e `apps/ixc/`
+  (app Django: `ExecucaoAutomacaoIxc`/`LinhaExecucaoIxc`, upload,
+  processamento e telas). Processamento em chunks via HTMX, sem fila
+  nem worker dedicado — decisão registrada em `ADR-007` (RN-105/RN-106/
+  RN-107, `business_rules.md`). Credenciais (`IXC_URL`/`IXC_TOKEN`) no
+  `.env` real do projeto, fora do controle de versão (CLAUDE.md §6).
 - Processo RE (instalação de link) com tela própria. **Nota de
   prontidão (2026-08-22):** o usuário confirmou que a v1 continua só RI —
   RE não entra agora, nem como requisito, nem como tela. O pedido é só
@@ -389,6 +413,7 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-09-23 | "Fora do escopo da v1" (Versão 3) atualizado — `FEAT-053` (Automações IXC: Login/Endereços e Atendimentos, escrita em massa via planilha) entregue e documentada, com `apps/integracoes/ixc/` + `apps/ixc/`; esclarecido que o gap original desta seção (leitura/parsing do IXC para preencher o Lado IXC do RI/MIP) continua em aberto e é um problema diferente, mesmo reaproveitando potencialmente o mesmo `IXCClient`; `ADR-007` registrada (processamento em chunks via HTMX, sem fila/worker dedicado) | Usuário trouxe material de referência de outro sistema (sgpspeed, pasta `IXC/` na raiz, removida do repositório depois de migrada) e pediu para implantar as automações e ligá-las ao frontend já criado; Orquestrador formaliza `FEAT-053`/`ADR-007`/RN-105-107 (`business_rules.md`/`checklist.md`) nesta sessão |
 | 2026-09-16 | Módulo "MIP" revisado — grid volta a mostrar todo INEP cadastrado (mesmo universo do grid "Equipamentos"), não só quem já passou pelo handoff `status_mip`; Grid de Equipamentos deixa de excluir INEP por `status_mip`; coluna "Status (MIP)" passa a mostrar o Status do RI real enquanto não há handoff (`ADR-006`, RN-103 nova); "Estrutura de navegação" atualizada | Usuário pediu para o INEP deixar de "sumir" do Grid de Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como imagem do RI, mesmo card e mesmo histórico para as duas telas; Orquestrador registrou a decisão nesta sessão (`FEAT-052` criada, implementação ainda não iniciada) |
 | 2026-09-08 | Módulo "MIP" reescrito — grid deixa de mostrar todos os INEPs e passa a mostrar só os em "Aguardando validação EACE" (RN-074); ganha colunas Valor Total (IXC)/Valor Total (EACE) com destaque de divergência (RN-076/RN-077), Estado/Município no lugar de Endereço (RN-078), filtros de Estado/Município e data de entrada no status (RN-075/RN-079), linha de total geral (RN-080) e bolinha de sincronização com lista "Fora da Validação EACE" (RN-081); "Estrutura de navegação" e "Decisões Pendentes" atualizadas (uso do período do Relatório EACE (MIP), RN-073, resolvido) | Usuário pediu, ao longo do dia, uma sequência de ajustes no grid do MIP diretamente ao Dev; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (530 testes, sem regressão, validado inclusive contra dado real de produção) |
 | 2026-09-07 | Módulo "MIP" atualizado — Sincronizador do Lado 3 (RN-070) e confronto de divergência de Valor de serviço (RN-071) documentados; "Decisões Pendentes" restrito ao uso do período (Data inicial/Data final) do upload, já que o Sincronizador e o confronto não dependem dele | Usuário pediu o Sincronizador "com as mesmas regras do RI" e, na sequência, o mesmo card de divergência do RI, validando só Valor de serviço; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (404 testes de `apps.ri` + 64 de `apps.escolas`, sem regressão) |

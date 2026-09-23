@@ -1,6 +1,6 @@
 # Gerenciador Pós Venda
 
-Sistema de faturamento EACE por INEP (processo RI) — v1.0.0.
+Sistema de faturamento EACE por INEP (processo RI) — v1.1.0.
 
 A documentação funcional (requisitos, arquitetura, regras de negócio,
 modelo de dados e checklist) vive, por enquanto, no repositório

@@ -4106,9 +4106,63 @@ substituída), RN-067, RN-068, RN-098.
 
 ---
 
+### FEAT-053 — Automações IXC: criação em massa de Login (Endereços) e abertura de Atendimentos
+
+**Descrição:** Menu "Automações IXC", com 2 telas — "Login
+(Endereços)" e "Atendimentos" — cada uma com 2 grids independentes
+("Processamento 1"/"Processamento 2", RN-107). Cada grid baixa uma
+planilha modelo real (`doc/Modelo Login Enderecos IXC.xlsx`/`doc/Modelo
+Atendimento IXC.xlsx`, trazidas do projeto sgpspeed), recebe o upload
+da planilha preenchida, roda a automação linha a linha contra a API do
+IXC (`radusuarios`/`su_ticket`) e disponibiliza a planilha de saída com
+o resultado (Sucesso/Erro + ID no IXC) de cada linha.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média — automação de criação em massa pedida
+diretamente pelo usuário, sem dependência de outra feature em
+andamento.
+**Critérios de aceite:**
+- Só Administrador acessa as 2 telas e as ações de cada grid (RN-004).
+- Upload rejeita arquivo sem as colunas obrigatórias de cada
+  automação, com mensagem listando o que falta.
+- Atendimentos: upload rejeita a planilha inteira se qualquer linha
+  falhar a validação `Tipo_Processo` × `Workflow_ID` (RN-105, "tudo ou
+  nada") — nenhuma linha é enviada ao IXC nesse caso.
+- Start processa a planilha em chunks (`ADR-007`), com progresso real
+  (linhas processadas/total) e Stop interrompendo entre um chunk e
+  outro, nunca no meio de uma chamada já em curso ao IXC.
+- Planilha de saída só fica disponível depois que a execução termina
+  (`Concluído`), com Status/Mensagem/ID no IXC por linha.
+**Regras relacionadas:** RN-004 (ampliação), RN-105, RN-106, RN-107.
+**Dependências:** nenhuma (reaproveita RN-004/FEAT-003, já concluída).
+**Tipo de validação:** QA — regra de negócio ("tudo ou nada"),
+permissão e integração externa real (API do IXC).
+**Entrega do Dev:**
+- `apps/integracoes/ixc/` (client HTTP + automações de negócio,
+  trazidas do projeto sgpspeed em 2026-09-23, adaptadas para não
+  depender de `pandas`) e `apps/ixc/` (models, forms, services, views,
+  templates) implementados e ligados aos 4 grids do frontend já
+  existente.
+- Planilhas modelo reais servidas como vieram, sem gerar nada por
+  código; cabeçalho com "*" (obrigatório) do modelo de Atendimento
+  normalizado na leitura do upload.
+- Bug corrigido no material trazido: `executar_cadastro_ixc` tinha um
+  caminho de erro que retornava só 2 valores em vez dos 3 esperados.
+- 19 testes novos (`apps.ixc`), API do IXC sempre mockada nos testes;
+  suíte completa (1039 testes) sem regressão — 1 falha pré-existente e
+  não relacionada em `apps.auditoria` (`EnvioEmailAuditoriaTests`).
+**Pendência atual:** aguardando QA; Start/Stop não foram testados
+contra a API de produção do IXC de verdade (só com mocks) — recomenda-
+se 1 execução controlada, com poucas linhas, antes do primeiro uso
+real. Pasta `IXC/` (material de origem, com credenciais reais) removida
+do repositório a pedido do usuário depois da migração.
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-23 | `FEAT-053` criada, `🔍 Aguardando QA` — Automações IXC: menu "Automações IXC" com 2 telas (Login/Endereços, Atendimentos), cada uma com 2 grids independentes (Processamento 1/2, RN-107 nova); upload de planilha real (modelo trazido do sgpspeed, `doc/Modelo Login Enderecos IXC.xlsx`/`Modelo Atendimento IXC.xlsx`), processamento em chunks via HTMX (`ADR-007` nova, sem fila/worker dedicado) com Start/Stop e progresso real, planilha de saída com resultado por linha; RN-105 (tudo ou nada, Atendimentos) e RN-106 (usuário `"76"` fixo no IXC) novas; RN-004 ampliada. 19 testes novos (`apps.ixc`), API do IXC sempre mockada; suíte completa (1039 testes) sem regressão — 1 falha pré-existente e não relacionada em `apps.auditoria` | Usuário trouxe o material de referência (client HTTP + automações de negócio) de outro sistema (sgpspeed) numa pasta `IXC/` na raiz e pediu para implantar as 2 automações e ligá-las ao frontend já criado; perguntado sobre o mecanismo de processamento (sem Celery no projeto) e sobre o ID de usuário fixo do IXC, escolheu chunks via HTMX e manter `"76"`; ao final, pediu a remoção da pasta `IXC/` (já migrada); Orquestrador formaliza FEAT-053/RN-105/RN-106/RN-107/ADR-007 nesta sessão — sem teste real contra a API de produção do IXC ainda |
 | 2026-09-18 | Deploy em produção (`192.168.90.109`, commit `cd8a409`) concluído — backup do banco validado antes (`backups/backup_pre_deploy_20260918_130005.sql.gz`), código atualizado (`git reset --hard` na branch `feat-002-importar-escolas-planilha`), containers reconstruídos (`db`/`web`/`nginx`/`email_scheduler`/`rpa_eace_worker` todos `Up`, `db` `(healthy)`), 3 migrations novas aplicadas sem indício de banco vazio (`escolas.0016`, `escolas.0017`, `ri.0035`), `collectstatic` sem novidade, `/login/` e o estático respondendo `200 OK`. Login real na aplicação ainda não confirmado por um humano nesta rodada — checagem automatizada via SSH/curl apenas, sem credencial exposta em log | Usuário pediu commit, push e pull no servidor de produção; DevOps executou o passo a passo do `DEPLOYMENT.md` (backup → git pull → build → migrate → collectstatic → validação) via SSH (`plink`, chave de host fixada, senha lida de arquivo temporário fora do histórico de comandos) |
 | 2026-09-17 | Deploy em produção (`192.168.90.109`, commit `09bdd36`) concluído — backup do banco validado antes (`backups/backup_pre_deploy_20260917_160635.sql.gz`; uma primeira tentativa foi interrompida por engano e gerou um arquivo de 20 bytes, descartado antes de seguir), containers reconstruídos (`db`/`web`/`nginx`/`email_scheduler`/`rpa_eace_worker` todos `Up`, `db` `(healthy)`), sem migration nova a aplicar (mudança da rodada não alterou schema), `/login/` e o estático respondendo `200 OK`, login real na aplicação confirmado pelo usuário com dado carregado na tela | Usuário pediu o pull no servidor de produção, subir os containers atualizados e validar a saúde de todos; DevOps executou o passo a passo do `DEPLOYMENT.md` (backup → git pull → build → migrate → collectstatic → validação) via SSH, guiado comando a comando pelo usuário, sem incidente |
 | 2026-09-17 | Modal de confirmação genérico criado pelo Dev (`core/_modal_confirmar.html` + JS delegado em `base.html`, `data-confirmar`) — substitui os 9 usos do `confirm()` nativo do navegador no sistema inteiro (Backup: importar/excluir; Usuários: ligar/desligar acesso; MIP: excluir equipamento só-serviço, desfazer LOTE; Relatório EACE (MIP): sobrepor dados; RI: forçar Resposta Financeiro, excluir item IXC/Relatório EACE) pelo mesmo visual do painel "Confirmar envio" do modal de e-mail do RI — 1 modal único compartilhado (não duplicado por linha), com validação HTML5 do formulário antes de perguntar. Backup > "Backups de segurança" ganhou coluna "Usuário" (quem disparou a importação, gravado num `.meta.json` ao lado do `.sql.gz`) e perdeu a opção de excluir pela tela (pedido do usuário: "feito tá feito" — permanece só a função interna, usada em testes/limpeza futura). Suíte completa `apps.core`+`apps.ri`+`apps.escolas` (901 testes) sem regressão | Usuário pediu que toda confirmação do sistema tivesse "um modal igual ao envio de e-mail pela RI", em vez do popup cru do navegador; em seguida, no mesmo turno, pediu para a lista de backups mostrar quem fez cada upload/importação e tirar a opção de excluir, já que um backup de segurança gravado deve ser permanente |

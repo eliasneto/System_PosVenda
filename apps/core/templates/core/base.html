@@ -186,6 +186,30 @@
                 </div>
             </div>
             {% endif %}
+
+            <!-- Automações IXC (pedido do usuário, 2026-09-22): restrito a
+                 Administrador, mesmo critério do menu "Administrador" acima
+                 — decisão explícita do usuário para esta automação de
+                 criação em massa em sistema externo (IXC). -->
+            {% if user.is_administrador %}
+            <div class="mb-1 relative">
+                <button onclick="toggleSubmenu('submenu-ixc', 'seta-ixc')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group {% if request.resolver_match.url_name == 'ixc_login_enderecos' or request.resolver_match.url_name == 'ixc_atendimentos' %} text-pv-yellow bg-white/5 {% else %} text-gray-400 hover:bg-white/5 hover:text-white {% endif %}">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="workflow" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
+                        <span class="text-sm font-semibold">Automações IXC</span>
+                    </div>
+                    <i data-lucide="chevron-down" id="seta-ixc" class="w-4 h-4 transition-transform duration-300 {% if request.resolver_match.url_name == 'ixc_login_enderecos' or request.resolver_match.url_name == 'ixc_atendimentos' %} rotate-180 {% endif %}"></i>
+                </button>
+                <div id="submenu-ixc" class="{% if request.resolver_match.url_name != 'ixc_login_enderecos' and request.resolver_match.url_name != 'ixc_atendimentos' %}hidden{% endif %} flex flex-col gap-1 bg-black/20 rounded-xl mt-1 py-2 overflow-hidden">
+                    <a href="{% url 'ixc_login_enderecos' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'ixc_login_enderecos' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'ixc_login_enderecos' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Login (Endereços)
+                    </a>
+                    <a href="{% url 'ixc_atendimentos' %}" class="pl-[3.25rem] pr-4 py-2 text-sm font-semibold transition-colors flex items-center gap-2 {% if request.resolver_match.url_name == 'ixc_atendimentos' %} text-pv-yellow {% else %} text-gray-500 hover:text-gray-300 {% endif %}">
+                        <div class="w-1.5 h-1.5 rounded-full {% if request.resolver_match.url_name == 'ixc_atendimentos' %} bg-pv-yellow {% else %} bg-gray-500 {% endif %}"></div> Atendimentos
+                    </a>
+                </div>
+            </div>
+            {% endif %}
         </nav>
 
         <div class="mt-auto mb-8 px-6">
@@ -209,7 +233,7 @@
                 </form>
             </div>
             <div class="mt-4 text-center pb-2">
-                <p class="text-[9px] font-black text-gray-600 uppercase tracking-widest select-none">Gerenciador Pós Venda • v1.0.0</p>
+                <p class="text-[9px] font-black text-gray-600 uppercase tracking-widest select-none">Gerenciador Pós Venda • v1.1.0</p>
             </div>
         </div>
     </aside>

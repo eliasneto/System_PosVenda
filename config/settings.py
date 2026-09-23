@@ -1,5 +1,5 @@
 """
-Configuracoes do Gerenciador Pos-Venda (v1.0.0).
+Configuracoes do Gerenciador Pos-Venda (v1.1.0).
 
 Reaproveita o padrao de configuracao via variaveis de ambiente do
 `modulo-posVenda` original (python-decouple + .env, RNF-05), mas com banco
@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "apps.escolas",
     "apps.ri",
     "apps.auditoria",
+    "apps.ixc",
 ]
 
 MIDDLEWARE = [

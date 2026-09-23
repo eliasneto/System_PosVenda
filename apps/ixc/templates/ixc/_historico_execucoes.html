@@ -1,0 +1,96 @@
+{% comment %}
+Histórico de execuções das Automações IXC (pedido do usuário, 2026-09-23;
+RN a formalizar) — lista TODAS as execuções já criadas para este `tipo`,
+nos 2 slots, mais recentes primeiro (10 por página). Permite baixar a
+planilha de saída de qualquer execução já concluída, não só a que está
+aparecendo no grid do slot no momento (RN a formalizar) — execuções
+antigas de um slot não são apagadas quando um novo upload substitui o que
+aparece no grid (RN-107), só ficam sem destaque na tela; aqui é onde elas
+continuam acessíveis.
+{% endcomment %}
+<div id="historico-execucoes" class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="px-6 pt-5 pb-3">
+        <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100">Histórico de execuções</h2>
+    </div>
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    <th class="px-4 py-2">Data/Hora</th>
+                    <th class="px-4 py-2">Usuário</th>
+                    <th class="px-4 py-2">Processamento</th>
+                    <th class="px-4 py-2">Arquivo enviado</th>
+                    <th class="px-4 py-2">Status</th>
+                    <th class="px-4 py-2">Resultado</th>
+                    <th class="px-4 py-2">Planilha de saída</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
+                {% for execucao in historico %}
+                <tr class="divide-x divide-gray-300 dark:divide-gray-700">
+                    <td class="px-4 py-2 align-middle text-[11px] font-bold text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                        {{ execucao.criado_em|date:"d/m/Y H:i" }}
+                    </td>
+                    <td class="px-4 py-2 align-middle text-[11px] font-bold text-gray-700 dark:text-gray-300">
+                        {{ execucao.criado_por.get_full_name|default:execucao.criado_por.username|default:"Usuário removido" }}
+                    </td>
+                    <td class="px-4 py-2 align-middle text-[11px] font-bold text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                        Processamento {{ execucao.slot }}
+                    </td>
+                    <td class="px-4 py-2 align-middle text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate max-w-[16rem]">
+                        {{ execucao.nome_arquivo_original }}
+                    </td>
+                    <td class="px-4 py-2 align-middle">
+                        <span class="inline-block text-[10px] font-black uppercase px-3 py-1 rounded-full border-2 whitespace-nowrap
+                            {% if execucao.status == 'concluido' %}border-green-600 text-green-700 dark:text-green-400 dark:border-green-500
+                            {% elif execucao.status == 'cancelado' %}border-gray-400 text-gray-500 dark:text-gray-400
+                            {% elif execucao.status == 'processando' %}border-purple-600 text-purple-700 dark:text-purple-400
+                            {% else %}border-blue-600 text-blue-700 dark:text-blue-400{% endif %}">
+                            {{ execucao.get_status_display }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-2 align-middle text-[11px] font-bold text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                        {{ execucao.linhas_sucesso }} sucesso · {{ execucao.linhas_erro }} erro / {{ execucao.total_linhas }} linhas
+                    </td>
+                    <td class="px-4 py-2 align-middle">
+                        {% if execucao.status == "concluido" %}
+                        <a href="{% url 'ixc_baixar_saida' pk=execucao.pk %}" class="inline-flex items-center gap-2 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-lg hover:bg-gray-800 transition">
+                            <i data-lucide="file-down" class="w-3.5 h-3.5"></i>
+                            Baixar
+                        </a>
+                        {% else %}
+                        <span class="text-[10px] text-gray-300 dark:text-gray-600">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" class="px-4 py-8 text-center text-xs font-bold text-gray-400 dark:text-gray-500 italic">
+                        Nenhuma execução registrada ainda.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if historico.has_other_pages %}
+    <div class="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-800">
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest">
+            Página {{ historico.number }} de {{ historico.paginator.num_pages }}
+        </span>
+        <div class="flex gap-2">
+            {% if historico.has_previous %}
+            <a href="?historico_page={{ historico.previous_page_number }}#historico-execucoes" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+            {% if historico.has_next %}
+            <a href="?historico_page={{ historico.next_page_number }}#historico-execucoes" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
