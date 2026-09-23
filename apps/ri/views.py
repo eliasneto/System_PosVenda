@@ -101,7 +101,6 @@ DESTINATARIOS_FINANCEIRO = ["hilber.lustosa@speedcsc.com.br", "financeiro@speedc
 COPIA_FINANCEIRO = [
     "logistica-l@speedcsc.com.br",
     "posvendas@megainfraestrutura.com.br",
-    "david.alves@speedcsc.com.br",
 ]
 
 # RN-001: só estes status são trocados manualmente pelo usuário. Fora daqui
