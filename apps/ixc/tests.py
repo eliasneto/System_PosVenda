@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import openpyxl
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
@@ -226,7 +227,23 @@ class AutomacoesIxcProcessamentoTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
     @patch("apps.ixc.services.executar_cadastro_ixc")
-    def test_chunk_processa_linhas_e_conclui(self, mock_executar):
+    def test_status_e_so_leitura_nunca_processa(self, mock_executar):
+        """RN a formalizar (ADR-007 emendada): o polling da tela nunca
+        chama a automação — só quem processa é o worker (comando)."""
+        self.execucao.status = ExecucaoAutomacaoIxc.PROCESSANDO
+        self.execucao.save(update_fields=["status"])
+
+        resp = self.client.get(
+            reverse("ixc_status", kwargs={"pk": self.execucao.pk}), HTTP_HX_REQUEST="true",
+        )
+        self.assertEqual(resp.status_code, 200)
+        mock_executar.assert_not_called()
+        self.execucao.refresh_from_db()
+        self.assertEqual(self.execucao.status, ExecucaoAutomacaoIxc.PROCESSANDO)
+        self.assertEqual(self.execucao.linhas_processadas, 0)
+
+    @patch("apps.ixc.services.executar_cadastro_ixc")
+    def test_worker_processa_linhas_e_conclui(self, mock_executar):
         mock_executar.side_effect = [
             (True, "Criado com sucesso!", "111"),
             (False, "IXC Negou: login duplicado", None),
@@ -234,11 +251,8 @@ class AutomacoesIxcProcessamentoTests(TestCase):
         self.execucao.status = ExecucaoAutomacaoIxc.PROCESSANDO
         self.execucao.save(update_fields=["status"])
 
-        resp = self.client.post(
-            reverse("ixc_processar_chunk", kwargs={"pk": self.execucao.pk}),
-            HTTP_HX_REQUEST="true",
-        )
-        self.assertEqual(resp.status_code, 200)
+        call_command("processar_fila_automacoes_ixc")
+
         self.execucao.refresh_from_db()
         self.assertEqual(self.execucao.status, ExecucaoAutomacaoIxc.CONCLUIDO)
         self.assertEqual(self.execucao.linhas_sucesso, 1)
@@ -249,15 +263,34 @@ class AutomacoesIxcProcessamentoTests(TestCase):
         self.assertEqual(linha_sucesso.id_ixc, "111")
 
     @patch("apps.ixc.services.executar_cadastro_ixc")
+    def test_worker_processa_a_execucao_mais_antiga_primeiro(self, mock_executar):
+        mock_executar.return_value = (True, "Criado com sucesso!", "1")
+        outra = ExecucaoAutomacaoIxc.objects.create(
+            tipo=ExecucaoAutomacaoIxc.LOGIN_ENDERECOS, slot=2, nome_arquivo_original="b.xlsx",
+            status=ExecucaoAutomacaoIxc.PROCESSANDO, criado_por=self.administrador,
+        )
+        self.execucao.status = ExecucaoAutomacaoIxc.PROCESSANDO
+        self.execucao.save(update_fields=["status"])
+
+        call_command("processar_fila_automacoes_ixc")
+
+        self.execucao.refresh_from_db()
+        outra.refresh_from_db()
+        # self.execucao foi criada primeiro (setUp) — deve ser processada
+        # antes de "outra", mesmo com as 2 "Processando" ao mesmo tempo.
+        self.assertGreater(self.execucao.linhas_processadas, 0)
+        self.assertEqual(outra.linhas_processadas, 0)
+
+    def test_worker_sem_execucao_pendente_nao_erra(self):
+        call_command("processar_fila_automacoes_ixc")  # não deve levantar exceção
+
+    @patch("apps.ixc.services.executar_cadastro_ixc")
     def test_parar_cancela_antes_do_proximo_chunk(self, mock_executar):
         self.execucao.status = ExecucaoAutomacaoIxc.PROCESSANDO
         self.execucao.save(update_fields=["status"])
 
         self.client.post(reverse("ixc_parar", kwargs={"pk": self.execucao.pk}))
-        self.client.post(
-            reverse("ixc_processar_chunk", kwargs={"pk": self.execucao.pk}),
-            HTTP_HX_REQUEST="true",
-        )
+        call_command("processar_fila_automacoes_ixc")
 
         self.execucao.refresh_from_db()
         self.assertEqual(self.execucao.status, ExecucaoAutomacaoIxc.CANCELADO)
@@ -272,10 +305,7 @@ class AutomacoesIxcProcessamentoTests(TestCase):
         mock_executar.return_value = (True, "Criado com sucesso!", "111")
         self.execucao.status = ExecucaoAutomacaoIxc.PROCESSANDO
         self.execucao.save(update_fields=["status"])
-        self.client.post(
-            reverse("ixc_processar_chunk", kwargs={"pk": self.execucao.pk}),
-            HTTP_HX_REQUEST="true",
-        )
+        call_command("processar_fila_automacoes_ixc")
 
         resp = self.client.get(reverse("ixc_baixar_saida", kwargs={"pk": self.execucao.pk}))
         self.assertEqual(resp.status_code, 200)

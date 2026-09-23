@@ -150,6 +150,43 @@ services:
     depends_on:
       - db
 
+  ixc_worker:
+    # FEAT-053 (ADR-007, emenda 2026-09-23): processo consumidor unico das
+    # Automacoes IXC - `processar_fila_automacoes_ixc` so faz 1 chunk por
+    # chamada (apps/ixc/services.py), quem repete no tempo e este
+    # container (mesma imagem do "web", sem dependencia nova). Substitui o
+    # encadeamento HTMX como motor de verdade do processamento - a tela so
+    # mostra o status (polling so leitura, `ixc_status`), quem processa de
+    # verdade e este worker, mesmo com ninguem olhando a tela (RN a
+    # formalizar - caso real: execucao ficava parada para sempre em 0% se
+    # a aba fechasse antes de terminar).
+    build: .
+    restart: unless-stopped
+    environment:
+      - DEBUG=${DEBUG}
+      - SECRET_KEY=${SECRET_KEY}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+      - DB_ENGINE=mysql
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=3306
+      - IXC_URL=${IXC_URL}
+      - IXC_TOKEN=${IXC_TOKEN}
+      - IXC_SSL_VERIFY=${IXC_SSL_VERIFY}
+      - IXC_TIMEOUT=${IXC_TIMEOUT}
+    volumes:
+      - .:/app
+    command: >
+      sh -c "sleep 15 && while true; do
+               python manage.py processar_fila_automacoes_ixc || true;
+               sleep ${IXC_WORKER_POLL_INTERVAL_SECONDS:-3};
+             done"
+    depends_on:
+      - db
+
 volumes:
   # Mesmo nome já usado pelo checkout anterior (sistema_posvenda_posvenda_db_data) -
   # sobe reaproveitando o dado que já existe, sem recriar do zero.

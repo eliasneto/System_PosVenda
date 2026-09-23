@@ -1,24 +1,29 @@
 {% comment %}
 Linha viva de 1 grid de Automações IXC (FEAT-053) — mesmo padrão de "card
 que só faz polling de si mesmo" do RPA EACE (`ri/_log_rpa_eace_card.html`):
-só quando `execucao.status == "processando"` a própria linha chama de novo
-`ixc_processar_chunk` (`hx-trigger=load`), sem mexer nas outras linhas da
-tela. Includada tanto pela tela cheia (`_grid_automacao.html`) quanto pela
-resposta direta de iniciar/chunk/parar — mesmo `pk`, fragmento idêntico.
+só quando `execucao.status == "processando"` a própria linha consulta de
+novo `ixc_status` (`hx-trigger="every 3s"`), sem mexer nas outras linhas
+da tela. Includada tanto pela tela cheia (`_grid_automacao.html`) quanto
+pela resposta direta de iniciar/parar — mesmo `pk`, fragmento idêntico.
 
-RN a formalizar (pedido do usuário, 2026-09-23): a planilha de saída não
-fica mais aqui — só no Histórico de execuções (`_historico_execucoes.
-html`), depois que a execução aparece como `Concluído`. Ao recarregar a
-tela, `slot_atual` (`apps/ixc/models.py`) já não devolve execução
-`Concluído`/`Cancelado` — o grid volta a aparecer vazio/pronto para um
-novo upload; só a resposta ao vivo do último chunk (esta mesma página,
-sem reload) ainda mostra 100%/Concluído por um instante.
+RN a formalizar (ADR-007 emendada, 2026-09-23): quem processa de verdade
+é o worker (`processar_fila_automacoes_ixc`, container `ixc_worker`) —
+este polling é só leitura (`ixc_status_execucao_view` nunca chama
+`processar_proximo_chunk`), então o processamento continua mesmo se a
+aba fechar (era o problema da versão anterior, só HTMX: fechar a aba
+antes de terminar deixava a execução parada para sempre em 0%).
+
+A planilha de saída não fica aqui — só no Histórico de execuções
+(`_historico_execucoes.html`), depois que a execução aparece como
+`Concluído`. Ao recarregar a tela, `slot_atual` (`apps/ixc/models.py`) já
+não devolve execução `Concluído`/`Cancelado` — o grid volta a aparecer
+vazio/pronto para um novo upload.
 {% endcomment %}
 <tr id="linha-ixc-{{ tipo }}-{{ slot }}"
     class="divide-x divide-gray-300 dark:divide-gray-700"
     {% if execucao.status == "processando" %}
-    hx-post="{% url 'ixc_processar_chunk' pk=execucao.pk %}"
-    hx-trigger="load delay:400ms" hx-swap="outerHTML"
+    hx-get="{% url 'ixc_status' pk=execucao.pk %}"
+    hx-trigger="every 3s" hx-swap="outerHTML"
     {% endif %}>
     <td class="px-4 py-2 align-middle">
         <a href="{% url 'ixc_baixar_modelo' tipo=tipo %}" class="inline-flex items-center gap-2 px-4 py-2 border-2 border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-black uppercase text-[10px] rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition">

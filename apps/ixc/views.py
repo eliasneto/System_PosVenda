@@ -152,17 +152,19 @@ def ixc_iniciar_view(request, pk):
 
 
 @login_required
-def ixc_processar_chunk_view(request, pk):
-    """Só chamada pelo próprio HTMX da linha (`hx-trigger=load`) enquanto
-    `status == "processando"` — sem botão visível associado."""
+def ixc_status_execucao_view(request, pk):
+    """Só leitura — chamada pelo próprio HTMX da linha (`hx-trigger="every
+    3s"`) enquanto `status == "processando"`, só para atualizar o
+    progresso na tela. RN a formalizar (ADR-007 emendada, 2026-09-23):
+    quem processa de verdade é o worker (`processar_fila_automacoes_ixc`,
+    container `ixc_worker`) — esta view nunca chama `processar_proximo_
+    chunk`, então ninguém com a tela aberta acidentalmente disputa uma
+    linha com o worker."""
     resposta_proibida = _exige_administrador(request)
     if resposta_proibida:
         return resposta_proibida
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
 
     execucao = get_object_or_404(ExecucaoAutomacaoIxc, pk=pk)
-    execucao = services.processar_proximo_chunk(execucao, usuario=request.user)
     return _fragmento_execucao(request, execucao)
 
 

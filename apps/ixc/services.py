@@ -152,14 +152,19 @@ def _executar_linha(execucao, linha, usuario):
     return sucesso, mensagem, ""
 
 
+@transaction.atomic
 def processar_proximo_chunk(execucao, usuario, tamanho=TAMANHO_CHUNK):
-    """1 chunk = até `tamanho` linhas chamadas ao IXC nesta mesma
-    requisição (sem fila/worker dedicado — decisão registrada com o
-    usuário em 2026-09-23). Chamado repetidamente pelo HTMX
-    (`hx-trigger=load` encadeado na própria linha do grid) até não sobrar
-    linha pendente. Relê `cancelar_solicitado` a cada chamada — Stop pode
-    chegar entre 2 chunks."""
-    execucao.refresh_from_db()
+    """1 chunk = até `tamanho` linhas chamadas ao IXC nesta mesma chamada.
+    RN a formalizar (revisão 2026-09-23, ADR-007 emendada): quem chama
+    isto de verdade é o comando `processar_fila_automacoes_ixc`, repetido
+    por um container worker próprio — não depende mais de ninguém com a
+    tela aberta (a versão anterior, via HTMX, ficava parada para sempre
+    se a aba fechasse antes de terminar). `select_for_update` trava a
+    linha durante o chunk — defesa extra, mesmo padrão do RN-058 (RPA
+    EACE), mesmo com 1 réplica só do worker prevista. Relê
+    `cancelar_solicitado` a cada chamada — Stop pode chegar entre 2
+    chunks."""
+    execucao = ExecucaoAutomacaoIxc.objects.select_for_update().get(pk=execucao.pk)
 
     if execucao.cancelar_solicitado:
         execucao.status = ExecucaoAutomacaoIxc.CANCELADO

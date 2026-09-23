@@ -6,13 +6,17 @@ grids independentes ("Processamento 1"/"Processamento 2") — cada grid é 1
 andamento ao mesmo tempo sem um bloquear o outro (decisão técnica
 reversível e de baixo risco, CLAUDE.md Sec. 9).
 
-RN a formalizar (processamento em chunks, decidido com o usuário em
-2026-09-23): o projeto não tem Celery/fila (só o RPA EACE tem fila +
-worker em container dedicado, ADR-005) — Start dispara o processamento em
-pequenos lotes ("chunks"); o frontend encadeia chamadas a
-`ixc_processar_chunk` (HTMX `hx-trigger=load`) até não sobrar linha
-pendente. Stop só marca `cancelar_solicitado=True`, checado no início do
-próximo chunk."""
+RN a formalizar (processamento em chunks; ADR-007, emendada em
+2026-09-23): quem processa de verdade é o comando `processar_fila_
+automacoes_ixc`, repetido por um container worker próprio (`ixc_worker`,
+mesmo padrão do RPA EACE/ADR-005) — Start só marca `Processando`; o
+worker encontra a execução `Processando` mais antiga e processa em
+pequenos lotes ("chunks", `apps.ixc.services.processar_proximo_chunk`)
+até não sobrar linha pendente. O polling da tela (`ixc_status`, HTMX
+`hx-trigger="every 3s"`) é só leitura — nunca processa nada sozinho, por
+isso o processamento não depende mais de ninguém com a aba aberta (era o
+problema da 1ª versão, só HTMX). Stop só marca `cancelar_solicitado=True`,
+checado pelo worker no início do próximo chunk."""
 
 from django.conf import settings
 from django.db import models
