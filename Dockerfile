@@ -8,7 +8,14 @@ WORKDIR /app
 
 # Bibliotecas de sistema para compilar o mysqlclient (MySQL 8.0, ver architecture.md)
 # e o python-ldap (FEAT-027/RN-043, ADR-002 - reintroduzidas; removidas na
-# reconstrucao do FEAT-012 quando ainda nao havia integracao com AD)
+# reconstrucao do FEAT-012 quando ainda nao havia integracao com AD).
+# unar (pedido do usuario, 2026-09-24): ferramenta livre (The Unarchiver,
+# repositorio "main" do Debian - sem licenca proprietaria) que a lib
+# Python "rarfile" usa para extrair o CONTEUDO de um .rar (Notas Fiscais
+# do MIP tambem aceitam .rar, alem de .zip) - so listar os nomes dentro
+# do .rar nao precisa dela, mas ler o PDF de dentro pra sincronizar por
+# INEP (apps.escolas.services.sincronizar_notas_fiscais_mip_lote_em_andamento)
+# precisa.
 RUN apt-get update && apt-get install -y \
     default-mysql-client \
     default-libmysqlclient-dev \
@@ -16,6 +23,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libldap2-dev \
     libsasl2-dev \
+    unar \
     && rm -rf /var/lib/apt/lists/*
 
 # Copia e instala as dependências primeiro (cache de build mais rápido)

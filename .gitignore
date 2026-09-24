@@ -54,3 +54,9 @@ ServidorEACE.md
 # sem necessidade de existir no servidor.
 doc/Lista_FR_OSP_11_09_2026-14_02_49.csv
 doc/MIP/
+
+# Notas Fiscais reais (MEGA INFRA/EACE) usadas como amostra pra testar a
+# sincronizacao de Notas Fiscais do MIP (2026-09-24) - mesmo criterio
+# acima, dado real de negocio (CNPJ/valor/contrato), nunca versionar.
+doc/LIBERAÇÃO 22 -- PEDIDO 506/
+doc/LIBERAÇÃO 22 -- PEDIDO 506.zip

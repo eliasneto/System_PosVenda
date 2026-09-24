@@ -45,10 +45,87 @@
     </div>
 </div>
 
+{# Pedido do usuário (2026-09-23; revisão): filtro por Status (`<select>` dedicado) removido — trocar de Status já é feito clicando num dos cards do resumo logo abaixo (`?status=`). No lugar, filtro por INEP/Estado/Município — mesmo padrão de `<select>` dependente + botão "Filtrar" já usado no grid `mip_inep.html` (RN-079): Município só fica disponível depois de um Estado escolhido. `rounded-[2.5rem]` (mesmo raio do card da tabela abaixo) pra ficar visualmente alinhado com o grid — mesma largura/bordas, mesma "família" de cartão. #}
+<form method="GET" class="bg-white dark:bg-gray-900 p-4 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-6 flex flex-col lg:flex-row lg:items-end gap-3">
+    <div class="flex flex-col gap-1.5 w-full lg:flex-1 lg:min-w-[12rem]">
+        <label for="mip-lote-inep" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">INEP</label>
+        <div class="relative">
+            <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 dark:text-gray-600"></i>
+            <input id="mip-lote-inep" type="text" name="inep" value="{{ inep_filtro }}" placeholder="Buscar por INEP..."
+                   class="w-full pl-12 pr-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500">
+        </div>
+    </div>
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="mip-lote-estado" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Estado</label>
+        <select id="mip-lote-estado" name="estado" data-select-placeholder
+                class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase">
+            <option value="">Todos os estados</option>
+            {% for uf in estados_disponiveis %}
+            <option value="{{ uf }}" {% if uf == estado_filtro %}selected{% endif %}>{{ uf }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="mip-lote-municipio" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Município</label>
+        <select id="mip-lote-municipio" name="municipio" data-select-placeholder {% if not estado_filtro %}disabled{% endif %}
+                class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase disabled:opacity-50 disabled:cursor-not-allowed">
+            {% if estado_filtro %}
+            <option value="">Todos os municípios</option>
+            {% for municipio in municipios_disponiveis %}
+            <option value="{{ municipio }}" {% if municipio == municipio_filtro %}selected{% endif %}>{{ municipio }}</option>
+            {% endfor %}
+            {% else %}
+            <option value="">Escolha um Estado</option>
+            {% endif %}
+        </select>
+    </div>
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="mip-lote-nf" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Nota Fiscal</label>
+        {# Pedido do usuário (2026-09-24): filtro "Com NF"/"Sem NF" — filtra os INEPs mostrados dentro do drill-down de cada LOTE (ícone de download da Nota Fiscal por INEP), não um dado do próprio LOTE — por isso é `<select>` de verdade (não atalho por card, como o Status) e some junto no botão "Limpar filtro" abaixo. #}
+        <select id="mip-lote-nf" name="nf" data-select-placeholder
+                class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-400 dark:text-gray-500 uppercase">
+            <option value="">Todos os INEPs</option>
+            <option value="com" {% if nf_filtro == "com" %}selected{% endif %}>Com Nota Fiscal</option>
+            <option value="sem" {% if nf_filtro == "sem" %}selected{% endif %}>Sem Nota Fiscal</option>
+        </select>
+    </div>
+    <div class="flex gap-2 w-full lg:w-auto">
+        <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
+            Filtrar
+        </button>
+        {% if inep_filtro or estado_filtro or municipio_filtro or nf_filtro %}
+        <a href="{% url 'mip_lote_inep' %}{% if status_filtro %}?status={{ status_filtro }}{% endif %}" class="px-4 py-3 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-2xl hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 dark:hover:text-red-400 transition flex items-center justify-center" title="Limpar filtro">
+            <i data-lucide="x" class="w-5 h-5"></i>
+        </a>
+        {% endif %}
+    </div>
+</form>
+
+{% if not request.user.is_visualizador and resumo_por_status %}
+{# Pedido do usuário (2026-09-23; revisão: alinhar com o grid): resumo do Valor Total do LOTE (IXC) agrupado por Status, sempre sobre TODOS os LOTEs do filtro de INEP/Estado/Município atual (não só a página atual, nem restrito ao Status escolhido) — cada card também funciona como atalho pra filtrar a tabela abaixo por aquele Status, mesmo padrão dos cards "Com divergência"/"No período" do grid `mip_inep.html`. `grid` (em vez de `flex flex-wrap`) faz os cards terem a mesma largura e ocuparem a linha inteira, com a borda esquerda/direita alinhada ao card da tabela logo abaixo — antes, com largura livre por card, a linha ficava "torta" e não alinhava com o grid. #}
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
+    <a href="{% url 'mip_lote_inep' %}{% if querystring_extra %}?{{ querystring_extra|slice:'1:' }}{% endif %}"
+       class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 px-5 py-3 rounded-2xl shadow-sm hover:ring-2 hover:ring-amber-400 transition {% if not status_filtro %}ring-2 ring-pv-yellow{% endif %}"
+       title="Ver o Valor Total de todos os Status">
+        <p class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase leading-snug mb-1">Todos os Status</p>
+        <p class="text-base font-black italic text-gray-900 dark:text-gray-100 truncate">R$ {{ valor_total_todos_status|intcomma }}</p>
+    </a>
+    {% for resumo in resumo_por_status %}
+    <a href="{% url 'mip_lote_inep' %}?status={{ resumo.status }}{{ querystring_extra }}"
+       class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 px-5 py-3 rounded-2xl shadow-sm hover:ring-2 hover:ring-amber-400 transition {% if status_filtro == resumo.status %}ring-2 ring-pv-yellow{% endif %}"
+       title="Filtrar LOTEs em &quot;{{ resumo.label }}&quot;">
+        <p class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase leading-snug mb-1">{{ resumo.label }} ({{ resumo.total_lotes }})</p>
+        <p class="text-base font-black italic text-gray-900 dark:text-gray-100 truncate">R$ {{ resumo.valor_total|intcomma }}{% if resumo.incompleto %}<span class="text-amber-500 dark:text-amber-400" title="Um ou mais LOTEs deste Status têm INEP com item do Lado IXC sem Valor de serviço encontrado no catálogo — não somado aqui.">*</span>{% endif %}</p>
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+
 <div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
     <div class="overflow-x-auto contain-layout">
         <table class="min-w-full text-left border-collapse">
             <thead>
+                {# Pedido do usuário (2026-09-23): colunas "Data Início"/"Data Fim" removidas — eram só o rótulo do filtro usado na hora de criar o LOTE (Estado/Município/Data, ver `Lote`), sem uso prático aqui no dia a dia; Estado/Município continuam. #}
                 <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
                     {% if not request.user.is_visualizador %}
                     <th class="px-4 py-2 w-8">
@@ -59,8 +136,6 @@
                     <th class="px-4 py-2">ID do LOTE</th>
                     <th class="px-4 py-2">Estado</th>
                     <th class="px-4 py-2">Município</th>
-                    <th class="px-4 py-2">Data Início</th>
-                    <th class="px-4 py-2">Data Fim</th>
                     <th class="px-4 py-2">INEPs</th>
                     {% if not request.user.is_visualizador %}
                     <th class="px-4 py-2">Valor Total do LOTE</th>
@@ -91,8 +166,6 @@
                     </td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.estado }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.municipio }}</span></td>
-                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.data_inicio|date:"d/m/Y"|default:"—" }}</span></td>
-                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.lote.data_fim|date:"d/m/Y"|default:"—" }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.escolas|length }}</span></td>
                     {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2">
@@ -113,117 +186,86 @@
                     </td>
                     {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2" data-no-toggle>
-                        <div class="flex flex-col items-start gap-1.5">
-                            {% comment %}
-                            Pedido do usuário (2026-09-15): botão "Enviar e-mail" comentado (não será usado por enquanto) — ver `_modal_enviar_email_lote.html`.
-                            {% if linha.lote.status == 'aguardando_encerramento' or linha.lote.status == 'email_enviado' %}
-                            <button type="button" data-abrir-modal-email="modal-email-lote-{{ linha.lote.pk }}"
-                                    class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
-                                <i data-lucide="mail" class="w-3.5 h-3.5"></i> Enviar e-mail
-                            </button>
-                            {% endif %}
-                            {% endcomment %}
-                            <a href="{% url 'mip_lote_baixar_planilha' pk=linha.lote.pk %}?next={{ request.get_full_path|urlencode }}"
-                               target="_blank"
-                               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
-                                <i data-lucide="download" class="w-3.5 h-3.5"></i> Baixar planilha
-                            </a>
-                            {% comment %}
-                            Pedido do usuário (2026-09-17): .zip de Notas
-                            Fiscais que o financeiro devolve para todo o
-                            LOTE — 1 arquivo por LOTE, substituível
-                            (`Lote.substituir_notas_fiscais_zip`). Link de
-                            download só aparece com arquivo já enviado; o
-                            botão de upload muda de rótulo ("Enviar"/
-                            "Substituir") conforme já existir um.
-                            {% endcomment %}
-                            {% if linha.lote.arquivo_notas_fiscais_zip %}
-                            <a href="{{ linha.lote.arquivo_notas_fiscais_zip.url }}" target="_blank"
-                               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
-                                <i data-lucide="file-archive" class="w-3.5 h-3.5"></i> Notas Fiscais (.zip)
-                            </a>
-                            {% endif %}
-                            <form method="POST" action="{% url 'mip_lote_notas_fiscais_upload' pk=linha.lote.pk %}"
-                                  enctype="multipart/form-data" class="flex flex-col gap-1">
-                                {% csrf_token %}
-                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                <div class="flex items-center gap-1.5">
-                                    <label for="notas-fiscais-zip-{{ linha.lote.pk }}"
-                                           class="shrink-0 px-3 py-1.5 border-2 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 transition">
-                                        Escolher .zip
-                                    </label>
-                                    <input type="file" id="notas-fiscais-zip-{{ linha.lote.pk }}" name="arquivo"
-                                           accept=".zip" class="sr-only" required>
-                                    <button type="submit"
-                                            class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
-                                        <i data-lucide="upload" class="w-3.5 h-3.5"></i>
-                                        {% if linha.lote.arquivo_notas_fiscais_zip %}Substituir{% else %}Enviar NF{% endif %}
+                        {% comment %}
+                        Pedido do usuário (2026-09-15): botão "Enviar e-mail" comentado (não será usado por enquanto) — ver `_modal_enviar_email_lote.html`.
+                        {% if linha.lote.status == 'aguardando_encerramento' or linha.lote.status == 'email_enviado' %}
+                        <button type="button" data-abrir-modal-email="modal-email-lote-{{ linha.lote.pk }}"
+                                class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                            <i data-lucide="mail" class="w-3.5 h-3.5"></i> Enviar e-mail
+                        </button>
+                        {% endif %}
+                        {% endcomment %}
+                        {# Pedido do usuário (2026-09-23; revisão): "Ações" — 1 única linha com todos os ícones (usuário achou a versão em grupos/linhas separadas ruim). Cada ação continua no seu próprio `<form>` (CSRF/rota diferentes), mas `class="contents"` no `<form>` faz ele "desaparecer" do layout — os elementos de dentro (botão, select) viram filhos diretos da linha flex de fora, ficando lado a lado com os demais. Legenda de cada ícone continua em balão acima ao passar o mouse; `title=` garante o nome acessível pra leitor de tela. #}
+                        <div class="flex flex-col gap-1">
+                            <div class="flex flex-wrap items-center gap-1.5">
+                                <div class="relative group">
+                                    <a href="{% url 'mip_lote_baixar_planilha' pk=linha.lote.pk %}?next={{ request.get_full_path|urlencode }}"
+                                       target="_blank" title="Baixar planilha"
+                                       class="inline-flex items-center justify-center w-8 h-8 bg-pv-black text-pv-yellow rounded-lg hover:bg-gray-800 transition">
+                                        <i data-lucide="download" class="w-4 h-4"></i>
+                                    </a>
+                                    <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Baixar planilha</span>
+                                </div>
+                                {# Pedido do usuário (2026-09-24): ícone de upload manual de NF por LOTE ("Enviar NF"/"Substituir NF") removido — a Nota Fiscal de cada INEP agora vem do botão "Sincronizar Notas Fiscais dos INEPs" (Administrador > Relatório EACE MIP), casada automaticamente pelo "CÓDIGO INEPS" de dentro do PDF. Link de download do .zip/.rar enviado antes dessa mudança continua aparecendo (dado histórico, sem forma de substituir por aqui). #}
+                                {% if linha.lote.arquivo_notas_fiscais_zip %}
+                                <div class="relative group">
+                                    <a href="{{ linha.lote.arquivo_notas_fiscais_zip.url }}" target="_blank" title="Notas Fiscais (.zip/.rar)"
+                                       class="inline-flex items-center justify-center w-8 h-8 bg-pv-black text-pv-yellow rounded-lg hover:bg-gray-800 transition">
+                                        <i data-lucide="file-archive" class="w-4 h-4"></i>
+                                    </a>
+                                    <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Notas Fiscais (.zip/.rar)</span>
+                                </div>
+                                {% endif %}
+                                {% if linha.lote.status != 'faturamento_concluido' %}
+                                {# Correção (2026-09-24; bug real reportado pelo usuário: menu abria cortado/fora do lugar) — o `<details>`/`<summary>` com o menu em `position: absolute` foi trocado por um botão + painel próprio em `position: fixed`, posicionado via JS (`posicionarMenuDeStatus`, script no fim do arquivo) e renderizado FORA do container "overflow-x-auto contain-layout" da tabela (mesmo motivo documentado acima para os modais de e-mail, FEAT-045: `contain: layout` faz o ancestral virar containing block também de `position: fixed`, e o `overflow-x-auto` corta qualquer coisa que escape verticalmente das bordas dele — por isso o menu antigo, apesar de posicionado certinho em relação ao ícone, ficava cortado/invisível pra LOTEs perto do topo ou fim da lista). O painel de verdade fica no 2º laço, logo depois do fechamento desse container. #}
+                                <div class="relative">
+                                    <button type="button" data-status-menu-toggle="{{ linha.lote.pk }}" title="Mudar status"
+                                            class="inline-flex items-center justify-center w-8 h-8 bg-gray-50 dark:bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                                        <i data-lucide="refresh-cw" class="w-4 h-4 text-gray-500 dark:text-gray-400"></i>
                                     </button>
                                 </div>
-                                <span id="notas-fiscais-zip-nome-{{ linha.lote.pk }}" class="text-[9px] font-bold text-gray-400 dark:text-gray-500 truncate max-w-[9rem]">
-                                    Nenhum arquivo selecionado
-                                </span>
-                            </form>
-                            <script>
-                                (function () {
-                                    var input = document.getElementById("notas-fiscais-zip-{{ linha.lote.pk }}");
-                                    var nome = document.getElementById("notas-fiscais-zip-nome-{{ linha.lote.pk }}");
-                                    if (input && nome) {
-                                        input.addEventListener("change", function () {
-                                            nome.textContent = input.files.length ? input.files[0].name : "Nenhum arquivo selecionado";
-                                        });
-                                    }
-                                })();
-                            </script>
-                            <!-- FEAT-049 (a formalizar pelo Orquestrador em
-                                 business_rules.md; pedido do usuário,
-                                 2026-09-14): "Desfazer LOTE" — mesma
-                                 confirmação (modal genérico, `data-
-                                 confirmar`, `core/_modal_confirmar.html`)
-                                 já usada nos botões de excluir do RI/MIP.
-                                 Só aparece no mesmo status em que ainda dá
-                                 pra desfazer (`services.desfazer_lote_
-                                 mip`) — a partir de "Em Andamento"/"Em
-                                 Faturamento"/"Processo Concluído" o RI de
-                                 cada INEP já pode ter sido reaberto/o
-                                 processo já foi encerrado de verdade. -->
-                            {% if linha.lote.status == 'aguardando_encerramento' %}
-                            <form method="POST" action="{% url 'mip_lote_desfazer' pk=linha.lote.pk %}">
-                                {% csrf_token %}
-                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                <button type="button"
-                                        data-confirmar
-                                        data-confirmar-titulo="Desfazer LOTE?"
-                                        data-confirmar-mensagem="Desfazer {{ linha.lote }}? Os {{ linha.escolas|length }} INEP(s) voltam para &quot;Aguardando Validação EACE&quot; no MIP e o LOTE deixa de existir."
-                                        data-confirmar-texto-botao="Desfazer LOTE"
-                                        data-confirmar-cor="perigo"
-                                        class="inline-flex items-center gap-1.5 px-3 py-1.5 border-2 border-red-200 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition">
-                                    <i data-lucide="undo-2" class="w-3.5 h-3.5"></i> Desfazer LOTE
-                                </button>
-                            </form>
-                            {% endif %}
+                                {% endif %}
+                                <!-- FEAT-049 (a formalizar pelo Orquestrador em
+                                     business_rules.md; pedido do usuário,
+                                     2026-09-14): "Desfazer LOTE" — mesma
+                                     confirmação (modal genérico, `data-
+                                     confirmar`, `core/_modal_confirmar.html`)
+                                     já usada nos botões de excluir do RI/MIP.
+                                     Só aparece no mesmo status em que ainda dá
+                                     pra desfazer (`services.desfazer_lote_
+                                     mip`) — a partir de "Em Andamento"/"Em
+                                     Faturamento"/"Processo Concluído" o RI de
+                                     cada INEP já pode ter sido reaberto/o
+                                     processo já foi encerrado de verdade. -->
+                                {% if linha.lote.status == 'aguardando_encerramento' %}
+                                <form method="POST" action="{% url 'mip_lote_desfazer' pk=linha.lote.pk %}" class="contents">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                    <div class="relative group">
+                                        <button type="button"
+                                                data-confirmar
+                                                data-confirmar-titulo="Desfazer LOTE?"
+                                                data-confirmar-mensagem="Desfazer {{ linha.lote }}? Os {{ linha.escolas|length }} INEP(s) voltam para &quot;Aguardando Validação EACE&quot; no MIP e o LOTE deixa de existir."
+                                                data-confirmar-texto-botao="Desfazer LOTE"
+                                                data-confirmar-cor="perigo"
+                                                title="Desfazer LOTE"
+                                                class="inline-flex items-center justify-center w-8 h-8 border-2 border-red-200 dark:border-red-900/50 text-red-500 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition">
+                                            <i data-lucide="undo-2" class="w-4 h-4"></i>
+                                        </button>
+                                        <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Desfazer LOTE</span>
+                                    </div>
+                                </form>
+                                {% endif %}
+                            </div>
                             {% if linha.lote.email_enviado_em %}
                             <span class="text-[9px] font-bold text-gray-400 dark:text-gray-500">Enviado em {{ linha.lote.email_enviado_em|date:"d/m/Y H:i" }}</span>
-                            {% endif %}
-                            {% if linha.lote.status != 'faturamento_concluido' %}
-                            {# Pedido do usuário (2026-09-15): no lugar do envio de e-mail, campo de troca manual de status com 3 opções. #}
-                            <form method="POST" action="{% url 'mip_lote_status_update' pk=linha.lote.pk %}" data-salvar-ao-trocar class="mt-1">
-                                {% csrf_token %}
-                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                <select name="status" class="px-2 py-1 bg-gray-50 dark:bg-gray-800 border-none rounded-lg outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer font-black text-[10px] text-gray-700 dark:text-gray-300 uppercase">
-                                    <option value="">Mudar status...</option>
-                                    <option value="em_andamento">Em Andamento</option>
-                                    <option value="em_faturamento">Em Faturamento</option>
-                                    <option value="faturamento_concluido">Processo Concluído</option>
-                                </select>
-                            </form>
                             {% endif %}
                         </div>
                     </td>
                     {% endif %}
                 </tr>
                 <tr class="hidden" data-lote-detalhe>
-                    <td colspan="10" class="px-8 py-6 bg-gray-50/60 dark:bg-gray-800/40">
+                    <td colspan="8" class="px-8 py-6 bg-gray-50/60 dark:bg-gray-800/40">
                         <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 mb-3">INEPs deste LOTE</p>
                         <div class="overflow-x-auto contain-layout rounded-2xl border border-gray-200 dark:border-gray-700">
                             <table class="min-w-full text-left border-collapse bg-white dark:bg-gray-900">
@@ -234,6 +276,7 @@
                                         <th class="px-4 py-2">Estado</th>
                                         <th class="px-4 py-2">Município</th>
                                         <th class="px-4 py-2">Status</th>
+                                        <th class="px-4 py-2 text-center">NF</th>
                                         {% if not request.user.is_visualizador %}
                                         <th class="px-4 py-2">Valor Total (IXC)</th>
                                         <th class="px-4 py-2">Valor Total (EACE)</th>
@@ -264,6 +307,20 @@
                                                 {{ item.escola.get_status_mip_display }}
                                             </span>
                                         </td>
+                                        {# Pedido do usuário (2026-09-24): ícone de download da Nota Fiscal (MIP) deste INEP — habilitado só quando já sincronizada (`Escola.nota_fiscal_mip`, botão "Sincronizar Notas Fiscais dos INEPs" em Administrador > Relatório EACE MIP); `stopPropagation` evita que o clique dispare a navegação da linha inteira (`data-inep-navegar`, script no fim do arquivo). #}
+                                        <td class="px-4 py-2 text-center" onclick="event.stopPropagation()">
+                                            {% if item.escola.nota_fiscal_mip %}
+                                            <a href="{{ item.escola.nota_fiscal_mip.url }}" target="_blank" title="Baixar Nota Fiscal"
+                                               class="inline-flex items-center justify-center w-7 h-7 bg-pv-black text-pv-yellow rounded-lg hover:bg-gray-800 transition">
+                                                <i data-lucide="file-check-2" class="w-3.5 h-3.5"></i>
+                                            </a>
+                                            {% else %}
+                                            <span title="Nenhuma Nota Fiscal sincronizada para este INEP"
+                                                  class="inline-flex items-center justify-center w-7 h-7 bg-gray-100 dark:bg-gray-800 text-gray-300 dark:text-gray-600 rounded-lg cursor-not-allowed">
+                                                <i data-lucide="file-x-2" class="w-3.5 h-3.5"></i>
+                                            </span>
+                                            {% endif %}
+                                        </td>
                                         {% if not request.user.is_visualizador %}
                                         <td class="px-4 py-2">
                                             {% if item.valor_total_lado2 is not None %}
@@ -283,7 +340,7 @@
                                     </tr>
                                     {% empty %}
                                     <tr>
-                                        <td colspan="7" class="px-4 py-6 text-center text-[11px] text-gray-400 dark:text-gray-500 italic">Nenhum INEP neste LOTE.</td>
+                                        <td colspan="8" class="px-4 py-6 text-center text-[11px] text-gray-400 dark:text-gray-500 italic">Nenhum INEP neste LOTE.</td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>
@@ -293,7 +350,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="10" class="px-8 py-20 text-center">
+                    <td colspan="8" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="package-search" class="w-8 h-8"></i>
@@ -311,10 +368,10 @@
     </div>
 
     {% if not request.user.is_visualizador and linhas_lote %}
-    {# Pedido do usuário (2026-09-16): resumo do valor logo abaixo da lista de LOTEs — por padrão soma todos os LOTEs desta página; ao marcar 1 ou mais checkboxes (mesmos do "Baixar planilhas (.zip)"), passa a somar só os marcados. RN-096: some inteiro pro Visualizador, mesmo critério das demais colunas de valor. #}
+    {# Pedido do usuário (2026-09-16; correção 2026-09-23): resumo do valor logo abaixo da lista de LOTEs — por padrão soma TODOS os LOTEs do filtro atual (Status, se algum estiver selecionado), não só os desta página (`valor_total_geral`, calculado na view antes de paginar); ao marcar 1 ou mais checkboxes (mesmos do "Baixar planilhas (.zip)", que só existem nas linhas desta página), passa a somar só os marcados. RN-096: some inteiro pro Visualizador, mesmo critério das demais colunas de valor. #}
     <div class="bg-gray-50/50 dark:bg-gray-800/40 px-8 py-5 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between" data-lote-resumo-valor>
-        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest" data-lote-resumo-label>Valor total (nesta página)</span>
-        <span class="text-base font-black text-gray-900 dark:text-gray-100 italic" data-lote-resumo-total>R$ {{ valor_total_pagina|intcomma }}{% if valor_total_pagina_incompleto %}<span class="text-amber-500 dark:text-amber-400" title="Um ou mais LOTEs têm INEP com item do Lado IXC sem Valor de serviço encontrado no catálogo — não somado.">*</span>{% endif %}</span>
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest" data-lote-resumo-label>Valor total{% if status_filtro %} ({{ page_obj.paginator.count }} LOTE(s) em "{{ status_filtro_label }}"){% else %} (todos os LOTEs){% endif %}</span>
+        <span class="text-base font-black text-gray-900 dark:text-gray-100 italic" data-lote-resumo-total>R$ {{ valor_total_geral|intcomma }}{% if valor_total_geral_incompleto %}<span class="text-amber-500 dark:text-amber-400" title="Um ou mais LOTEs têm INEP com item do Lado IXC sem Valor de serviço encontrado no catálogo — não somado.">*</span>{% endif %}</span>
     </div>
     {% endif %}
 
@@ -325,12 +382,12 @@
         </span>
         <div class="flex gap-2">
             {% if page_obj.has_previous %}
-            <a href="?page={{ page_obj.previous_page_number }}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+            <a href="?page={{ page_obj.previous_page_number }}{% if status_filtro %}&status={{ status_filtro }}{% endif %}{{ querystring_extra }}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-left" class="w-5 h-5"></i>
             </a>
             {% endif %}
             {% if page_obj.has_next %}
-            <a href="?page={{ page_obj.next_page_number }}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+            <a href="?page={{ page_obj.next_page_number }}{% if status_filtro %}&status={{ status_filtro }}{% endif %}{{ querystring_extra }}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-right" class="w-5 h-5"></i>
             </a>
             {% endif %}
@@ -338,6 +395,26 @@
     </div>
     {% endif %}
 </div>
+
+{# Correção (2026-09-24; bug real reportado pelo usuário: menu "Mudar status" abria cortado/fora do lugar) — painel de cada LOTE fica FORA dos containers com "overflow-x-auto"/"overflow-hidden" da tabela acima (mesmo motivo do comentário logo abaixo, sobre os modais de e-mail): script no fim do arquivo posiciona cada um em `position: fixed`, calculado a partir do botão que abre, e mostra só 1 por vez. 2º laço só para renderizar os painéis — nenhuma consulta nova (mesmo `linhas_lote` já calculado na view). #}
+{% if not request.user.is_visualizador %}
+{% for linha in linhas_lote %}
+{% if linha.lote.status != 'faturamento_concluido' %}
+<form method="POST" action="{% url 'mip_lote_status_update' pk=linha.lote.pk %}"
+      id="status-menu-{{ linha.lote.pk }}" data-status-menu
+      class="hidden fixed z-30 w-40 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg overflow-hidden flex flex-col">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <button type="submit" name="status" value="em_andamento"
+            class="px-3 py-2 text-left text-[10px] font-black uppercase text-gray-700 dark:text-gray-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition">Em Andamento</button>
+    <button type="submit" name="status" value="em_faturamento"
+            class="px-3 py-2 text-left text-[10px] font-black uppercase text-gray-700 dark:text-gray-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition border-t border-gray-100 dark:border-gray-800">Em Faturamento</button>
+    <button type="submit" name="status" value="faturamento_concluido"
+            class="px-3 py-2 text-left text-[10px] font-black uppercase text-gray-700 dark:text-gray-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition border-t border-gray-100 dark:border-gray-800">Processo Concluído</button>
+</form>
+{% endif %}
+{% endfor %}
+{% endif %}
 
 {% comment %}
 FEAT-045 (2026-09-14): modais de e-mail do LOTE ficam FORA do container
@@ -400,23 +477,26 @@ document.querySelectorAll('[data-inep-navegar]').forEach(function (linha) {
 var selecionarTodosLote = document.querySelector('[data-selecionar-todos-lote]');
 var checkboxesLote = document.querySelectorAll('[data-checkbox-lote]');
 
-// Pedido do usuário (2026-09-16): resumo de valor abaixo da tabela —
-// sem nenhum checkbox marcado, mostra a soma de todos os LOTEs desta
-// página (mesmo valor já calculado no servidor, `valor_total_pagina`);
-// ao marcar 1 ou mais, passa a somar só os marcados, recalculado aqui no
-// navegador (mesmos `data-valor`/`data-incompleto` de cada checkbox, sem
-// precisar de outra consulta ao servidor).
+// Pedido do usuário (2026-09-16; correção 2026-09-23): resumo de valor
+// abaixo da tabela — sem nenhum checkbox marcado, mostra a soma de todos
+// os LOTEs do filtro atual (mesmo valor/rótulo já calculados no servidor,
+// `valor_total_geral`/`status_filtro_label`, capturados abaixo antes de
+// qualquer clique); ao marcar 1 ou mais, passa a somar só os marcados
+// (que só existem nesta página), recalculado aqui no navegador (mesmos
+// `data-valor`/`data-incompleto` de cada checkbox, sem precisar de outra
+// consulta ao servidor).
 var resumoTotal = document.querySelector('[data-lote-resumo-total]');
 var resumoLabel = document.querySelector('[data-lote-resumo-label]');
 if (resumoTotal && resumoLabel) {
-    var valorTotalPaginaFormatado = resumoTotal.innerHTML;
+    var valorTotalGeralFormatado = resumoTotal.innerHTML;
+    var labelTotalGeralOriginal = resumoLabel.textContent;
     var atualizarResumoValorLote = function () {
         var marcados = Array.prototype.filter.call(checkboxesLote, function (checkbox) {
             return checkbox.checked;
         });
         if (!marcados.length) {
-            resumoLabel.textContent = 'Valor total (nesta página)';
-            resumoTotal.innerHTML = valorTotalPaginaFormatado;
+            resumoLabel.textContent = labelTotalGeralOriginal;
+            resumoTotal.innerHTML = valorTotalGeralFormatado;
             return;
         }
         var total = 0;
@@ -441,5 +521,69 @@ if (selecionarTodosLote) {
         if (resumoTotal && resumoLabel) atualizarResumoValorLote();
     });
 }
+
+// Mesmo padrão do grid `mip_inep.html`/`ri/grid_inep.html`: `<select>` de
+// filtro (Estado/Município) muda de cor quando tem valor escolhido.
+document.querySelectorAll('select[data-select-placeholder]').forEach(function (select) {
+    function atualizarCorSelect() {
+        select.classList.toggle('text-gray-400', !select.value);
+        select.classList.toggle('text-gray-800', !!select.value);
+    }
+    select.addEventListener('change', atualizarCorSelect);
+    atualizarCorSelect();
+});
+
+// Correção (2026-09-24; bug real reportado pelo usuário: menu "Mudar
+// status" abria cortado/fora do lugar): o menu de cada LOTE vive FORA
+// dos containers com "overflow-x-auto"/"overflow-hidden" da tabela
+// acima (`contain: layout` faz esse ancestral virar containing block
+// até de `position: fixed`, e o overflow corta qualquer coisa que
+// escape das bordas dele — por isso o `<details>`/`<summary>` antigo,
+// mesmo posicionado certinho em relação ao ícone, ficava invisível pra
+// LOTEs perto do topo/fim da lista). Cada botão (`data-status-menu-
+// toggle`) abre o painel correspondente (`#status-menu-<pk>`),
+// posicionado em `position: fixed` a partir da posição do próprio botão
+// na tela (`getBoundingClientRect`) — sempre visível, calculado de novo
+// a cada clique. Só 1 aberto por vez; fecha ao clicar fora, ao rolar a
+// página ou ao apertar Esc (evita ficar "grudado" no lugar errado após
+// rolar, já que reposicionar em todo scroll é desnecessário pra um menu
+// que deveria fechar de qualquer jeito).
+function fecharTodosOsMenusDeStatus() {
+    document.querySelectorAll('[data-status-menu]:not(.hidden)').forEach(function (menu) {
+        menu.classList.add('hidden');
+    });
+}
+
+function posicionarMenuDeStatus(botao, menu) {
+    var retangulo = botao.getBoundingClientRect();
+    var alturaMenu = menu.offsetHeight;
+    var larguraMenu = menu.offsetWidth;
+    var espacoAbaixo = window.innerHeight - retangulo.bottom;
+    var top = espacoAbaixo >= alturaMenu + 8 ? retangulo.bottom + 4 : retangulo.top - alturaMenu - 4;
+    menu.style.top = Math.max(8, top) + 'px';
+    menu.style.left = Math.max(8, Math.min(retangulo.left, window.innerWidth - larguraMenu - 8)) + 'px';
+}
+
+document.querySelectorAll('[data-status-menu-toggle]').forEach(function (botao) {
+    var menu = document.getElementById('status-menu-' + botao.getAttribute('data-status-menu-toggle'));
+    if (!menu) return;
+    botao.addEventListener('click', function (evento) {
+        evento.stopPropagation();
+        var jaEstavaAberto = !menu.classList.contains('hidden');
+        fecharTodosOsMenusDeStatus();
+        if (jaEstavaAberto) return;
+        menu.classList.remove('hidden');
+        posicionarMenuDeStatus(botao, menu);
+    });
+});
+
+document.addEventListener('click', function (evento) {
+    if (evento.target.closest('[data-status-menu]') || evento.target.closest('[data-status-menu-toggle]')) return;
+    fecharTodosOsMenusDeStatus();
+});
+document.addEventListener('keydown', function (evento) {
+    if (evento.key === 'Escape') fecharTodosOsMenusDeStatus();
+});
+window.addEventListener('scroll', fecharTodosOsMenusDeStatus, true);
 </script>
 {% endblock %}

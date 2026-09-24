@@ -22,3 +22,9 @@ playwright==1.60.0
 # FEAT-033/RN-057: extrai INEP/Produto/Valor de dentro do PDF da Nota
 # Fiscal, para conferir contra o valor exibido no portal antes do upload.
 pdfplumber==0.11.6
+# RN-XXX (pedido do usuario, 2026-09-24): upload de Notas Fiscais em MIP
+# tambem aceita .rar, alem de .zip (apps.escolas.services.
+# contar_notas_fiscais_rar) - so listamos os nomes dos arquivos dentro do
+# .rar (nunca extraimos conteudo), entao nao precisa do binario
+# unrar/unar instalado no servidor.
+rarfile==4.5

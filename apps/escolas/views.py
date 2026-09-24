@@ -23,8 +23,8 @@ from apps.ri.services import sincronizar_divergencia_kit_relatorio, trocar_statu
 from apps.ri.views import _validar_transicao_status_ri
 
 # `LoteEmailForm` — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.forms`).
-from .forms import LoteNotasFiscaisZipUploadForm, PlanilhaRelatorioEaceMipUploadForm
-from .models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
+from .forms import LoteNotasFiscaisZipUploadForm, NotasFiscaisMipUploadForm, PlanilhaRelatorioEaceMipUploadForm
+from .models import Escola, EscolaItemRelatorioEaceMip, Lote, NotasFiscaisMip, PlanilhaRelatorioEaceMip
 from .services import (
     MIME_PLANILHA_FATURAMENTO_IMPLANTACAO,
     LoteMipError,
@@ -42,6 +42,7 @@ from .services import (
     escolas_elegiveis_lote_mip,
     gerar_planilha_faturamento_implantacao_lote,
     nome_arquivo_planilha_faturamento_implantacao,
+    sincronizar_notas_fiscais_mip_lote_em_andamento,
     sincronizar_relatorio_eace_mip_de_todas_as_escolas,
 )
 
@@ -546,8 +547,84 @@ def mip_lote_inep_view(request):
     (modal `_modal_enviar_email_lote.html`) e o assunto/corpo sugeridos
     (`montar_assunto_email_lote`/`montar_corpo_email_lote`) foram
     comentados; cada linha agora mostra só o campo de troca de status
-    (`mip_lote_status_update_view`)."""
-    lotes = Lote.objects.prefetch_related(
+    (`mip_lote_status_update_view`).
+
+    RN-XXX (a criar pelo Orquestrador; pedido do usuário, 2026-09-23): o
+    "Valor total" mostrado abaixo da tabela estava somando só os LOTEs da
+    página atual (25 por vez), não o valor geral. Correção: `linhas_lote`
+    passa a ser calculado para TODOS os LOTEs do filtro atual (mesmo
+    padrão do "Total geral" do grid `mip_inep.html`, RN-080 — soma antes
+    de paginar) e só então é paginado em memória (`Paginator` recebe a
+    lista já pronta, não mais o queryset). Some junto: filtro por Status
+    (`?status=<valor>`, agora só pelos cards do resumo — o `<select>`
+    dedicado foi removido a pedido do usuário) e um resumo com o Valor
+    Total agrupado por Status (`resumo_por_status`, sempre sobre TODOS os
+    LOTEs do filtro de Estado/Município/INEP abaixo, independente do
+    Status escolhido) — cada card do resumo também funciona como atalho de
+    filtro, mesmo padrão dos cards "Com divergência"/"No período" do
+    grid MIP (RN-071/RN-073).
+
+    RN-XXX (a criar pelo Orquestrador; pedido do usuário, 2026-09-23):
+    filtros Estado (`?estado=`)/Município (`?municipio=`) — mesmo padrão
+    de `<select>` dependente do grid `mip_inep.html` (RN-079): Município
+    só fica disponível depois de um Estado escolhido, listando só os
+    municípios daquele Estado — e INEP (`?inep=`, busca parcial), que
+    filtra os LOTEs que têm pelo menos 1 INEP batendo com o texto
+    digitado. `querystring_extra` carrega esses 3 filtros pros links dos
+    cards de Status e da paginação, pra nenhum filtro se perder ao trocar
+    de Status/página."""
+    status_filtro = (request.GET.get("status") or "").strip()
+    if status_filtro not in dict(Lote.STATUS_CHOICES):
+        status_filtro = ""
+
+    estado_filtro = (request.GET.get("estado") or "").strip()
+    municipio_filtro = (request.GET.get("municipio") or "").strip()
+    inep_filtro = (request.GET.get("inep") or "").strip()
+    # RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
+    # do usuário, 2026-09-24): filtro "Nota Fiscal" ("Com NF"/"Sem NF") —
+    # filtra os INEPs mostrados dentro do drill-down de cada LOTE (ícone
+    # de download da Nota Fiscal por INEP, RN-XXX anterior); LOTE sem
+    # nenhum INEP batendo o filtro some da lista principal também (mesmo
+    # critério do filtro por INEP, `?inep=`, acima — reflete no resumo
+    # por Status e no Valor total geral). A coluna "Valor Total do LOTE"
+    # de cada linha continua somando TODOS os INEPs do LOTE, não só os
+    # exibidos no drill-down — o filtro decide quais LOTEs/INEPs aparecem,
+    # não recalcula o valor por INEP individual.
+    nf_filtro = (request.GET.get("nf") or "").strip()
+    if nf_filtro not in ("com", "sem"):
+        nf_filtro = ""
+
+    estados_disponiveis = list(
+        Lote.objects.exclude(estado="").order_by("estado").values_list("estado", flat=True).distinct()
+    )
+    if estado_filtro not in estados_disponiveis:
+        estado_filtro = ""
+    municipios_disponiveis = []
+    if estado_filtro:
+        municipios_disponiveis = list(
+            Lote.objects.filter(estado=estado_filtro)
+            .exclude(municipio="")
+            .order_by("municipio")
+            .values_list("municipio", flat=True)
+            .distinct()
+        )
+    if municipio_filtro not in municipios_disponiveis:
+        municipio_filtro = ""
+
+    querystring_extra = "&" + urlencode(
+        [
+            par
+            for par in (
+                ("estado", estado_filtro), ("municipio", municipio_filtro),
+                ("inep", inep_filtro), ("nf", nf_filtro),
+            )
+            if par[1]
+        ]
+    )
+    if querystring_extra == "&":
+        querystring_extra = ""
+
+    lotes_qs = Lote.objects.prefetch_related(
         Prefetch(
             "escolas",
             queryset=Escola.objects.order_by("nome").prefetch_related(
@@ -556,14 +633,18 @@ def mip_lote_inep_view(request):
             ),
         )
     ).order_by("-criado_em")
-    paginator = Paginator(lotes, 25)
-    page_obj = paginator.get_page(request.GET.get("page"))
+    if estado_filtro:
+        lotes_qs = lotes_qs.filter(estado=estado_filtro)
+        if municipio_filtro:
+            lotes_qs = lotes_qs.filter(municipio=municipio_filtro)
+    if inep_filtro:
+        lotes_qs = lotes_qs.filter(escolas__inep__icontains=inep_filtro).distinct()
 
     # Catálogo carregado uma única vez (fora do loop) — mesmo padrão
     # anti-N+1 do grid do MIP (RN-010/RN-076).
     catalogo_kits = list(KitPadrao.objects.all())
-    linhas_lote = []
-    for registro_lote in page_obj:
+    linhas_lote_todos = []
+    for registro_lote in lotes_qs:
         escolas_do_lote = []
         for escola in registro_lote.escolas.all():
             ris_da_escola = list(escola.ris.all())
@@ -594,33 +675,82 @@ def mip_lote_inep_view(request):
             Decimal("0.00"),
         )
         valor_total_lote_incompleto = any(item["valor_total_lado2_incompleto"] for item in escolas_do_lote)
-        linhas_lote.append(
+
+        if nf_filtro == "com":
+            escolas_exibidas = [item for item in escolas_do_lote if item["escola"].nota_fiscal_mip]
+        elif nf_filtro == "sem":
+            escolas_exibidas = [item for item in escolas_do_lote if not item["escola"].nota_fiscal_mip]
+        else:
+            escolas_exibidas = escolas_do_lote
+        if nf_filtro and not escolas_exibidas:
+            # LOTE sem nenhum INEP batendo o filtro de NF some da lista
+            # (nada pra exibir no drill-down) — mesmo critério do filtro
+            # por INEP (`?inep=`) acima: reflete no resumo por Status e
+            # no Valor total geral também, igual aos demais filtros desta
+            # tela (Estado/Município/INEP/Status).
+            continue
+
+        linhas_lote_todos.append(
             {
                 "lote": registro_lote,
-                "escolas": escolas_do_lote,
+                "escolas": escolas_exibidas,
                 "valor_total_lote": valor_total_lote,
                 # Valor "cru" (`str(Decimal)`, sem separador de milhar/
                 # localização) pro JS somar via `parseFloat` — pedido do
                 # usuário (2026-09-16): resumo abaixo da tabela soma só os
                 # LOTEs marcados no checkbox (mesmo checkbox do "Baixar
                 # planilhas (.zip)"); sem nenhum marcado, soma todos os
-                # desta página.
+                # LOTEs do filtro atual.
                 "valor_total_lote_str": str(valor_total_lote),
                 "valor_total_lote_incompleto": valor_total_lote_incompleto,
                 # "assunto_sugerido"/"corpo_sugerido" — e-mail do LOTE comentado (pedido do usuário, 2026-09-15).
             }
         )
 
-    valor_total_pagina = sum((linha["valor_total_lote"] for linha in linhas_lote), Decimal("0.00"))
-    valor_total_pagina_incompleto = any(linha["valor_total_lote_incompleto"] for linha in linhas_lote)
+    resumo_por_status = []
+    for status_valor, status_label in Lote.STATUS_CHOICES:
+        linhas_do_status = [linha for linha in linhas_lote_todos if linha["lote"].status == status_valor]
+        resumo_por_status.append(
+            {
+                "status": status_valor,
+                "label": status_label,
+                "total_lotes": len(linhas_do_status),
+                "valor_total": sum((linha["valor_total_lote"] for linha in linhas_do_status), Decimal("0.00")),
+                "incompleto": any(linha["valor_total_lote_incompleto"] for linha in linhas_do_status),
+            }
+        )
+
+    linhas_lote_filtradas = (
+        [linha for linha in linhas_lote_todos if linha["lote"].status == status_filtro]
+        if status_filtro
+        else linhas_lote_todos
+    )
+    paginator = Paginator(linhas_lote_filtradas, 25)
+    page_obj = paginator.get_page(request.GET.get("page"))
+    linhas_lote = page_obj.object_list
+
+    valor_total_geral = sum((linha["valor_total_lote"] for linha in linhas_lote_filtradas), Decimal("0.00"))
+    valor_total_geral_incompleto = any(linha["valor_total_lote_incompleto"] for linha in linhas_lote_filtradas)
+    valor_total_todos_status = sum((linha["valor_total_lote"] for linha in linhas_lote_todos), Decimal("0.00"))
 
     return render(
         request,
         "escolas/mip_lote_inep.html",
         {
             "page_obj": page_obj,
-            "valor_total_pagina": valor_total_pagina,
-            "valor_total_pagina_incompleto": valor_total_pagina_incompleto,
+            "status_filtro": status_filtro,
+            "status_filtro_label": dict(Lote.STATUS_CHOICES).get(status_filtro, ""),
+            "estado_filtro": estado_filtro,
+            "municipio_filtro": municipio_filtro,
+            "inep_filtro": inep_filtro,
+            "nf_filtro": nf_filtro,
+            "estados_disponiveis": estados_disponiveis,
+            "municipios_disponiveis": municipios_disponiveis,
+            "querystring_extra": querystring_extra,
+            "resumo_por_status": resumo_por_status,
+            "valor_total_geral": valor_total_geral,
+            "valor_total_geral_incompleto": valor_total_geral_incompleto,
+            "valor_total_todos_status": valor_total_todos_status,
             "linhas_lote": linhas_lote,
             # "remetente_lote": settings.DEFAULT_FROM_EMAIL,  # só usado pelo modal de e-mail comentado (pedido do usuário, 2026-09-15)
         },
@@ -1264,6 +1394,16 @@ def relatorio_eace_mip_view(request):
         "form": upload_form,
         "planilha_ativa": planilha_ativa,
         "total_escolas_com_lado3_preenchido": total_escolas_com_lado3_preenchido,
+        "notas_fiscais_ativa": NotasFiscaisMip.ativa(),
+        # `prefix` obrigatório aqui (correção 2026-09-24 — bug real
+        # reportado pelo usuário: nome do arquivo escolhido no card "Notas
+        # Fiscais" aparecia no card da planilha EACE acima): os 2 forms
+        # desta tela têm um campo "arquivo" cada — sem prefixo, os 2
+        # gerariam o mesmo `id="id_arquivo"`/`name="arquivo"` na mesma
+        # página, e o navegador resolve `<label for="id_arquivo">`/
+        # `getElementById` sempre para o 1º elemento (o da planilha),
+        # nunca para o do .zip.
+        "notas_fiscais_form": NotasFiscaisMipUploadForm(prefix="notas_fiscais"),
     })
 
 
@@ -1301,6 +1441,81 @@ def relatorio_eace_mip_sincronizar_todas_view(request):
         mensagem += (
             f" {resultado['escolas_puladas_ja_preenchidas']} INEP(s) que já tinham dado no Lado 3 "
             "foram mantidos sem alteração."
+        )
+    messages.success(request, mensagem)
+    return redirect("relatorio_eace_mip")
+
+
+@login_required
+def relatorio_eace_mip_notas_fiscais_upload_view(request):
+    """RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
+    do usuário, 2026-09-24): upload avulso do .zip de Notas Fiscais do
+    processo de faturamento do MIP, na tela "Administrador > Relatório
+    EACE (MIP)" — 1 arquivo por vez, substituível (`NotasFiscaisMip.
+    substituir`). Sem relação com o .zip de Notas Fiscais por LOTE
+    (`Lote.arquivo_notas_fiscais_zip`/`mip_lote_notas_fiscais_upload_view`,
+    tela "Projeto > MIP (LOTE)") — aquele continua servindo só para
+    anexar/baixar o retorno de UM LOTE específico; este só guarda o
+    arquivo e informa a quantidade de Notas Fiscais (.pdf) lidas dele
+    (`NotasFiscaisMipUploadForm.clean_arquivo`, via `apps.escolas.
+    services.contar_notas_fiscais_zip`), sem abrir nenhum PDF. Ação
+    restrita a Administrador, mesmo critério das demais ações desta tela
+    (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+    if request.method != "POST":
+        return redirect("relatorio_eace_mip")
+
+    form = NotasFiscaisMipUploadForm(request.POST, request.FILES, prefix="notas_fiscais")
+    if not form.is_valid():
+        mensagens_erro = [erro for erros in form.errors.values() for erro in erros]
+        messages.error(request, "Não foi possível enviar o arquivo: " + " ".join(mensagens_erro))
+        return redirect("relatorio_eace_mip")
+
+    quantidade_notas_fiscais = form.cleaned_data["quantidade_notas_fiscais"]
+    NotasFiscaisMip.substituir(form.cleaned_data["arquivo"], quantidade_notas_fiscais, request.user)
+    messages.success(
+        request,
+        f"Notas Fiscais (.zip) enviado com sucesso — "
+        f"{quantidade_notas_fiscais} nota(s) fiscal(is) lida(s) do arquivo.",
+    )
+    return redirect("relatorio_eace_mip")
+
+
+@login_required
+def relatorio_eace_mip_notas_fiscais_sincronizar_view(request):
+    """Botão "Sincronizar Notas Fiscais dos INEPs" (RN-XXX, a formalizar
+    pelo Orquestrador em business_rules.md; pedido do usuário,
+    2026-09-24), card "Notas Fiscais (.zip/.rar)" da tela "Administrador
+    > Relatório EACE (MIP)" — delega toda a regra (abrir o .zip/.rar
+    ativo, casar cada PDF pelo "CÓDIGO INEPS", gravar em cada `Escola` de
+    um `Lote` "Em Andamento") para `apps.escolas.services.
+    sincronizar_notas_fiscais_mip_lote_em_andamento`; esta view só lê o
+    POST, delega e converte erro de negócio em mensagem — mesmo padrão de
+    `relatorio_eace_mip_sincronizar_todas_view` (Lado 3, xlsx), agora para
+    as Notas Fiscais. Ação restrita a Administrador, mesmo critério das
+    demais ações desta tela (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+    if request.method != "POST":
+        return redirect("relatorio_eace_mip")
+
+    try:
+        resultado = sincronizar_notas_fiscais_mip_lote_em_andamento()
+    except RelatorioEaceMipSincronizacaoError as erro:
+        messages.error(request, str(erro))
+        return redirect("relatorio_eace_mip")
+
+    mensagem = (
+        f"Sincronização de Notas Fiscais: {resultado['total_sincronizadas']} de "
+        f"{resultado['total_escolas_em_andamento']} INEP(s) em \"Em Andamento\" receberam Nota Fiscal."
+    )
+    if resultado["total_sincronizadas"] < resultado["total_escolas_em_andamento"]:
+        mensagem += " Os demais não têm Nota Fiscal correspondente no arquivo ativo."
+    if resultado["total_pdfs_sem_inep_reconhecido"]:
+        mensagem += (
+            f" {resultado['total_pdfs_sem_inep_reconhecido']} Nota(s) Fiscal(is) do arquivo não tinham "
+            '"CÓDIGO INEPS" reconhecível e foram ignoradas.'
         )
     messages.success(request, mensagem)
     return redirect("relatorio_eace_mip")

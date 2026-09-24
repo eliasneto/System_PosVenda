@@ -5,6 +5,7 @@ import tempfile
 import zipfile
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import openpyxl
 from django.contrib.auth import get_user_model
@@ -17,17 +18,24 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.escolas.models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
+from apps.escolas.models import (
+    Escola, EscolaItemRelatorioEaceMip, Lote, NotasFiscaisMip, PlanilhaRelatorioEaceMip,
+)
 from apps.escolas.services import (
     LoteMipError,
     PlanilhaFaturamentoImplantacaoError,
+    RelatorioEaceMipSincronizacaoError,
+    contar_notas_fiscais_rar,
+    contar_notas_fiscais_zip,
     criar_lote_mip,
     desfazer_lote_mip,
     # enviar_email_lote, montar_assunto_email_lote — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver apps.escolas.services).
     escolas_elegiveis_lote_mip,
+    extrair_ineps_nota_fiscal_mip,
     gerar_planilha_faturamento_implantacao,
     gerar_planilha_faturamento_implantacao_lote,
     nome_arquivo_planilha_faturamento_implantacao,
+    sincronizar_notas_fiscais_mip_lote_em_andamento,
 )
 from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemEace, RiItemIxc, RiItemRelatorioEace
 
@@ -2079,6 +2087,487 @@ class RelatorioEaceMipViewTests(TestCase):
         self.assertNotContains(resp, "Choose File")
 
 
+_MEDIA_ROOT_TESTE_NOTAS_FISCAIS_MIP = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_NOTAS_FISCAIS_MIP)
+class RelatorioEaceMipNotasFiscaisUploadViewTests(TestCase):
+    """RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
+    do usuário, 2026-09-24): upload avulso do .zip de Notas Fiscais do MIP
+    na tela "Administrador > Relatório EACE (MIP)" — sem relação com o
+    .zip por LOTE (`MipLoteNotasFiscaisUploadViewTests`), que continua na
+    tela "Projeto > MIP (LOTE)"."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_NOTAS_FISCAIS_MIP, ignore_errors=True)
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-notas-fiscais-mip", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-notas-fiscais-mip", password="senha-teste-123",
+            perfil=User.PERFIL_ANALISTA,
+        )
+
+    def _enviar(self, nome="notas.zip", conteudo=None):
+        # Chave com o prefixo `notas_fiscais-` (form instanciado com
+        # `prefix="notas_fiscais"` na view/`clean_arquivo` — correção
+        # 2026-09-24 do bug de id/name duplicado com o form da planilha
+        # EACE nesta mesma tela).
+        conteudo = conteudo if conteudo is not None else _gerar_zip_teste()
+        return self.client.post(
+            reverse("relatorio_eace_mip_notas_fiscais_upload"),
+            {"notas_fiscais-arquivo": SimpleUploadedFile(nome, conteudo)},
+        )
+
+    def test_exige_administrador(self):
+        self.client.force_login(self.analista)
+        resp = self._enviar()
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(NotasFiscaisMip.objects.count(), 0)
+
+    def test_envia_o_primeiro_arquivo_e_conta_as_notas_fiscais(self):
+        self.client.force_login(self.admin)
+        conteudo = _gerar_zip_teste(nomes_pdf=("nota1.pdf", "sub/nota2.PDF", "nota3.pdf"))
+        resp = self._enviar(conteudo=conteudo)
+        self.assertEqual(NotasFiscaisMip.objects.count(), 1)
+        notas_fiscais = NotasFiscaisMip.objects.first()
+        self.assertEqual(notas_fiscais.nome_original, "notas.zip")
+        self.assertEqual(notas_fiscais.quantidade_notas_fiscais, 3)
+        self.assertEqual(notas_fiscais.enviado_por, self.admin)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("3 nota(s) fiscal(is)" in m for m in mensagens))
+
+    def test_substitui_sem_manter_2_arquivos(self):
+        self.client.force_login(self.admin)
+        self._enviar(nome="notas-v1.zip")
+        arquivo_v1 = NotasFiscaisMip.objects.first().arquivo
+        caminho_v1 = arquivo_v1.path
+        self.assertTrue(Path(caminho_v1).exists())
+
+        self._enviar(nome="notas-v2.zip", conteudo=_gerar_zip_teste(nomes_pdf=("a.pdf", "b.pdf")))
+        self.assertEqual(NotasFiscaisMip.objects.count(), 1)
+        notas_fiscais = NotasFiscaisMip.objects.first()
+        self.assertEqual(notas_fiscais.nome_original, "notas-v2.zip")
+        self.assertEqual(notas_fiscais.quantidade_notas_fiscais, 2)
+        self.assertFalse(Path(caminho_v1).exists())
+
+    def test_recusa_arquivo_que_nao_e_zip_de_verdade(self):
+        self.client.force_login(self.admin)
+        resp = self._enviar(nome="notas.zip", conteudo=b"nao e um zip de verdade")
+        self.assertEqual(NotasFiscaisMip.objects.count(), 0)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("zip" in m.lower() for m in mensagens))
+
+    def test_recusa_extensao_diferente_de_zip_ou_rar(self):
+        self.client.force_login(self.admin)
+        resp = self._enviar(nome="notas.pdf", conteudo=b"conteudo qualquer")
+        self.assertEqual(NotasFiscaisMip.objects.count(), 0)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any(".zip ou .rar" in m for m in mensagens))
+
+    def test_aceita_arquivo_rar_e_conta_as_notas_fiscais(self):
+        """Pedido do usuário (2026-09-24): "o sistema precisa aceitar
+        arquivo .rar também" — sem binário `rar` disponível neste
+        ambiente de teste para gerar um .rar de verdade, mocka-se
+        `rarfile.is_rarfile`/`contar_notas_fiscais_rar` (já cobertos
+        isoladamente em `ContarNotasFiscaisRarTests`) e confere o fluxo
+        completo da view/model com esse resultado."""
+        self.client.force_login(self.admin)
+        with patch("apps.escolas.forms.rarfile.is_rarfile", return_value=True), \
+                patch("apps.escolas.forms.contar_notas_fiscais_rar", return_value=5):
+            resp = self._enviar(nome="notas.rar", conteudo=b"conteudo fake rar")
+        self.assertEqual(NotasFiscaisMip.objects.count(), 1)
+        notas_fiscais = NotasFiscaisMip.objects.first()
+        self.assertEqual(notas_fiscais.nome_original, "notas.rar")
+        self.assertEqual(notas_fiscais.quantidade_notas_fiscais, 5)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("5 nota(s) fiscal(is)" in m for m in mensagens))
+
+    def test_recusa_arquivo_que_nao_e_rar_de_verdade(self):
+        self.client.force_login(self.admin)
+        resp = self._enviar(nome="notas.rar", conteudo=b"nao e um rar de verdade")
+        self.assertEqual(NotasFiscaisMip.objects.count(), 0)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("rar" in m.lower() for m in mensagens))
+
+    def test_pagina_exibe_quantidade_de_notas_fiscais(self):
+        self.client.force_login(self.admin)
+        self._enviar(conteudo=_gerar_zip_teste(nomes_pdf=("nota1.pdf", "nota2.pdf")))
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        self.assertContains(resp, "notas.zip")
+        self.assertContains(resp, "2")
+
+    def test_campo_arquivo_nao_colide_com_o_form_da_planilha_eace(self):
+        """Correção (2026-09-24; bug real reportado pelo usuário): antes
+        do `prefix="notas_fiscais"`, os 2 forms desta tela ("Base
+        MIP.xlsx" e "Notas Fiscais") tinham campo "arquivo" com o mesmo
+        `id`/`name` — o nome do arquivo escolhido no card de Notas
+        Fiscais aparecia no card da planilha EACE acima, e a mensagem
+        nativa do navegador (campo obrigatório vazio) saía em inglês. Sem
+        `id="id_arquivo"` duplicado, cada `<label for=...>` passa a
+        apontar para o input certo."""
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_eace_mip"))
+        conteudo = resp.content.decode()
+        self.assertEqual(conteudo.count('id="id_arquivo"'), 1)
+        self.assertIn('id="id_notas_fiscais-arquivo"', conteudo)
+        self.assertIn('name="notas_fiscais-arquivo"', conteudo)
+
+
+class ExtrairIneposNotaFiscalMipTests(TestCase):
+    """`apps.escolas.services.extrair_ineps_nota_fiscal_mip` (pedido do
+    usuário, 2026-09-24) — regex validada contra o texto real lido de
+    `doc/LIBERAÇÃO 22 -- PEDIDO 506/*.pdf` (Nota Fiscal do processo de
+    faturamento do MIP)."""
+
+    def test_um_inep(self):
+        texto = (
+            "CÓDIGO INEPS: 35010238/19001 Serviço executado conforme obrigação "
+            "estabelecida no item 8.1, do Anexo IV-C"
+        )
+        self.assertEqual(extrair_ineps_nota_fiscal_mip(texto), ["35010238"])
+
+    def test_varios_ineps_separados_por_ponto_e_virgula(self):
+        texto = (
+            "CÓDIGO INEPS: 35439666/19001;35448285/19001;35244764/19001 Serviço "
+            "executado conforme obrigação estabelecida"
+        )
+        self.assertEqual(
+            extrair_ineps_nota_fiscal_mip(texto), ["35439666", "35448285", "35244764"]
+        )
+
+    def test_sem_o_rotulo_devolve_lista_vazia(self):
+        self.assertEqual(extrair_ineps_nota_fiscal_mip("nenhum dado reconhecível aqui"), [])
+
+
+def _gerar_pdf_nota_fiscal_mip_teste(codigo_ineps):
+    """PDF de verdade (via `reportlab`, já usado no projeto) com o texto
+    "CÓDIGO INEPS: <codigo_ineps>" — mesma frase lida de uma Nota Fiscal
+    real (`doc/LIBERAÇÃO 22 -- PEDIDO 506/*.pdf`). Usado para testar
+    `sincronizar_notas_fiscais_mip_lote_em_andamento` fim a fim (lê o
+    .zip de verdade e extrai o texto de verdade via `pdfplumber`, sem
+    mockar nada dessa parte)."""
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer)
+    c.drawString(
+        50, 800,
+        f"CÓDIGO INEPS: {codigo_ineps} Serviço executado conforme obrigação estabelecida.",
+    )
+    c.save()
+    return buffer.getvalue()
+
+
+def _gerar_zip_notas_fiscais_mip_teste(pdfs):
+    """.zip de Notas Fiscais (MIP) de teste — `pdfs` é uma lista de
+    (nome_arquivo, codigo_ineps); cada item vira 1 .pdf de verdade
+    (`_gerar_pdf_nota_fiscal_mip_teste`) dentro do .zip."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
+        for nome, codigo_ineps in pdfs:
+            arquivo_zip.writestr(nome, _gerar_pdf_nota_fiscal_mip_teste(codigo_ineps))
+    return buffer.getvalue()
+
+
+_MEDIA_ROOT_TESTE_SINCRONIZAR_NOTAS_FISCAIS_MIP = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_SINCRONIZAR_NOTAS_FISCAIS_MIP)
+class SincronizarNotasFiscaisMipLoteEmAndamentoTests(TestCase):
+    """`apps.escolas.services.sincronizar_notas_fiscais_mip_lote_em_
+    andamento` (pedido do usuário, 2026-09-24): "quero que tenha um
+    botão de sincronizar todos os INEPS, ai o sistema vai buscar dentro
+    de MIP (LOTE) todos os INEPS que o lote está com status de 'Em
+    Andamento' e vai dentro de cada INEP colocar a NF correspondente
+    aquele INEP". Usa .zip com PDFs de verdade (`reportlab`/`pdfplumber`
+    reais, sem mock) — fim a fim, mesmo padrão de confiança já usado nos
+    demais testes deste arquivo."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_SINCRONIZAR_NOTAS_FISCAIS_MIP, ignore_errors=True)
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="admin-sync-nf-mip", password="senha-teste-123")
+
+        # INEP A: nota individual. INEPs B/C: mesma nota (multi-INEP,
+        # pedido do usuário: "uma nota pode ter varios INEPS").
+        self.escola_a = Escola.objects.create(inep="10000201", nome="Escola A", estado="GO", municipio="Goiânia")
+        self.escola_b = Escola.objects.create(inep="10000202", nome="Escola B", estado="GO", municipio="Goiânia")
+        self.escola_c = Escola.objects.create(inep="10000203", nome="Escola C", estado="GO", municipio="Goiânia")
+        # INEP D: em LOTE, mas NÃO "Em Andamento" — não deve ser tocado,
+        # mesmo tendo NF correspondente no arquivo.
+        self.escola_d = Escola.objects.create(inep="10000204", nome="Escola D", estado="GO", municipio="Goiânia")
+        # INEP E: "Em Andamento", mas sem NF nenhuma no arquivo.
+        self.escola_e = Escola.objects.create(inep="10000205", nome="Escola E", estado="GO", municipio="Goiânia")
+
+        self.lote_em_andamento = Lote.objects.create(estado="GO", municipio="Goiânia", status=Lote.EM_ANDAMENTO)
+        self.lote_em_andamento.escolas.add(self.escola_a, self.escola_b, self.escola_c, self.escola_e)
+        self.lote_aguardando = Lote.objects.create(
+            estado="GO", municipio="Goiânia", status=Lote.AGUARDANDO_ENCERRAMENTO
+        )
+        self.lote_aguardando.escolas.add(self.escola_d)
+
+        conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([
+            ("nota_a.pdf", self.escola_a.inep + "/19001"),
+            ("nota_bc.pdf", f"{self.escola_b.inep}/19001;{self.escola_c.inep}/19001"),
+            ("nota_d.pdf", self.escola_d.inep + "/19001"),
+            ("sem_inep.pdf", ""),  # PDF sem "CÓDIGO INEPS" — deve ser ignorado, não quebrar
+        ])
+        NotasFiscaisMip.substituir(
+            SimpleUploadedFile("notas.zip", conteudo_zip), quantidade_notas_fiscais=4, usuario=self.usuario,
+        )
+
+    def test_sem_arquivo_ativo_levanta_erro(self):
+        NotasFiscaisMip.objects.all().delete()
+        with self.assertRaises(RelatorioEaceMipSincronizacaoError):
+            sincronizar_notas_fiscais_mip_lote_em_andamento()
+
+    def test_sincroniza_so_os_ineps_em_andamento_com_nf_correspondente(self):
+        resultado = sincronizar_notas_fiscais_mip_lote_em_andamento()
+
+        self.escola_a.refresh_from_db()
+        self.escola_b.refresh_from_db()
+        self.escola_c.refresh_from_db()
+        self.escola_d.refresh_from_db()
+        self.escola_e.refresh_from_db()
+
+        self.assertTrue(self.escola_a.nota_fiscal_mip.name)
+        self.assertTrue(self.escola_b.nota_fiscal_mip.name)
+        self.assertTrue(self.escola_c.nota_fiscal_mip.name)
+        self.assertIsNotNone(self.escola_a.nota_fiscal_mip_sincronizada_em)
+
+        # INEPs B e C vieram da MESMA Nota (multi-INEP) — mesmo conteúdo.
+        self.assertEqual(self.escola_b.nota_fiscal_mip.read(), self.escola_c.nota_fiscal_mip.read())
+        # A e B/C são notas diferentes.
+        self.assertNotEqual(self.escola_a.nota_fiscal_mip.read(), self.escola_b.nota_fiscal_mip.read())
+
+        # D está em LOTE mas não "Em Andamento" — não deve ser tocado,
+        # mesmo tendo NF correspondente ("nota_d.pdf") no arquivo.
+        self.assertFalse(self.escola_d.nota_fiscal_mip.name)
+        # E está "Em Andamento" mas sem NF no arquivo.
+        self.assertFalse(self.escola_e.nota_fiscal_mip.name)
+
+        self.assertEqual(resultado["total_escolas_em_andamento"], 4)  # A, B, C, E
+        self.assertEqual(resultado["total_sincronizadas"], 3)  # A, B, C
+        self.assertEqual(resultado["total_pdfs_lidos"], 4)
+        self.assertEqual(resultado["total_pdfs_sem_inep_reconhecido"], 1)  # sem_inep.pdf
+
+    def test_nao_apaga_nota_ja_gravada_quando_nao_encontra_de_novo(self):
+        """Pedido do usuário: a NF "pode ser visualizada em qualquer
+        status desse INEP" — uma rodada nova que não traz mais aquele
+        INEP no arquivo não pode apagar o que já foi sincronizado antes."""
+        sincronizar_notas_fiscais_mip_lote_em_andamento()
+        self.escola_a.refresh_from_db()
+        self.assertTrue(self.escola_a.nota_fiscal_mip.name)
+
+        # Novo arquivo ativo, sem nenhuma nota do INEP A.
+        conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([
+            ("nota_bc.pdf", f"{self.escola_b.inep}/19001;{self.escola_c.inep}/19001"),
+        ])
+        NotasFiscaisMip.substituir(
+            SimpleUploadedFile("notas-v2.zip", conteudo_zip), quantidade_notas_fiscais=1, usuario=self.usuario,
+        )
+        sincronizar_notas_fiscais_mip_lote_em_andamento()
+        self.escola_a.refresh_from_db()
+        self.assertTrue(self.escola_a.nota_fiscal_mip.name)
+
+    def test_sincroniza_a_partir_de_um_rar_de_verdade(self):
+        """Pedido do usuário: "o sistema precisa aceitar arquivo .rar
+        também". Teste de verdade com o `unar` de verdade instalado no
+        servidor (sem mock nele) — o CONTEÚDO do arquivo é um .zip de
+        verdade "disfarçado" de .rar (nome termina em .rar, bytes são de
+        um .zip): confirmado manualmente que `unar` detecta o formato
+        real pelo conteúdo, não pela extensão, então isso exercita a
+        chamada de verdade ao binário sem precisar de uma ferramenta
+        capaz de CRIAR .rar de verdade (não existe uma livre para
+        instalar)."""
+        conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([
+            ("nota_a.pdf", self.escola_a.inep + "/19001"),
+            ("nota_bc.pdf", f"{self.escola_b.inep}/19001;{self.escola_c.inep}/19001"),
+        ])
+        NotasFiscaisMip.substituir(
+            SimpleUploadedFile("notas.rar", conteudo_zip), quantidade_notas_fiscais=2, usuario=self.usuario,
+        )
+        resultado = sincronizar_notas_fiscais_mip_lote_em_andamento()
+
+        self.escola_a.refresh_from_db()
+        self.escola_b.refresh_from_db()
+        self.escola_c.refresh_from_db()
+        self.assertTrue(self.escola_a.nota_fiscal_mip.name)
+        self.assertTrue(self.escola_b.nota_fiscal_mip.name)
+        self.assertTrue(self.escola_c.nota_fiscal_mip.name)
+        self.assertEqual(resultado["total_sincronizadas"], 3)  # A, B, C
+
+    def test_rar_sem_ferramenta_unar_levanta_erro_claro(self):
+        conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([("nota_a.pdf", self.escola_a.inep + "/19001")])
+        NotasFiscaisMip.substituir(
+            SimpleUploadedFile("notas.rar", conteudo_zip), quantidade_notas_fiscais=1, usuario=self.usuario,
+        )
+        with patch("apps.escolas.services.shutil.which", return_value=None):
+            with self.assertRaises(RelatorioEaceMipSincronizacaoError) as contexto:
+                sincronizar_notas_fiscais_mip_lote_em_andamento()
+        self.assertIn("unar", str(contexto.exception))
+
+    def test_rar_com_erro_do_unar_mostra_detalhe_tecnico(self):
+        conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([("nota_a.pdf", self.escola_a.inep + "/19001")])
+        NotasFiscaisMip.substituir(
+            SimpleUploadedFile("notas.rar", conteudo_zip), quantidade_notas_fiscais=1, usuario=self.usuario,
+        )
+        resultado_fake = type("ResultadoFake", (), {"returncode": 1, "stderr": b"arquivo corrompido"})()
+        with patch("apps.escolas.services.subprocess.run", return_value=resultado_fake):
+            with self.assertRaises(RelatorioEaceMipSincronizacaoError) as contexto:
+                sincronizar_notas_fiscais_mip_lote_em_andamento()
+        self.assertIn("arquivo corrompido", str(contexto.exception))
+
+
+class RelatorioEaceMipNotasFiscaisSincronizarViewTests(TestCase):
+    """`relatorio_eace_mip_notas_fiscais_sincronizar_view` — botão
+    "Sincronizar Notas Fiscais dos INEPs" (pedido do usuário,
+    2026-09-24)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-sincronizar-nf-mip", password="senha-teste-123",
+            perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-sincronizar-nf-mip", password="senha-teste-123",
+            perfil=User.PERFIL_ANALISTA,
+        )
+
+    def test_exige_administrador(self):
+        self.client.force_login(self.analista)
+        resp = self.client.post(reverse("relatorio_eace_mip_notas_fiscais_sincronizar"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_sem_arquivo_ativo_mostra_erro(self):
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse("relatorio_eace_mip_notas_fiscais_sincronizar"))
+        self.assertRedirects(resp, reverse("relatorio_eace_mip"))
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("Nenhum arquivo de Notas Fiscais" in m for m in mensagens))
+
+    def test_get_nao_executa(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_eace_mip_notas_fiscais_sincronizar"))
+        self.assertRedirects(resp, reverse("relatorio_eace_mip"))
+
+
+_MEDIA_ROOT_TESTE_ICONE_NOTA_FISCAL_MIP = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_ICONE_NOTA_FISCAL_MIP)
+class IconeNotaFiscalMipTests(TestCase):
+    """Ícone de download da Nota Fiscal (MIP) — habilitado quando o INEP
+    já foi sincronizado (`Escola.nota_fiscal_mip`), desabilitado quando
+    não (pedido do usuário, 2026-09-24: "os que não tiver NF, o icone de
+    nota fiscal fica desabilitado"). Testado nas 2 telas onde aparece:
+    detalhe do INEP (`mip_detail`, disponível "em qualquer status" —
+    pedido explícito do usuário) e drill-down do LOTE (`mip_lote_inep`)."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_ICONE_NOTA_FISCAL_MIP, ignore_errors=True)
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-icone-nf-mip", password="senha-teste-123")
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+
+    def test_mip_detail_sem_nota_fiscal_mostra_icone_desabilitado(self):
+        escola = Escola.objects.create(inep="10000301", nome="Escola Sem NF", estado="GO", municipio="Abadiânia")
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": escola.inep}))
+        self.assertContains(resp, "Nenhuma Nota Fiscal sincronizada para este INEP")
+        self.assertNotContains(resp, "Baixar Nota Fiscal (MIP)")
+
+    def test_mip_detail_com_nota_fiscal_mostra_icone_de_download(self):
+        escola = Escola.objects.create(inep="10000302", nome="Escola Com NF", estado="GO", municipio="Abadiânia")
+        escola.substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000302.pdf")
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": escola.inep}))
+        self.assertContains(resp, "Baixar Nota Fiscal (MIP)")
+        self.assertContains(resp, escola.nota_fiscal_mip.url)
+
+    def test_mip_lote_inep_mostra_icone_habilitado_e_desabilitado(self):
+        escola_com_nf, _ri1 = _criar_escola_elegivel_lote("10000303")
+        escola_sem_nf, _ri2 = _criar_escola_elegivel_lote("10000304")
+        escola_com_nf.substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000303.pdf")
+        criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, escola_com_nf.nota_fiscal_mip.url)
+        self.assertContains(resp, "Nenhuma Nota Fiscal sincronizada para este INEP")
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_ICONE_NOTA_FISCAL_MIP)
+class MipLoteInepFiltroNfTests(TestCase):
+    """Filtro "Nota Fiscal" (`?nf=com`/`?nf=sem`) da tela "Projeto > MIP
+    (LOTE)" (pedido do usuário, 2026-09-24): "um filtro dentro de MIP
+    (LOTE) que mostre apenas os INEPS que tem NF ou os que não tem"."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_ICONE_NOTA_FISCAL_MIP, ignore_errors=True)
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-filtro-nf-mip", password="senha-teste-123")
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        self.escola_com_nf, _ri1 = _criar_escola_elegivel_lote("10000401")
+        self.escola_sem_nf, _ri2 = _criar_escola_elegivel_lote("10000402")
+        self.escola_com_nf.substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000401.pdf")
+        self.lote = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+
+    def test_filtro_com_nf_mostra_so_quem_tem(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"), {"nf": "com"})
+        self.assertContains(resp, self.escola_com_nf.inep)
+        self.assertNotContains(resp, self.escola_sem_nf.inep)
+
+    def test_filtro_sem_nf_mostra_so_quem_nao_tem(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"), {"nf": "sem"})
+        self.assertContains(resp, self.escola_sem_nf.inep)
+        self.assertNotContains(resp, self.escola_com_nf.inep)
+
+    def test_sem_filtro_mostra_os_2(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, self.escola_com_nf.inep)
+        self.assertContains(resp, self.escola_sem_nf.inep)
+
+    def test_lote_sem_nenhum_inep_batendo_o_filtro_some_da_lista(self):
+        """Só existe 1 LOTE nesta suíte, com 1 INEP "com NF" e 1 "sem
+        NF" — filtrar por um valor que nenhum dos dois bate (aqui,
+        criando um 2º LOTE só com INEP "com NF" e filtrando "sem") deve
+        fazer esse 2º LOTE sumir da lista inteira, não só esvaziar seu
+        drill-down."""
+        escola_so_com_nf, _ri3 = _criar_escola_elegivel_lote("10000403", municipio="Anápolis")
+        escola_so_com_nf.substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000403.pdf")
+        lote2 = criar_lote_mip("GO", "Anápolis", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"), {"nf": "sem"})
+        self.assertContains(resp, str(self.lote))
+        self.assertNotContains(resp, str(lote2))
+
+
 _CABECALHO_RELATORIO_EACE_MIP = [
     "Projeto", "Cod Fornecedor", "Descrição do Item", "Qtde Produto",
     "Valor Unit UR", "Data Emissão ACS", "UF", "CIDADE",
@@ -3157,23 +3646,35 @@ class MipLoteInepViewTests(TestCase):
         self.assertContains(resp, str(lote))
         self.assertContains(resp, "GO")
         self.assertContains(resp, "Abadiânia")
-        self.assertContains(resp, "01/09/2026")
-        self.assertContains(resp, "30/09/2026")
         self.assertContains(resp, escola.inep)
         self.assertContains(resp, "R$ 300,00")
 
-    def test_lote_sem_data_mostra_travessao(self):
+    def test_icone_de_enviar_nf_foi_removido(self):
+        """Pedido do usuário (2026-09-24): "quero retirar o icone de
+        enviar NF" — upload manual de .zip/.rar por LOTE não aparece
+        mais na tela (a Nota Fiscal de cada INEP agora vem do botão
+        "Sincronizar Notas Fiscais dos INEPs" em Administrador >
+        Relatório EACE MIP). A rota/backend continuam existindo (ver
+        `MipLoteNotasFiscaisUploadViewTests`), só o ícone saiu daqui."""
+        _criar_escola_elegivel_lote("10000034")
+        criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertNotContains(resp, "Escolher .zip (recomendado)")
+        self.assertNotContains(resp, "Enviar NF")
+        self.assertNotContains(resp, "Substituir NF")
+
+    def test_lote_sem_data_nao_quebra_a_tela(self):
         """RN-098 (correção, 2026-09-14): `Lote` criado sem Data
-        inicial/final não quebra a tela — mostra "—" nas 2 colunas.
-        Pedido do usuário (2026-09-15): a checagem do corpo de e-mail
-        sugerido (`montar_corpo_email_lote`) saiu daqui — e-mail do LOTE
-        comentado, a tela não calcula mais esse texto."""
+        inicial/final não quebra a tela. Pedido do usuário (2026-09-23):
+        as colunas "Data Início"/"Data Fim" saíram do grid — este teste
+        deixou de checar o "—" delas (não existem mais) e passou a checar
+        só que a tela continua renderizando normalmente."""
         _criar_escola_elegivel_lote("10000032")
         criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "—")
 
     def test_visualizador_e_bloqueado(self):
         """Pedido do usuário (2026-09-14, revisão): "esse MIP lote não
@@ -3202,6 +3703,88 @@ class MipLoteInepViewTests(TestCase):
             resp,
             f'<input type="checkbox" name="lote_ids" value="{lote.pk}" form="form-baixar-planilhas-lotes"',
         )
+
+    def test_filtro_por_status_mostra_so_os_lotes_daquele_status(self):
+        """Pedido do usuário (2026-09-23): campo `?status=` filtra a
+        listagem — 2 LOTEs de Status diferentes, filtrando por um deles só
+        aparece o do Status escolhido."""
+        _criar_escola_elegivel_lote("10000040")
+        lote_aguardando = criar_lote_mip(
+            "GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario
+        )
+        _criar_escola_elegivel_lote("10000041", municipio="Anápolis")
+        lote_em_andamento = criar_lote_mip(
+            "GO", "Anápolis", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario
+        )
+        lote_em_andamento.status = Lote.EM_ANDAMENTO
+        lote_em_andamento.save()
+
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"), {"status": Lote.EM_ANDAMENTO})
+        self.assertContains(resp, str(lote_em_andamento))
+        self.assertNotContains(resp, str(lote_aguardando))
+
+    def test_resumo_por_status_soma_valor_de_todos_os_lotes_do_status(self):
+        """Pedido do usuário (2026-09-23): resumo agrupado por Status
+        mostra o Valor Total somado de TODOS os LOTEs daquele Status (2
+        LOTEs de R$ 300,00 cada = R$ 600,00), não só de 1 deles."""
+        _criar_escola_elegivel_lote("10000042")
+        criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        _criar_escola_elegivel_lote("10000043", municipio="Anápolis")
+        criar_lote_mip("GO", "Anápolis", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, "Aguardando Encerramento LOTE (2)")
+        self.assertContains(resp, "R$ 600,00")
+
+    def test_valor_total_geral_soma_todos_os_lotes_nao_so_a_pagina_atual(self):
+        """Pedido do usuário (2026-09-23): antes desta correção, o "Valor
+        total" abaixo da tabela somava só os 25 LOTEs da página atual
+        (`Paginator`). Com 26 LOTEs de R$ 300,00 cada, o total tem que
+        refletir os 26 (R$ 7.800,00), mesmo a página 1 mostrando só 25."""
+        for indice in range(26):
+            inep = f"100001{indice:02d}"
+            _criar_escola_elegivel_lote(inep, municipio=f"Municipio{indice}")
+            criar_lote_mip(
+                "GO", f"Municipio{indice}", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario
+            )
+
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertEqual(resp.context["page_obj"].paginator.count, 26)
+        self.assertEqual(len(resp.context["page_obj"].object_list), 25)
+        self.assertContains(resp, "R$ 7.800,00")
+
+    def test_filtro_de_status_dedicado_foi_removido(self):
+        """Pedido do usuário (2026-09-23, revisão): o `<select>` de Status
+        saiu da tela — trocar de Status agora só pelos cards do resumo
+        (`?status=`, já coberto por outro teste desta classe)."""
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertNotContains(resp, 'id="mip-lote-status"')
+
+    def test_filtro_por_inep_mostra_so_o_lote_daquele_inep(self):
+        escola_a, _ri = _criar_escola_elegivel_lote("10000050")
+        lote_a = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        _criar_escola_elegivel_lote("10000051", municipio="Anápolis")
+        lote_b = criar_lote_mip("GO", "Anápolis", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"), {"inep": escola_a.inep})
+        self.assertContains(resp, str(lote_a))
+        self.assertNotContains(resp, str(lote_b))
+
+    def test_filtro_por_estado_e_municipio_mostra_so_o_lote_daquele_municipio(self):
+        _criar_escola_elegivel_lote("10000052", estado="GO", municipio="Abadiânia")
+        lote_go = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        _criar_escola_elegivel_lote("10000053", estado="SP", municipio="Campinas")
+        lote_sp = criar_lote_mip("SP", "Campinas", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"), {"estado": "SP", "municipio": "Campinas"})
+        self.assertContains(resp, str(lote_sp))
+        self.assertNotContains(resp, str(lote_go))
 
 
 class MipLoteBotaoGridTests(TestCase):
@@ -3757,11 +4340,68 @@ class MipLoteBaixarPlanilhaViewTests(TestCase):
 _MEDIA_ROOT_TESTE_NOTAS_FISCAIS_LOTE = tempfile.mkdtemp()
 
 
-def _gerar_zip_teste():
+def _gerar_zip_teste(nomes_pdf=("nota1.pdf",), outros_arquivos=()):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
-        arquivo_zip.writestr("nota1.pdf", b"conteudo fake")
+        for nome in nomes_pdf:
+            arquivo_zip.writestr(nome, b"conteudo fake")
+        for nome in outros_arquivos:
+            arquivo_zip.writestr(nome, b"lixo")
     return buffer.getvalue()
+
+
+class ContarNotasFiscaisZipTests(TestCase):
+    """`apps.escolas.services.contar_notas_fiscais_zip` (pedido do usuário,
+    2026-09-24) — isolado da view/form: cada .pdf dentro do .zip é 1 Nota
+    Fiscal."""
+
+    def test_conta_so_os_pdf_ignorando_pasta_maiuscula_e_macosx(self):
+        conteudo = _gerar_zip_teste(
+            nomes_pdf=("nota1.pdf", "sub/nota2.PDF"),
+            outros_arquivos=("sub/", "__MACOSX/nota1.pdf", "leia-me.txt"),
+        )
+        quantidade = contar_notas_fiscais_zip(io.BytesIO(conteudo))
+        self.assertEqual(quantidade, 2)
+
+    def test_zero_quando_nenhum_pdf(self):
+        conteudo = _gerar_zip_teste(nomes_pdf=(), outros_arquivos=("planilha.xlsx",))
+        self.assertEqual(contar_notas_fiscais_zip(io.BytesIO(conteudo)), 0)
+
+
+class ContarNotasFiscaisRarTests(TestCase):
+    """`apps.escolas.services.contar_notas_fiscais_rar` (pedido do
+    usuário, 2026-09-24: "o sistema precisa aceitar arquivo .rar também").
+    Sem binário `rar` disponível neste ambiente para gerar um .rar de
+    verdade — `rarfile.RarFile` é mockado; a lógica de filtro em si (só
+    .pdf, ignora pasta/`__MACOSX/`) é a mesma já validada contra um .zip
+    de verdade em `ContarNotasFiscaisZipTests`."""
+
+    @staticmethod
+    def _info(nome, eh_pasta=False):
+        info = MagicMock()
+        info.filename = nome
+        info.is_dir.return_value = eh_pasta
+        return info
+
+    def test_conta_so_os_pdf_ignorando_pasta_e_macosx(self):
+        infos = [
+            self._info("nota1.pdf"),
+            self._info("sub/nota2.PDF"),
+            self._info("sub/", eh_pasta=True),
+            self._info("__MACOSX/nota1.pdf"),
+            self._info("leia-me.txt"),
+        ]
+        rar_mock = MagicMock()
+        rar_mock.__enter__.return_value.infolist.return_value = infos
+        with patch("rarfile.RarFile", return_value=rar_mock):
+            quantidade = contar_notas_fiscais_rar(io.BytesIO(b"conteudo fake"))
+        self.assertEqual(quantidade, 2)
+
+    def test_zero_quando_nenhum_pdf(self):
+        rar_mock = MagicMock()
+        rar_mock.__enter__.return_value.infolist.return_value = [self._info("planilha.xlsx")]
+        with patch("rarfile.RarFile", return_value=rar_mock):
+            self.assertEqual(contar_notas_fiscais_rar(io.BytesIO(b"conteudo fake")), 0)
 
 
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_NOTAS_FISCAIS_LOTE)
@@ -3827,6 +4467,28 @@ class MipLoteNotasFiscaisUploadViewTests(TestCase):
         self._enviar(nome="notas.pdf", conteudo=b"conteudo qualquer")
         self.lote.refresh_from_db()
         self.assertFalse(self.lote.arquivo_notas_fiscais_zip.name)
+
+    def test_aceita_arquivo_rar(self):
+        """Pedido do usuário (2026-09-24): "o sistema precisa aceitar
+        arquivo .rar também" — mocka-se `rarfile.is_rarfile` (sem
+        binário `rar` disponível neste ambiente para gerar um .rar de
+        verdade); esta view não conta Notas Fiscais (só guarda o arquivo
+        para download, RN-069), então não há quantidade pra conferir
+        aqui."""
+        self.client.force_login(self.usuario)
+        with patch("apps.escolas.forms.rarfile.is_rarfile", return_value=True):
+            self._enviar(nome="notas.rar", conteudo=b"conteudo fake rar")
+        self.lote.refresh_from_db()
+        self.assertTrue(self.lote.arquivo_notas_fiscais_zip.name)
+        self.assertEqual(self.lote.nome_original_notas_fiscais_zip, "notas.rar")
+
+    def test_recusa_arquivo_que_nao_e_rar_de_verdade(self):
+        self.client.force_login(self.usuario)
+        resp = self._enviar(nome="notas.rar", conteudo=b"nao e um rar de verdade")
+        self.lote.refresh_from_db()
+        self.assertFalse(self.lote.arquivo_notas_fiscais_zip.name)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("rar" in m.lower() for m in mensagens))
 
 
 class MipLoteBaixarPlanilhasZipViewTests(TestCase):
@@ -4361,36 +5023,50 @@ class MipLoteStatusColunaListaTests(TestCase):
         resp = self.client.get(reverse("mip_lote_inep"))
         self.assertNotContains(resp, 'data-abrir-modal-email="modal-email-lote-')
 
-    def test_status_inicial_ja_mostra_select_de_troca(self):
+    def test_status_inicial_ja_mostra_menu_de_troca(self):
+        """Pedido do usuário (2026-09-23, 3ª revisão): o campo de troca de
+        status virou um ícone ("Mudar status") que abre um menu com 1
+        botão por opção, no lugar do `<select>`/`<option>` antigo — a
+        coluna "Status" já mostra o nome por extenso. Correção 2026-09-24
+        (bug real reportado pelo usuário: menu abria cortado/fora do
+        lugar): o menu (`data-status-menu`) deixou de ser o conteúdo de
+        um `<details>` posicionado em `absolute` e virou um painel à
+        parte em `position: fixed`, posicionado via JS."""
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
         self.assertContains(resp, "Aguardando Encerramento LOTE")
-        self.assertContains(resp, "Mudar status...")
+        self.assertContains(resp, "data-status-menu")
+        self.assertContains(resp, 'title="Mudar status"')
         self.assertContains(resp, reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}))
-        self.assertContains(resp, '<option value="em_andamento">Em Andamento</option>')
-        self.assertContains(resp, '<option value="em_faturamento">Em Faturamento</option>')
-        self.assertContains(resp, '<option value="faturamento_concluido">Processo Concluído</option>')
+        self.assertContains(resp, '<button type="submit" name="status" value="em_andamento"')
+        self.assertContains(resp, '<button type="submit" name="status" value="em_faturamento"')
+        self.assertContains(resp, '<button type="submit" name="status" value="faturamento_concluido"')
 
-    def test_status_em_andamento_continua_mostrando_select(self):
+    def test_status_em_andamento_continua_mostrando_menu(self):
         self.lote.status = Lote.EM_ANDAMENTO
         self.lote.save()
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
         self.assertContains(resp, "Em Andamento")
-        self.assertContains(resp, "Mudar status...")
+        self.assertContains(resp, "data-status-menu")
 
-    def test_status_em_faturamento_continua_mostrando_select(self):
+    def test_status_em_faturamento_continua_mostrando_menu(self):
         self.lote.status = Lote.EM_FATURAMENTO
         self.lote.save()
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
         self.assertContains(resp, "Em Faturamento")
-        self.assertContains(resp, "Mudar status...")
+        self.assertContains(resp, "data-status-menu")
 
-    def test_processo_concluido_esconde_select(self):
+    def test_processo_concluido_esconde_menu(self):
+        """`data-status-menu` sozinho não serve pra essa checagem — o
+        atributo também aparece dentro do `<script>` global (fecha o menu
+        ao clicar fora, sempre presente na página); por isso a checagem
+        certa é pelo `title="Mudar status"` do ícone, que só existe dentro
+        do `{% if status != faturamento_concluido %}`."""
         self.lote.status = Lote.FATURAMENTO_CONCLUIDO
         self.lote.save()
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
         self.assertContains(resp, "Processo Concluído")
-        self.assertNotContains(resp, "Mudar status...")
+        self.assertNotContains(resp, 'title="Mudar status"')

@@ -47,4 +47,14 @@ urlpatterns = [
         views.relatorio_eace_mip_sincronizar_todas_view,
         name="relatorio_eace_mip_sincronizar_todas",
     ),
+    path(
+        "administrador/relatorio-eace-mip/notas-fiscais/",
+        views.relatorio_eace_mip_notas_fiscais_upload_view,
+        name="relatorio_eace_mip_notas_fiscais_upload",
+    ),
+    path(
+        "administrador/relatorio-eace-mip/notas-fiscais/sincronizar/",
+        views.relatorio_eace_mip_notas_fiscais_sincronizar_view,
+        name="relatorio_eace_mip_notas_fiscais_sincronizar",
+    ),
 ]

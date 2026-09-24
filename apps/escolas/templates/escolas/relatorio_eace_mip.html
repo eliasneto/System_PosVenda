@@ -137,4 +137,87 @@
         </script>
     </div>
 </div>
+
+{# RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido do usuário, 2026-09-24): upload avulso do .zip/.rar de Notas Fiscais do processo de faturamento do MIP — mesmo padrão de arquivo único (singleton) do card acima ("Arquivo ativo"/"Enviar arquivo"), sem relação com o .zip/.rar de Notas Fiscais por LOTE já existente em "Projeto > MIP (LOTE)". Form com `prefix="notas_fiscais"` (correção 2026-09-24 — bug real reportado pelo usuário: sem prefixo, o campo "arquivo" deste form colidia em id/name com o campo "arquivo" do form da planilha EACE acima, e o nome do arquivo escolhido aqui aparecia no card de cima). #}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+    <div class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm">
+        <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100 mb-1">Notas Fiscais (.zip/.rar)</h2>
+        {% if notas_fiscais_ativa %}
+        <div class="flex items-start gap-3 mt-4">
+            <div class="w-11 h-11 rounded-2xl bg-pv-black flex items-center justify-center shrink-0">
+                <i data-lucide="file-archive" class="w-5 h-5 text-pv-yellow"></i>
+            </div>
+            <div class="min-w-0">
+                <p class="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{{ notas_fiscais_ativa.nome_original }}</p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Enviado por <span class="font-bold">{{ notas_fiscais_ativa.enviado_por.username|default:"—" }}</span>
+                    em {{ notas_fiscais_ativa.enviado_em|date:"d/m/Y H:i" }}
+                </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <span class="font-black text-gray-800 dark:text-gray-100">{{ notas_fiscais_ativa.quantidade_notas_fiscais }}</span>
+                    nota(s) fiscal(is) lida(s) do arquivo
+                </p>
+            </div>
+        </div>
+        {# Pedido do usuário (2026-09-24): botão "Sincronizar Notas Fiscais dos INEPs" — mesmo padrão do botão "Sincronizar todos os INEPs" do card da planilha (Lado 3) acima, agora casando cada PDF deste .zip/.rar pelo "CÓDIGO INEPS" com os INEPs de um LOTE "Em Andamento" (`apps.escolas.services.sincronizar_notas_fiscais_mip_lote_em_andamento`). #}
+        <form method="POST" action="{% url 'relatorio_eace_mip_notas_fiscais_sincronizar' %}" class="mt-5 pt-5 border-t border-gray-100 dark:border-gray-800">
+            {% csrf_token %}
+            <button type="submit" class="w-full px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center justify-center gap-2">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Sincronizar Notas Fiscais dos INEPs
+            </button>
+            <p class="text-[10px] text-gray-400 dark:text-gray-500 font-bold mt-2 text-center">
+                Só atualiza INEPs de um LOTE em "Em Andamento" — o download da Nota Fiscal fica disponível na tela do INEP, em qualquer Status (MIP).
+            </p>
+        </form>
+        {% else %}
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-4">Nenhum arquivo enviado ainda.</p>
+        {% endif %}
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm">
+        <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100 mb-1">
+            {% if notas_fiscais_ativa %}Substituir arquivo{% else %}Enviar arquivo{% endif %}
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            Arquivo <span class="font-bold">.zip</span> (recomendado) ou <span class="font-bold">.rar</span> com as
+            Notas Fiscais devolvidas pelo financeiro do processo de faturamento do MIP. Um novo envio substitui o
+            arquivo atual.
+            <span class="block mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                .rar tem suporte limitado — alguns arquivos (ex.: compressão "sólida") podem não ser lidos pelo servidor. Prefira .zip.
+            </span>
+        </p>
+        <form method="POST" action="{% url 'relatorio_eace_mip_notas_fiscais_upload' %}" enctype="multipart/form-data" class="space-y-4">
+            {% csrf_token %}
+            <div>
+                <label for="{{ notas_fiscais_form.arquivo.id_for_label }}" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-lg cursor-pointer hover:bg-gray-800 transition">
+                    Escolher arquivo
+                </label>
+                <span id="nome-arquivo-notas-fiscais-mip" class="ml-3 text-xs font-bold text-gray-500 dark:text-gray-400 align-middle">Nenhum arquivo selecionado</span>
+                {{ notas_fiscais_form.arquivo }}
+                {% if notas_fiscais_form.arquivo.errors %}
+                <p class="text-xs font-bold text-red-500 mt-2">{{ notas_fiscais_form.arquivo.errors.0 }}</p>
+                {% endif %}
+            </div>
+            {% if notas_fiscais_form.non_field_errors %}
+            <p class="text-xs font-bold text-red-500">{{ notas_fiscais_form.non_field_errors.0 }}</p>
+            {% endif %}
+            <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center gap-2">
+                <i data-lucide="upload" class="w-4 h-4"></i>
+                Importar
+            </button>
+        </form>
+        <script>
+            (function () {
+                var input = document.getElementById("{{ notas_fiscais_form.arquivo.id_for_label }}");
+                var nome = document.getElementById("nome-arquivo-notas-fiscais-mip");
+                if (input && nome) {
+                    input.addEventListener("change", function () {
+                        nome.textContent = input.files.length ? input.files[0].name : "Nenhum arquivo selecionado";
+                    });
+                }
+            })();
+        </script>
+    </div>
+</div>
 {% endblock %}

@@ -12,7 +12,12 @@ planilha são independentes, RN-067)."""
 import datetime
 import io
 import logging
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+import zipfile
 from decimal import Decimal
 
 import openpyxl
@@ -28,7 +33,7 @@ from apps.auditoria.services import registrar as auditar
 from apps.ri.models import KitPadrao, Ri, RiHistorico
 from apps.ri.services import casar_planilha_eace_com_catalogo, quantidade_planilha_eace
 
-from .models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
+from .models import Escola, EscolaItemRelatorioEaceMip, Lote, NotasFiscaisMip, PlanilhaRelatorioEaceMip
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,210 @@ def aba_relatorio_eace_mip_com_colunas(workbook):
         if set(PlanilhaRelatorioEaceMip.COLUNAS_OBRIGATORIAS) <= colunas:
             return nome_aba
     return None
+
+
+def contar_notas_fiscais_zip(arquivo):
+    """Conta as Notas Fiscais (.pdf) de dentro do .zip enviado na tela
+    "Administrador > Relatório EACE (MIP)" (RN-XXX, a formalizar pelo
+    Orquestrador; pedido do usuário, 2026-09-24) — cada .pdf é 1 Nota
+    Fiscal, mesmo que referencie vários INEPs dentro dela (sem relação de
+    1 para 1 com `Escola`). Ignora entradas de pasta e o lixo de metadata
+    que o Finder/macOS costuma incluir (`__MACOSX/`), para não contar nada
+    que não seja de fato uma Nota Fiscal. Compartilhada com o upload
+    (`apps.escolas.forms.NotasFiscaisMipUploadForm`), que já validou
+    (`zipfile.is_zipfile`) ser um .zip de verdade antes de chamar aqui.
+    Irmã de `contar_notas_fiscais_rar` (mesmo critério, pra quem envia o
+    arquivo compactado em .rar em vez de .zip, pedido do usuário)."""
+    with zipfile.ZipFile(arquivo) as arquivo_zip:
+        quantidade = sum(
+            1
+            for info in arquivo_zip.infolist()
+            if not info.is_dir()
+            and not info.filename.startswith("__MACOSX/")
+            and info.filename.lower().endswith(".pdf")
+        )
+    arquivo.seek(0)
+    return quantidade
+
+
+def contar_notas_fiscais_rar(arquivo):
+    """Mesmo critério de `contar_notas_fiscais_zip`, para quando o
+    financeiro devolve o arquivo em .rar em vez de .zip (pedido do
+    usuário, 2026-09-24). `rarfile` é importado aqui dentro (não no topo
+    do módulo) pelo mesmo motivo do `pdfplumber` em `apps.integracoes.
+    eace.extrair_dados_pdf` — não quebrar o `manage.py` inteiro se a lib
+    não estiver instalada no servidor; o form (`NotasFiscaisMipUploadForm.
+    clean_arquivo`) trata a falta dela como erro de validação, não como
+    erro 500. Só lista os nomes dentro do .rar (nunca extrai conteúdo) —
+    `rarfile` faz esse parsing do índice em Python puro, sem precisar do
+    binário `unrar`/`unar` instalado no servidor (só a extração de
+    conteúdo, que este contador nunca faz, precisaria dele)."""
+    import rarfile
+
+    with rarfile.RarFile(arquivo) as arquivo_rar:
+        quantidade = sum(
+            1
+            for info in arquivo_rar.infolist()
+            if not info.is_dir()
+            and not info.filename.startswith("__MACOSX/")
+            and info.filename.lower().endswith(".pdf")
+        )
+    arquivo.seek(0)
+    return quantidade
+
+
+_RE_CODIGO_INEPS_MIP = re.compile(r"C[ÓO]DIGO\s+INEPS?:\s*([\d/;]+)", re.IGNORECASE)
+
+
+def extrair_ineps_nota_fiscal_mip(texto):
+    """Lê o(s) INEP(s) do campo "CÓDIGO INEPS" da Nota Fiscal (NFS-e) do
+    processo de faturamento do MIP (RN-XXX, a formalizar pelo
+    Orquestrador; pedido do usuário, 2026-09-24) — layout real confirmado
+    lendo um PDF de verdade (`doc/LIBERAÇÃO 22 -- PEDIDO 506/*.pdf`):
+    "CÓDIGO INEPS: 35439666/19001;35448285/19001;35244764/19001 Serviço
+    executado..." — 1 ou mais pares "INEP/Cód. Fornecedor" separados por
+    ";" (o texto descritivo que vem depois nunca é dígito/"/"/";", então
+    a classe de caracteres da regex para sozinha ali, sem precisar de um
+    marcador de fim explícito). Lista vazia quando o rótulo não aparece
+    no texto (PDF fora do padrão esperado — o chamador decide o que
+    fazer, nunca inventa um INEP)."""
+    match = _RE_CODIGO_INEPS_MIP.search(texto)
+    if not match:
+        return []
+    return [par.split("/")[0] for par in match.group(1).split(";") if par.split("/")[0]]
+
+
+def _extrair_texto_pdf_bytes(conteudo_pdf):
+    """Mesmo padrão de `apps.integracoes.eace.extrair_dados_pdf.
+    extrair_texto_pdf` (import de `pdfplumber` só aqui dentro — não
+    quebra o `manage.py` inteiro se a lib não estiver instalada), mas a
+    partir de bytes já em memória (lidos de dentro do .zip/.rar), não de
+    um caminho no disco."""
+    import pdfplumber
+
+    texto = []
+    with pdfplumber.open(io.BytesIO(conteudo_pdf)) as pdf:
+        for pagina in pdf.pages:
+            conteudo = pagina.extract_text()
+            if conteudo:
+                texto.append(conteudo)
+    return "\n".join(texto)
+
+
+def _iterar_pdfs_do_arquivo_notas_fiscais(notas_fiscais_mip):
+    """Gera (nome, bytes) de cada .pdf de dentro do .zip/.rar ativo de
+    Notas Fiscais — mesmo filtro (ignora pasta e lixo `__MACOSX/`) de
+    `contar_notas_fiscais_zip`/`contar_notas_fiscais_rar`, mas lendo o
+    CONTEÚDO de cada um (não só contando os nomes), pra extrair o(s)
+    INEP(s) de dentro do PDF depois.
+
+    Correção 2026-09-24 (bug real reportado pelo usuário, "Failed the
+    read enough data: req=... got=0" a partir da 2ª Nota Fiscal
+    comprimida de um .rar real): extrair arquivo POR ARQUIVO de dentro de
+    um .rar (via `rarfile`, pedindo 1 nome de cada vez ao `unrar`/`unar`)
+    tem limitações conhecidas dessas ferramentas com certos .rar reais
+    (solid/compressão por bloco) — trocado por uma única extração de TODO
+    o .rar para uma pasta temporária (`unar`, sem filtrar por nome nenhum
+    — o jeito mais simples e testado de qualquer extrator de arquivo),
+    depois só lendo os .pdf resultantes do disco. `.zip` continua puro
+    Python (`zipfile`), sem essa limitação — só o .rar depende de
+    ferramenta externa."""
+    nome_arquivo = notas_fiscais_mip.nome_original.lower()
+    arquivo = notas_fiscais_mip.arquivo
+    if nome_arquivo.endswith(".zip"):
+        with zipfile.ZipFile(arquivo) as arquivo_zip:
+            for info in arquivo_zip.infolist():
+                if (
+                    info.is_dir()
+                    or info.filename.startswith("__MACOSX/")
+                    or not info.filename.lower().endswith(".pdf")
+                ):
+                    continue
+                yield info.filename, arquivo_zip.read(info.filename)
+        return
+
+    if shutil.which("unar") is None:
+        raise RelatorioEaceMipSincronizacaoError(
+            "Não foi possível extrair o conteúdo do .rar — o servidor não tem a "
+            "ferramenta 'unar' instalada (necessária só para .rar; .zip funciona "
+            "sem ela). Peça ao DevOps para instalar, ou reenvie o arquivo em .zip."
+        )
+
+    with tempfile.TemporaryDirectory() as pasta_extraida:
+        resultado = subprocess.run(
+            ["unar", "-q", "-f", "-o", pasta_extraida, arquivo.path],
+            capture_output=True,
+        )
+        if resultado.returncode != 0:
+            raise RelatorioEaceMipSincronizacaoError(
+                "Não foi possível extrair o conteúdo do .rar — 'unar' terminou com "
+                f"erro (código {resultado.returncode}): "
+                f"{resultado.stderr.decode('utf-8', 'replace').strip() or '(sem detalhe)'}"
+            )
+        for raiz, _pastas, nomes_arquivo in os.walk(pasta_extraida):
+            for nome in nomes_arquivo:
+                if not nome.lower().endswith(".pdf"):
+                    continue
+                with open(os.path.join(raiz, nome), "rb") as pdf_extraido:
+                    yield nome, pdf_extraido.read()
+
+
+def sincronizar_notas_fiscais_mip_lote_em_andamento():
+    """Botão "Sincronizar Notas Fiscais dos INEPs" (RN-XXX, a formalizar
+    pelo Orquestrador em business_rules.md; pedido do usuário,
+    2026-09-24), tela "Administrador > Relatório EACE (MIP)": lê o .zip/
+    .rar ativo de Notas Fiscais (`NotasFiscaisMip`), extrai o(s) INEP(s)
+    de dentro de cada PDF (`extrair_ineps_nota_fiscal_mip`) e grava o PDF
+    correspondente em cada `Escola` (`Escola.substituir_nota_fiscal_mip`)
+    — só nos INEPs de um `Lote` "Em Andamento" no momento do clique
+    (pedido explícito do usuário: "buscar dentro de MIP (LOTE) todos os
+    INEPS que o lote está com status de 'Em Andamento'"). Uma Nota que
+    referencia vários INEPs grava o MESMO PDF em cada Escola. INEP "Em
+    Andamento" sem Nota Fiscal correspondente no arquivo simplesmente não
+    é tocado (mantém o que já tinha, se houver, de uma sincronização
+    anterior) — nunca apaga uma Nota Fiscal já gravada só porque não
+    achou de novo nesta rodada.
+
+    Levanta `RelatorioEaceMipSincronizacaoError` sem nenhum arquivo ativo
+    (nada para sincronizar) ou se a extração do .rar falhar por falta do
+    binário `unrar`/`unar` no servidor (`_iterar_pdfs_do_arquivo_notas_
+    fiscais`)."""
+    notas_fiscais_ativa = NotasFiscaisMip.ativa()
+    if notas_fiscais_ativa is None:
+        raise RelatorioEaceMipSincronizacaoError(
+            "Nenhum arquivo de Notas Fiscais foi enviado ainda — envie um .zip/.rar antes de sincronizar."
+        )
+
+    mapa_inep_para_pdf = {}
+    total_pdfs_lidos = 0
+    total_pdfs_sem_inep_reconhecido = 0
+    for nome_pdf, conteudo_pdf in _iterar_pdfs_do_arquivo_notas_fiscais(notas_fiscais_ativa):
+        total_pdfs_lidos += 1
+        texto = _extrair_texto_pdf_bytes(conteudo_pdf)
+        ineps = extrair_ineps_nota_fiscal_mip(texto)
+        if not ineps:
+            total_pdfs_sem_inep_reconhecido += 1
+            logger.warning("Nota Fiscal (MIP) sem 'CÓDIGO INEPS' reconhecível: %s", nome_pdf)
+            continue
+        for inep in ineps:
+            mapa_inep_para_pdf[inep] = (nome_pdf, conteudo_pdf)
+
+    escolas_em_andamento = list(Escola.objects.filter(lotes__status=Lote.EM_ANDAMENTO).distinct())
+    total_sincronizadas = 0
+    for escola in escolas_em_andamento:
+        correspondencia = mapa_inep_para_pdf.get(escola.inep)
+        if correspondencia is None:
+            continue
+        nome_pdf, conteudo_pdf = correspondencia
+        escola.substituir_nota_fiscal_mip(conteudo_pdf, nome_pdf.rsplit("/", 1)[-1])
+        total_sincronizadas += 1
+
+    return {
+        "total_escolas_em_andamento": len(escolas_em_andamento),
+        "total_sincronizadas": total_sincronizadas,
+        "total_pdfs_lidos": total_pdfs_lidos,
+        "total_pdfs_sem_inep_reconhecido": total_pdfs_sem_inep_reconhecido,
+    }
 
 
 def _texto_cod_fornecedor(valor_bruto):

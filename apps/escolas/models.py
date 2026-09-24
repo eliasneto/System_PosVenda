@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.db import models
 from django.utils import timezone
 
@@ -138,6 +139,27 @@ class Escola(models.Model):
             "pós-venda — nunca marcado manualmente pela tela."
         ),
     )
+    # RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
+    # do usuário, 2026-09-24): PDF da Nota Fiscal deste INEP, recortado do
+    # .zip/.rar de Notas Fiscais ativo (`NotasFiscaisMip`, tela
+    # "Administrador > Relatório EACE (MIP)") pelo botão "Sincronizar
+    # Notas Fiscais dos INEPs" — só sincroniza INEPs de um `Lote` "Em
+    # Andamento" no momento do clique (`apps.escolas.services.
+    # sincronizar_notas_fiscais_mip_lote_em_andamento`), casando pelo
+    # "CÓDIGO INEPS" de dentro do PDF (uma Nota pode ter vários INEPs —
+    # o mesmo PDF é gravado em cada Escola que ela referencia). Pedido
+    # explícito do usuário: fica disponível para download em QUALQUER
+    # Status (MIP) depois de sincronizado, não só em "Em Andamento" —
+    # por isso vive direto na Escola, não preso ao Lote/status atual.
+    nota_fiscal_mip = models.FileField(
+        "Nota Fiscal (MIP)",
+        upload_to="notas_fiscais_mip/escolas/%Y/%m/",
+        max_length=255,
+        blank=True,
+    )
+    nota_fiscal_mip_sincronizada_em = models.DateTimeField(
+        "Nota Fiscal (MIP) sincronizada em", null=True, blank=True
+    )
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
     atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
 
@@ -164,6 +186,20 @@ class Escola(models.Model):
     def save(self, *args, **kwargs):
         self.recalcular_status_conexao()
         super().save(*args, **kwargs)
+
+    def substituir_nota_fiscal_mip(self, conteudo_pdf, nome_arquivo):
+        """Grava/substitui a Nota Fiscal (MIP) deste INEP (pedido do
+        usuário, 2026-09-24) — mesmo padrão de arquivo único das outras
+        substituições do app (`Lote.substituir_notas_fiscais_zip`,
+        `PlanilhaRelatorioEaceMip.substituir`): apaga o PDF anterior do
+        disco antes de gravar o novo. Chamado por `apps.escolas.services.
+        sincronizar_notas_fiscais_mip_lote_em_andamento`, nunca por
+        upload manual (não existe tela para isso, RN-XXX)."""
+        if self.nota_fiscal_mip:
+            self.nota_fiscal_mip.delete(save=False)
+        self.nota_fiscal_mip.save(nome_arquivo, ContentFile(conteudo_pdf), save=False)
+        self.nota_fiscal_mip_sincronizada_em = timezone.now()
+        self.save(update_fields=["nota_fiscal_mip", "nota_fiscal_mip_sincronizada_em"])
 
 
 class PlanilhaRelatorioEaceMip(models.Model):
@@ -473,3 +509,63 @@ class Lote(models.Model):
             "arquivo_notas_fiscais_zip", "nome_original_notas_fiscais_zip",
             "notas_fiscais_zip_enviado_por", "notas_fiscais_zip_enviado_em",
         ])
+
+
+class NotasFiscaisMip(models.Model):
+    """RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
+    do usuário, 2026-09-24): tela "Administrador > Relatório EACE (MIP)"
+    ganha um upload próprio para o .zip de Notas Fiscais que o financeiro
+    devolve do processo de faturamento do MIP — mesmo padrão de arquivo
+    único (singleton) já usado por `PlanilhaRelatorioEaceMip` (RN-069): um
+    novo envio substitui o anterior (`substituir`), sem histórico dos
+    arquivos anteriores.
+
+    Sem relação com o .zip de Notas Fiscais por LOTE já existente
+    (`Lote.arquivo_notas_fiscais_zip`, 2026-09-17) — aquele continua
+    servindo só para anexar/baixar o retorno de UM LOTE específico, na
+    tela "Projeto > MIP (LOTE)"; este é um upload avulso, só para guardar
+    o arquivo e informar a quantidade de Notas Fiscais (.pdf) lidas dele
+    (`apps.escolas.services.contar_notas_fiscais_zip`) — nenhuma tela lê o
+    conteúdo dos PDFs em si (cada um pode referenciar vários INEPs, sem
+    relação de 1 para 1 com `Escola`)."""
+
+    arquivo = models.FileField("Arquivo", upload_to="notas_fiscais_mip/")
+    nome_original = models.CharField("Nome do arquivo", max_length=255)
+    quantidade_notas_fiscais = models.PositiveIntegerField("Quantidade de Notas Fiscais")
+    enviado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Enviado por",
+    )
+    enviado_em = models.DateTimeField("Enviado em", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Notas Fiscais (MIP)"
+        verbose_name_plural = "Notas Fiscais (MIP)"
+
+    def __str__(self):
+        return f"{self.nome_original} ({self.quantidade_notas_fiscais} nota(s) fiscal(is))"
+
+    @classmethod
+    def substituir(cls, arquivo, quantidade_notas_fiscais, usuario):
+        """Novo upload substitui o arquivo ativo anterior — no máximo 1
+        registro por vez, mesmo padrão de `PlanilhaRelatorioEaceMip.
+        substituir` (RN-021)."""
+        for antiga in cls.objects.all():
+            antiga.arquivo.delete(save=False)
+            antiga.delete()
+        return cls.objects.create(
+            arquivo=arquivo,
+            nome_original=arquivo.name,
+            quantidade_notas_fiscais=quantidade_notas_fiscais,
+            enviado_por=usuario,
+        )
+
+    @classmethod
+    def ativa(cls):
+        """Único registro ativo, se houver — `None` quando nenhum arquivo
+        foi enviado ainda."""
+        return cls.objects.first()

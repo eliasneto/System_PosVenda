@@ -9,31 +9,88 @@ try:
 except ImportError:
     openpyxl = None
 
+# `rarfile` (pedido do usuário, 2026-09-24: sistema precisa aceitar
+# também .rar, não só .zip) — mesmo padrão de import opcional do
+# `openpyxl` acima: `None` quando a lib não está instalada, tratado como
+# erro de validação (não erro 500) em `_validar_zip_ou_rar`.
+try:
+    import rarfile
+except ImportError:
+    rarfile = None
+
 from .models import PlanilhaRelatorioEaceMip
-from .services import aba_relatorio_eace_mip_com_colunas
+from .services import aba_relatorio_eace_mip_com_colunas, contar_notas_fiscais_rar, contar_notas_fiscais_zip
+
+
+def _validar_zip_ou_rar(arquivo):
+    """Validação compartilhada por `LoteNotasFiscaisZipUploadForm` e
+    `NotasFiscaisMipUploadForm` (pedido do usuário, 2026-09-24: aceitar
+    .rar além de .zip) — extensão + conteúdo de verdade (`zipfile.
+    is_zipfile`/`rarfile.is_rarfile`). Levanta `forms.ValidationError`;
+    quem chama decide se ainda precisa contar as Notas Fiscais depois."""
+    nome = arquivo.name.lower()
+    if nome.endswith(".zip"):
+        if not zipfile.is_zipfile(arquivo):
+            raise forms.ValidationError("Não foi possível ler o arquivo — verifique se é um .zip válido.")
+        arquivo.seek(0)
+        return
+    if nome.endswith(".rar"):
+        if rarfile is None:
+            raise forms.ValidationError("Dependência 'rarfile' não instalada no servidor.")
+        if not rarfile.is_rarfile(arquivo):
+            raise forms.ValidationError("Não foi possível ler o arquivo — verifique se é um .rar válido.")
+        arquivo.seek(0)
+        return
+    raise forms.ValidationError("Envie um arquivo .zip ou .rar.")
 
 
 class LoteNotasFiscaisZipUploadForm(forms.Form):
-    """Pedido do usuário (2026-09-17): upload do .zip de Notas Fiscais que
-    o financeiro devolve para todo o LOTE de uma vez, tela "Projeto > MIP
-    (LOTE)" — 1 arquivo por LOTE, substituível (`Lote.substituir_notas_
-    fiscais_zip`). Validação leve (extensão + `zipfile.is_zipfile`), sem
-    exigir nenhum conteúdo/estrutura interna do .zip — diferente da
-    Planilha EACE (MIP), aqui o sistema só guarda o arquivo para download,
-    não lê nada de dentro dele."""
+    """Pedido do usuário (2026-09-17): upload do .zip/.rar de Notas
+    Fiscais que o financeiro devolve para todo o LOTE de uma vez, tela
+    "Projeto > MIP (LOTE)" — 1 arquivo por LOTE, substituível (`Lote.
+    substituir_notas_fiscais_zip`). Validação leve (`_validar_zip_ou_rar`
+    — extensão + `zipfile.is_zipfile`/`rarfile.is_rarfile`), sem exigir
+    nenhum conteúdo/estrutura interna do arquivo — diferente da Planilha
+    EACE (MIP), aqui o sistema só guarda o arquivo para download, não lê
+    nada de dentro dele."""
 
     arquivo = forms.FileField(
-        label="Notas Fiscais (.zip)",
-        widget=forms.ClearableFileInput(attrs={"class": "sr-only", "accept": ".zip"}),
+        label="Notas Fiscais (.zip/.rar)",
+        widget=forms.ClearableFileInput(attrs={"class": "sr-only", "accept": ".zip,.rar"}),
     )
 
     def clean_arquivo(self):
         arquivo = self.cleaned_data["arquivo"]
-        if not arquivo.name.lower().endswith(".zip"):
-            raise forms.ValidationError("Envie um arquivo .zip.")
-        if not zipfile.is_zipfile(arquivo):
-            raise forms.ValidationError("Não foi possível ler o arquivo — verifique se é um .zip válido.")
-        arquivo.seek(0)
+        _validar_zip_ou_rar(arquivo)
+        return arquivo
+
+
+class NotasFiscaisMipUploadForm(forms.Form):
+    """RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
+    do usuário, 2026-09-24): upload avulso do .zip/.rar de Notas Fiscais
+    do MIP na tela "Administrador > Relatório EACE (MIP)" — 1 arquivo por
+    vez, substituível (`NotasFiscaisMip.substituir`). Mesma validação leve
+    de `LoteNotasFiscaisZipUploadForm` (`_validar_zip_ou_rar`); a única
+    leitura feita aqui é contar quantos .pdf existem dentro do arquivo
+    (`apps.escolas.services.contar_notas_fiscais_zip`/
+    `contar_notas_fiscais_rar`, conforme a extensão), pra mostrar a
+    quantidade de Notas Fiscais lidas depois do upload — nenhum conteúdo
+    de PDF é aberto."""
+
+    arquivo = forms.FileField(
+        label="Notas Fiscais (.zip/.rar)",
+        widget=forms.ClearableFileInput(attrs={"class": "sr-only", "accept": ".zip,.rar"}),
+    )
+
+    def clean_arquivo(self):
+        arquivo = self.cleaned_data["arquivo"]
+        _validar_zip_ou_rar(arquivo)
+        nome = arquivo.name.lower()
+        if nome.endswith(".zip"):
+            quantidade = contar_notas_fiscais_zip(arquivo)
+        else:
+            quantidade = contar_notas_fiscais_rar(arquivo)
+        self.cleaned_data["quantidade_notas_fiscais"] = quantidade
         return arquivo
 
 
