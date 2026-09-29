@@ -86,6 +86,16 @@ urlpatterns = [
         name="ri_log_rpa_eace_marcar_manual",
     ),
     path(
+        "ri/logs-rpa-eace/<int:pk>/cancelar/",
+        views.ri_log_rpa_eace_cancelar_view,
+        name="ri_log_rpa_eace_cancelar",
+    ),
+    path(
+        "ri/<int:pk>/logs-rpa-eace/criar-manual/",
+        views.ri_log_rpa_eace_criar_manual_view,
+        name="ri_log_rpa_eace_criar_manual",
+    ),
+    path(
         "inep/<str:inep>/logs-rpa-eace/status/",
         views.ri_logs_rpa_eace_status_view,
         name="ri_logs_rpa_eace_status",

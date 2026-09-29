@@ -56,7 +56,8 @@ ficam intactos. `existe_log_ativo` continua calculado (usado em
 `ContextoLogsRpaEaceTests`) mas não liga mais polling aqui.
 {% endcomment %}
 <div id="logs-rpa-eace-{{ ri.pk }}" {% if oob %}hx-swap-oob="true"{% endif %}>
-{% if documentos_pdf %}
+{% comment %}Pedido do usuário (2026-09-25): com o RI em "Faturamento Concluído", "Validar Notas Fiscais" só para o Administrador.{% endcomment %}
+{% if documentos_pdf and not ri.faturamento_encerrado or documentos_pdf and request.user.is_administrador %}
 {% comment %}
 Botão "Validar Notas Fiscais" (a formalizar pelo Orquestrador em
 business_rules.md/checklist.md): confere se o financeiro faturou a Nota
@@ -91,6 +92,8 @@ comunicação, abaixo — este botão não bloqueia o fluxo do RI.
         Notas Fiscais para anexar no portal EACE
     </h2>
 
+    <div class="mb-4">{% include "ri/_log_rpa_eace_criar_manual.html" %}</div>
+
     <div class="flex flex-col gap-4">
         {% for log in logs_rpa_eace %}
         {% include "ri/_log_rpa_eace_card.html" with log=log %}
@@ -113,8 +116,16 @@ comunicação, abaixo — este botão não bloqueia o fluxo do RI.
             <p class="text-xs text-gray-500 dark:text-gray-400 mt-2 leading-relaxed">
                 Para seguir, reenvie o e-mail ao financeiro pedindo o reenvio com o PDF e o XML da Nota Fiscal anexados.
             </p>
+            <div class="mt-4">{% include "ri/_log_rpa_eace_criar_manual.html" %}</div>
         </div>
     </div>
+</div>
+{% elif ri and not request.user.is_visualizador %}
+<div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-6 mt-6">
+    <h2 class="text-sm font-black uppercase italic text-gray-400 dark:text-gray-500 mb-4">
+        Notas Fiscais para anexar no portal EACE
+    </h2>
+    {% include "ri/_log_rpa_eace_criar_manual.html" %}
 </div>
 {% endif %}
 </div>

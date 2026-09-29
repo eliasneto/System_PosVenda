@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import views, views_rpa_mip_lote, views_validacao_nf_mip
 
 urlpatterns = [
     path("mip/", views.mip_inep_view, name="mip_inep"),
@@ -21,9 +21,30 @@ urlpatterns = [
     path("mip/lote/<int:pk>/status/", views.mip_lote_status_update_view, name="mip_lote_status_update"),
     path("mip/lote/<int:pk>/desfazer/", views.mip_lote_desfazer_view, name="mip_lote_desfazer"),
     path(
+        "mip/lote/<int:pk>/enviar-nf-portal/",
+        views_rpa_mip_lote.rpa_mip_lote_enviar_view,
+        name="rpa_mip_lote_enviar",
+    ),
+    path(
+        "mip/lote/<int:pk>/enviar-nf-portal/status/",
+        views_rpa_mip_lote.rpa_mip_lote_status_view,
+        name="rpa_mip_lote_status",
+    ),
+    path(
         "mip/lote/<int:pk>/notas-fiscais/",
         views.mip_lote_notas_fiscais_upload_view,
         name="mip_lote_notas_fiscais_upload",
+    ),
+    path("validacao-mip-nf/", views_validacao_nf_mip.validacao_nf_mip_view, name="validacao_nf_mip"),
+    path(
+        "validacao-mip-nf/rodar/",
+        views_validacao_nf_mip.validacao_nf_mip_rodar_view,
+        name="validacao_nf_mip_rodar",
+    ),
+    path(
+        "validacao-mip-nf/status/",
+        views_validacao_nf_mip.validacao_nf_mip_status_view,
+        name="validacao_nf_mip_status",
     ),
     path("mip/<str:inep>/", views.mip_detail_view, name="mip_detail"),
     path("mip/<str:inep>/status/", views.mip_status_update_view, name="mip_status_update"),
@@ -33,9 +54,9 @@ urlpatterns = [
         name="mip_item_ixc_somente_servico_salvar",
     ),
     path(
-        "mip/lado-ixc/servico/<int:item_pk>/excluir/",
-        views.mip_item_ixc_somente_servico_delete_view,
-        name="mip_item_ixc_somente_servico_delete",
+        "mip/lado-ixc/<int:item_pk>/excluir/",
+        views.mip_item_ixc_delete_view,
+        name="mip_item_ixc_delete",
     ),
     path(
         "administrador/relatorio-eace-mip/",

@@ -32,19 +32,20 @@ class Command(BaseCommand):
             )
             raise CommandError(str(erro))
 
-        # RN-016: resposta no padrão e fora do padrão avançam o status do
-        # RI (a diferença é só anexar ou não NF+XML) — "RIs com status
-        # alterado" soma as duas, para o resumo não subestimar o que a
-        # passada realmente mudou.
-        status_alterado = resultado["identificados"] + resultado["fora_do_padrao"]
+        # RN-016: resposta no padrão e fora do padrão são processadas (a
+        # diferença é só anexar ou não NF+XML) — "Respostas processadas"
+        # soma as duas. Revisão 2026-09-25: o status só avança quando o RI
+        # estava em "Aguardando financeiro", então não é mais "RIs com
+        # status alterado".
+        respostas_processadas = resultado["identificados"] + resultado["fora_do_padrao"]
         self.stdout.write(
             self.style.SUCCESS(
                 f"E-mails avaliados: {resultado['processados']}; "
-                f"RIs com status alterado: {status_alterado} "
+                f"Respostas processadas: {respostas_processadas} "
                 f"(documentos anexados: {resultado['identificados']}; "
                 f"fora do padrão: {resultado['fora_do_padrao']}); "
                 f"sem código de rastreio: {resultado['sem_codigo']}; "
-                f"sem RI aguardando financeiro: {resultado['sem_ri_aguardando']}; "
+                f"sem RI para o INEP: {resultado['sem_ri_aguardando']}; "
                 f"remetente fora do domínio do financeiro (RN-016): "
                 f"{resultado['remetente_nao_reconhecido']}; "
                 f"duplicados (já processados antes): {resultado['duplicados']}."

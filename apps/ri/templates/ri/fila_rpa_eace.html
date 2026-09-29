@@ -26,7 +26,7 @@ lista inteira de logs.
         <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
             Fila
         </h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal/XML no portal EACE, RN-058) — todas as escolas de uma vez</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal no portal EACE, RN-058) — RI e MIP (LOTE), 1 por vez</p>
     </div>
 
     <div class="flex gap-4">
@@ -88,6 +88,7 @@ lista inteira de logs.
         <table class="min-w-full text-left border-collapse">
             <thead>
                 <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    <th class="px-4 py-2">Tipo</th>
                     <th class="px-4 py-2">Status</th>
                     <th class="px-4 py-2">Escola</th>
                     <th class="px-4 py-2">Nota fiscal</th>
@@ -99,6 +100,7 @@ lista inteira de logs.
             <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
                 {% for log in page_obj %}
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all divide-x divide-gray-300 dark:divide-gray-700">
+                    <td class="px-4 py-2"><span class="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-gray-900 text-pv-yellow dark:bg-gray-700">RI</span></td>
                     <td class="px-4 py-2">
                         {% if log.resultado == 'processando' %}
                         <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-purple-600 text-purple-700 dark:text-purple-400 dark:border-purple-500 animate-pulse whitespace-nowrap">⚙ Processando</span>
@@ -146,7 +148,7 @@ lista inteira de logs.
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="6" class="px-8 py-20 text-center">
+                    <td colspan="7" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="list-checks" class="w-8 h-8"></i>
@@ -182,6 +184,103 @@ lista inteira de logs.
             {% endif %}
             {% if page_obj.has_next %}
             <a href="?page={{ page_obj.next_page_number }}{% if inep_filtro %}&inep={{ inep_filtro|urlencode }}{% endif %}&status={{ status_filtro|urlencode }}{% if data_processamento_filtro %}&data_processamento={{ data_processamento_filtro|date:'Y-m-d' }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Pedido do usuário (2026-09-29, RN-XXX a formalizar pelo Orquestrador):
+     a mesma fila (mesmo worker, 1 por vez - RN-058) leva também o envio
+     da NF dos LOTEs do MIP (`apps.escolas.rpa_mip_lote`, log próprio).
+     Mesmos filtros de cima; paginação própria (`?page_mip=`). -->
+<h2 class="text-xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter mt-12 mb-4">Envios do MIP (LOTE)</h2>
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    <th class="px-4 py-2">Tipo</th>
+                    <th class="px-4 py-2">Status</th>
+                    <th class="px-4 py-2">LOTE</th>
+                    <th class="px-4 py-2">Nota fiscal</th>
+                    <th class="px-4 py-2">Detalhe</th>
+                    <th class="px-4 py-2">Quando</th>
+                    <th class="px-4 py-2">Ação</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
+                {% for log in page_mip %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all divide-x divide-gray-300 dark:divide-gray-700">
+                    <td class="px-4 py-2"><span class="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-pv-yellow text-pv-black">MIP</span></td>
+                    <td class="px-4 py-2">
+                        {% if log.resultado == 'processando' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-purple-600 text-purple-700 dark:text-purple-400 dark:border-purple-500 animate-pulse whitespace-nowrap">⚙ Processando</span>
+                        {% elif log.resultado == 'na_fila' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-blue-600 text-blue-700 dark:text-blue-400 dark:border-blue-500 whitespace-nowrap">⏳ Na fila</span>
+                        {% elif log.resultado == 'sucesso' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-green-600 text-green-700 dark:text-green-400 dark:border-green-500 whitespace-nowrap">✓ Processado</span>
+                        {% else %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-red-600 text-red-700 dark:text-red-400 dark:border-red-500 whitespace-nowrap">✗ Erro</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2">
+                        <span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">{{ log.lote }}</span>
+                        <span class="block text-[10px] text-gray-400 dark:text-gray-500 font-bold">{{ log.municipio }}/{{ log.lote.estado }}</span>
+                    </td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ log.nome_nota_fiscal|slice:"-30:" }}</td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold max-w-xs">
+                        {% if log.resultado == 'processando' %}
+                        <div class="flex flex-col gap-1">
+                            <div class="w-32 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                                <div class="h-full bg-purple-600 dark:bg-purple-500" style="width: {{ log.progresso_pct }}%"></div>
+                            </div>
+                            <span>{{ log.progresso_pct }}%{% if log.etapa_atual %} — {{ log.etapa_atual }}{% endif %}</span>
+                        </div>
+                        {% elif log.resultado == 'na_fila' %}
+                        Aguardando a vez{% if log.motivo_erro %} (reprocessando: {{ log.motivo_erro_legivel }}){% endif %}
+                        {% elif log.resultado == 'sucesso' %}
+                        Pedido {{ log.pedido|default:"—" }} — R$ {{ log.valor_portal|default:"—" }}
+                        {% else %}
+                        <span class="text-red-500 dark:text-red-400">{{ log.motivo_erro_legivel|default:"—" }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold whitespace-nowrap">
+                        {% if log.resultado == 'na_fila' %}{{ log.enfileirado_em|date:"d/m/Y H:i" }}
+                        {% elif log.executado_em %}{{ log.executado_em|date:"d/m/Y H:i" }}
+                        {% else %}{{ log.criado_em|date:"d/m/Y H:i" }}{% endif %}
+                    </td>
+                    <td class="px-4 py-2">
+                        <a href="{% url 'mip_lote_inep' %}?estado={{ log.lote.estado|urlencode }}&municipio={{ log.lote.municipio|urlencode }}" class="text-[11px] font-black uppercase text-gray-500 dark:text-gray-400 hover:text-pv-yellow transition whitespace-nowrap">
+                            Ver LOTE →
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" class="px-8 py-10 text-center text-xs font-bold text-gray-400 dark:text-gray-500">
+                        Nenhum envio do MIP {% if status_filtro == "andamento" %}em andamento{% else %}com esse filtro{% endif %}.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if page_mip.has_other_pages %}
+    <div class="bg-gray-50/50 dark:bg-gray-800/40 px-8 py-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest">
+            Página {{ page_mip.number }} de {{ page_mip.paginator.num_pages }}
+        </span>
+        <div class="flex gap-2">
+            {% if page_mip.has_previous %}
+            <a href="?page_mip={{ page_mip.previous_page_number }}{% if inep_filtro %}&inep={{ inep_filtro|urlencode }}{% endif %}&status={{ status_filtro|urlencode }}{% if data_processamento_filtro %}&data_processamento={{ data_processamento_filtro|date:'Y-m-d' }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+            {% if page_mip.has_next %}
+            <a href="?page_mip={{ page_mip.next_page_number }}{% if inep_filtro %}&inep={{ inep_filtro|urlencode }}{% endif %}&status={{ status_filtro|urlencode }}{% if data_processamento_filtro %}&data_processamento={{ data_processamento_filtro|date:'Y-m-d' }}{% endif %}" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
                 <i data-lucide="chevron-right" class="w-5 h-5"></i>
             </a>
             {% endif %}

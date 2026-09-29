@@ -9,14 +9,15 @@ o outro fragmento reposto na resposta (badge daqui, não o do grid).
 RN-013/RN-051: "Envio de Email para Faturamento" só aparece na lista
 quando as regras de negócio do envio estão satisfeitas hoje (KIT, Data
 de Ativação, Município, Estado, CNPJ, CNPJ Fictício, sem divergência
-aberta) — filtrado em `status_ri_opcoes_disponiveis` (view). RN-020: com
-o RI em "Faturamento Concluído", o Analista não pode trocar (mesmo
-critério de `_status_form.html`; backend também recusa).
+aberta) — filtrado em `status_ri_opcoes_disponiveis` (view). Com o INEP
+no MIP o status fica só leitura (mesmo critério de `_status_form.html`;
+backend também recusa).
 {% endcomment %}
 <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white" id="status-pill-{{ ri.pk }}" hx-swap-oob="true">
     <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Status do RI</p>
-    {% if ri.status == 'faturamento_concluido' and not usuario_administrador %}
-    <p class="text-sm font-black italic text-pv-yellow" title="Só Administrador altera o status a partir de &quot;Faturamento Concluído&quot; (RN-020)">
+    {% if ri.escola.status_mip %}
+    {% comment %}Pedido do usuário (2026-09-26): INEP no MIP — status do RI controlado pelo MIP (backend também recusa).{% endcomment %}
+    <p class="text-sm font-black italic text-pv-yellow" title="INEP no MIP: altere o Status (MIP) na tela do MIP">
         {{ ri.get_status_display }}
     </p>
     {% else %}
@@ -35,5 +36,9 @@ critério de `_status_form.html`; backend também recusa).
             {% endfor %}
         </select>
     </form>
+    {% endif %}
+    {% comment %}Pedido do usuário (2026-09-26): Status (MIP) no RI só como rótulo.{% endcomment %}
+    {% if ri.escola.status_mip %}
+    <p class="text-[10px] font-black uppercase text-amber-400 mt-1" title="Status (MIP)">MIP: {{ ri.escola.get_status_mip_display }}</p>
     {% endif %}
 </div>

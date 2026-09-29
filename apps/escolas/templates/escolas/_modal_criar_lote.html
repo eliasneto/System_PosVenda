@@ -1,3 +1,4 @@
+{% load humanize %}
 {% comment %}
 FEAT-050 (a formalizar pelo Orquestrador em business_rules.md; pedido do
 usuário, 2026-09-14): modal de revisão antes de criar o LOTE — "eu queria
@@ -17,8 +18,21 @@ mesmo não sendo um modal de e-mail (o atributo só abre/fecha por ID, não
 tem nada específico de e-mail); evita duplicar JS igual em `base.html`
 para um 3º modal com a mesma mecânica.
 
-Parâmetros: `escolas_elegiveis_lote` (lista de `Escola`), `estado_filtro`,
-`municipio_filtro`, `data_inicial_validacao`, `data_final_validacao`.
+RN a formalizar (pedido do usuário, 2026-09-24): INEP rateado (mesmo INEP
+com mais de 1 Cidade na planilha da EACE, ex.: "Brasília"/"Brasília2",
+`apps.escolas.services.escola_rateada_relatorio_eace_mip`) ganha uma seta
+(`data-toggle-rateio`) ao lado do nome — ao clicar, mostra o detalhe do
+rateio (Cidade + valor de cada grupo,
+`apps.escolas.services.rateio_relatorio_eace_mip_da_escola`). Só
+informativo aqui: não desmarca nem separa o INEP do LOTE — a divisão de
+verdade acontece na hora de baixar a planilha de faturamento
+(`apps.escolas.services.planilhas_faturamento_implantacao_lote`).
+
+Parâmetros: `escolas_elegiveis_lote` (lista de `Escola`, usada só para o
+contador), `escolas_elegiveis_lote_detalhe` (lista de dicts
+`{"escola": Escola, "rateio": [...]}`, usada para renderizar cada linha),
+`estado_filtro`, `municipio_filtro`, `data_inicial_validacao`,
+`data_final_validacao`.
 {% endcomment %}
 <div id="modal-criar-lote" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email>
     <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
@@ -49,15 +63,65 @@ Parâmetros: `escolas_elegiveis_lote` (lista de `Escola`), `estado_filtro`,
                 </div>
             </div>
 
+            {% comment %}
+            Busca por INEP (pedido do usuário, 2026-09-25): só filtra o que
+            aparece na lista — não marca/desmarca nada; INEP escondido pela
+            busca continua indo para o LOTE se estiver marcado.
+            {% endcomment %}
+            <div class="px-6 pt-4 shrink-0">
+                <label for="busca-inep-lote" class="sr-only">Buscar pelo número do INEP</label>
+                <div class="flex gap-2">
+                    <div class="relative flex-1">
+                        <i data-lucide="search" class="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                        <input id="busca-inep-lote" type="search" inputmode="numeric" autocomplete="off"
+                               placeholder="Número do INEP"
+                               class="w-full pl-9 pr-3 py-2 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none focus:ring-2 focus:ring-amber-400 text-xs font-bold text-gray-800 dark:text-gray-100">
+                    </div>
+                    <button type="button" id="btn-buscar-inep-lote"
+                            class="px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-xl hover:bg-gray-800 transition inline-flex items-center gap-2 shrink-0">
+                        <i data-lucide="search" class="w-3.5 h-3.5"></i>
+                        Buscar
+                    </button>
+                </div>
+                <p id="busca-inep-lote-vazio" class="hidden text-[11px] text-gray-400 dark:text-gray-500 italic mt-2">Nenhum INEP encontrado para essa busca.</p>
+            </div>
+
             <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0">
                 <div class="space-y-1">
-                    {% for escola in escolas_elegiveis_lote %}
-                    <label class="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer">
-                        <input type="checkbox" name="escola_ids" value="{{ escola.pk }}" checked
-                               class="checkbox-lote-inep w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-pv-yellow focus:ring-amber-400 shrink-0">
-                        <span class="text-xs font-bold text-gray-800 dark:text-gray-100">{{ escola.inep }}</span>
-                        <span class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ escola.nome }}</span>
-                    </label>
+                    {% for item in escolas_elegiveis_lote_detalhe %}
+                    <div data-rateio-linha data-inep="{{ item.escola.inep }}">
+                        <div class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800">
+                            <label class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                                <input type="checkbox" name="escola_ids" value="{{ item.escola.pk }}" checked
+                                       class="checkbox-lote-inep w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-pv-yellow focus:ring-amber-400 shrink-0">
+                                <span class="text-xs font-bold text-gray-800 dark:text-gray-100 shrink-0">{{ item.escola.inep }}</span>
+                                <span class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ item.escola.nome }}</span>
+                            </label>
+                            <span class="text-xs font-black text-gray-900 dark:text-gray-100 shrink-0 tabular-nums" title="Valor Total (IXC) do INEP">
+                                {% if item.valor_total is not None %}R$ {{ item.valor_total|intcomma }}{% else %}—{% endif %}
+                            </span>
+                            {% if item.rateio %}
+                            <button type="button" data-toggle-rateio
+                                    title="INEP rateado entre cidades — ver detalhe"
+                                    class="inline-flex items-center justify-center w-6 h-6 text-amber-500 dark:text-amber-400 shrink-0 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20 transition">
+                                <i data-lucide="chevron-down" class="w-3.5 h-3.5 transition-transform" data-rateio-chevron></i>
+                            </button>
+                            {% endif %}
+                        </div>
+                        {% if item.rateio %}
+                        <div class="hidden ml-9 mr-3 mb-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/10 rounded-xl space-y-1" data-rateio-detalhe>
+                            <p class="text-[9px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">Rateado entre {{ item.rateio|length }} cidades</p>
+                            {% for linha in item.rateio %}
+                            <div class="flex items-center justify-between gap-3 text-[11px]">
+                                <span class="font-bold text-gray-700 dark:text-gray-300 truncate">{{ linha.cidade }}</span>
+                                <span class="text-gray-600 dark:text-gray-400 shrink-0">
+                                    {% if linha.valor is not None %}R$ {{ linha.valor|intcomma }}{% if linha.incompleto %}*{% endif %}{% else %}—{% endif %}
+                                </span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
                     {% empty %}
                     <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum INEP elegível.</p>
                     {% endfor %}
@@ -112,5 +176,51 @@ Parâmetros: `escolas_elegiveis_lote` (lista de `Escola`), `estado_filtro`,
             atualizarContador();
         });
     }
+
+    // Busca por INEP (pedido do usuário, 2026-09-25): esconde as linhas
+    // cujo INEP não contém o texto digitado — filtra ao digitar e no botão
+    // "Buscar"; Enter no campo não envia o form de criar LOTE.
+    var busca = document.getElementById('busca-inep-lote');
+    var botaoBuscar = document.getElementById('btn-buscar-inep-lote');
+    var avisoVazio = document.getElementById('busca-inep-lote-vazio');
+    var linhas = document.querySelectorAll('#modal-criar-lote [data-inep]');
+
+    function filtrarPorInep() {
+        if (!busca) return;
+        var termo = busca.value.replace(/\D/g, '');
+        var visiveis = 0;
+        linhas.forEach(function (linha) {
+            var mostrar = !termo || linha.getAttribute('data-inep').indexOf(termo) !== -1;
+            linha.classList.toggle('hidden', !mostrar);
+            if (mostrar) visiveis++;
+        });
+        if (avisoVazio) avisoVazio.classList.toggle('hidden', visiveis > 0 || !linhas.length);
+    }
+
+    if (busca) {
+        busca.addEventListener('input', filtrarPorInep);
+        busca.addEventListener('keydown', function (evento) {
+            if (evento.key === 'Enter') {
+                evento.preventDefault();
+                filtrarPorInep();
+            }
+        });
+    }
+    if (botaoBuscar) botaoBuscar.addEventListener('click', filtrarPorInep);
+
+    // RN a formalizar (pedido do usuário, 2026-09-24): seta que expande o
+    // detalhe do rateio (Cidade + valor de cada grupo) de um INEP rateado
+    // — só mostra/esconde, não afeta o checkbox nem o envio do form.
+    document.querySelectorAll('#modal-criar-lote [data-toggle-rateio]').forEach(function (botao) {
+        botao.addEventListener('click', function () {
+            var linha = botao.closest('[data-rateio-linha]');
+            var detalhe = linha && linha.querySelector('[data-rateio-detalhe]');
+            if (!detalhe) return;
+            var expandido = !detalhe.classList.contains('hidden');
+            detalhe.classList.toggle('hidden', expandido);
+            var chevron = botao.querySelector('[data-rateio-chevron]');
+            if (chevron) chevron.classList.toggle('rotate-180', !expandido);
+        });
+    });
 })();
 </script>

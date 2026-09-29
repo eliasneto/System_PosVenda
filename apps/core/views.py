@@ -8,11 +8,13 @@ from django.db import connections
 from django.http import FileResponse, Http404, HttpResponseForbidden, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render, resolve_url
 
+from apps.ri.models import Ri
 from apps.ri.services import (
     montar_dashboard_equipamentos,
     montar_dashboard_financeiro,
     montar_faturamento_por_estado,
     montar_faturamento_por_municipio,
+    montar_faturamento_por_status_ri,
     montar_kits_instalados_por_estado,
     montar_produtos_complementares_por_estado,
 )
@@ -66,6 +68,39 @@ def home(request):
         municipio = None
 
     contexto = montar_dashboard_financeiro(estado=estado, municipio=municipio, kit=kit, produto=produto)
+    # Pedido do usuário (2026-09-25): 1 card por status do RI (Lado Relatório EACE),
+    # com os mesmos filtros dos cards acima. Clicar num card (`?status_ri=`)
+    # abre aquele status por Estado; clicar de novo fecha. Clicar numa UF
+    # (`?status_uf=`) abre, dentro dela, os INEPs daquele status com o valor
+    # de cada um (pedido do usuário, mesmo dia — não filtra o dashboard nem
+    # mostra municípios); clicar de novo na UF fecha.
+    status_ri = (request.GET.get("status_ri") or "").strip()
+    if status_ri not in dict(Ri.STATUS_CHOICES):
+        status_ri = None
+    status_uf = None
+    if status_ri:
+        status_uf = (request.GET.get("status_uf") or "").strip()[:10] or None
+    faturamento_status = montar_faturamento_por_status_ri(
+        estado=estado, municipio=municipio, kit=kit, produto=produto,
+        status_selecionado=status_ri, uf_selecionada=status_uf,
+    )
+    filtros_base = {"estado": estado, "municipio": municipio, "kit": kit, "produto": produto}
+    for card in faturamento_status["cards"]:
+        card["selecionado"] = card["status"] == status_ri
+        params = {k: v for k, v in filtros_base.items() if v}
+        if not card["selecionado"]:
+            params["status_ri"] = card["status"]
+        card["href"] = f"?{urlencode(params)}"
+    for linha in faturamento_status["por_estado"]:
+        linha["selecionado"] = linha["estado"] == status_uf
+        params = {**{k: v for k, v in filtros_base.items() if v}, "status_ri": status_ri}
+        if not linha["selecionado"]:
+            params["status_uf"] = linha["estado"]
+        linha["href"] = f"?{urlencode(params)}"
+    contexto["faturamento_por_status_ri"] = faturamento_status["cards"]
+    contexto["faturamento_status_ri_por_estado"] = faturamento_status["por_estado"]
+    contexto["status_ri_selecionado"] = status_ri
+    contexto["status_ri_selecionado_rotulo"] = dict(Ri.STATUS_CHOICES).get(status_ri)
 
     # Os gráficos "Faturado por Estado"/"por Município" comparam vários
     # estados/municípios ao mesmo tempo — não fazem sentido já filtrados

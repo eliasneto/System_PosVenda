@@ -53,9 +53,14 @@ class Escola(models.Model):
     EM_FATURAMENTO_LOTE = "em_faturamento_lote"
     FATURAMENTO_CONCLUIDO = "faturamento_concluido"
     STATUS_MIP_CHOICES = [
-        (EM_ANDAMENTO, "Em Andamento"),
+        # Pedido do usuário (2026-09-25): rótulo "Em Andamento MIP" para não
+        # confundir com o "Em Andamento" do RI (Equipamentos); valor gravado
+        # continua "em_andamento".
+        (EM_ANDAMENTO, "Em Andamento MIP"),
         (AGUARDANDO_VALIDACAO_EACE, "Aguardando Validação EACE"),
-        (AGUARDANDO_ENCERRAMENTO_LOTE, "Aguardando Encerramento LOTE"),
+        # Pedido do usuário (2026-09-26): "Aguardando Encerramento LOTE" saiu
+        # — o INEP entra no LOTE já "Em Andamento MIP" (constante mantida
+        # só para valor antigo).
         # (EMAIL_LOTE_ENVIADO, "Email em LOTE enviado"),  # e-mail do LOTE comentado (pedido do usuário, 2026-09-15)
         (EM_FATURAMENTO_LOTE, "Em Faturamento"),
         (FATURAMENTO_CONCLUIDO, "Processo Concluído"),
@@ -139,27 +144,6 @@ class Escola(models.Model):
             "pós-venda — nunca marcado manualmente pela tela."
         ),
     )
-    # RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
-    # do usuário, 2026-09-24): PDF da Nota Fiscal deste INEP, recortado do
-    # .zip/.rar de Notas Fiscais ativo (`NotasFiscaisMip`, tela
-    # "Administrador > Relatório EACE (MIP)") pelo botão "Sincronizar
-    # Notas Fiscais dos INEPs" — só sincroniza INEPs de um `Lote` "Em
-    # Andamento" no momento do clique (`apps.escolas.services.
-    # sincronizar_notas_fiscais_mip_lote_em_andamento`), casando pelo
-    # "CÓDIGO INEPS" de dentro do PDF (uma Nota pode ter vários INEPs —
-    # o mesmo PDF é gravado em cada Escola que ela referencia). Pedido
-    # explícito do usuário: fica disponível para download em QUALQUER
-    # Status (MIP) depois de sincronizado, não só em "Em Andamento" —
-    # por isso vive direto na Escola, não preso ao Lote/status atual.
-    nota_fiscal_mip = models.FileField(
-        "Nota Fiscal (MIP)",
-        upload_to="notas_fiscais_mip/escolas/%Y/%m/",
-        max_length=255,
-        blank=True,
-    )
-    nota_fiscal_mip_sincronizada_em = models.DateTimeField(
-        "Nota Fiscal (MIP) sincronizada em", null=True, blank=True
-    )
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
     atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
 
@@ -170,6 +154,20 @@ class Escola(models.Model):
 
     def __str__(self):
         return f"{self.inep} - {self.nome}"
+
+    @property
+    def status_mip_refletido_no_ri(self):
+        """Pedido do usuário (2026-09-25; a formalizar pelo Orquestrador em
+        business_rules.md): rótulo do Status (MIP) mostrado junto do status
+        do RI (tela do RI e grid de Equipamentos) — só para INEP dentro de
+        um LOTE ou em "Processo Concluído"; `None` nos demais. Usa
+        `self.lotes.all()` para aproveitar `prefetch_related("lotes")`
+        quando quem chama já fez (grid)."""
+        if not self.status_mip:
+            return None
+        if self.status_mip == self.FATURAMENTO_CONCLUIDO or list(self.lotes.all()):
+            return self.get_status_mip_display()
+        return None
 
     def recalcular_status_conexao(self):
         """RN-007: desconectado -> parcialmente conectado -> conectado,
@@ -187,19 +185,75 @@ class Escola(models.Model):
         self.recalcular_status_conexao()
         super().save(*args, **kwargs)
 
-    def substituir_nota_fiscal_mip(self, conteudo_pdf, nome_arquivo):
-        """Grava/substitui a Nota Fiscal (MIP) deste INEP (pedido do
-        usuário, 2026-09-24) — mesmo padrão de arquivo único das outras
-        substituições do app (`Lote.substituir_notas_fiscais_zip`,
-        `PlanilhaRelatorioEaceMip.substituir`): apaga o PDF anterior do
-        disco antes de gravar o novo. Chamado por `apps.escolas.services.
-        sincronizar_notas_fiscais_mip_lote_em_andamento`, nunca por
-        upload manual (não existe tela para isso, RN-XXX)."""
-        if self.nota_fiscal_mip:
-            self.nota_fiscal_mip.delete(save=False)
-        self.nota_fiscal_mip.save(nome_arquivo, ContentFile(conteudo_pdf), save=False)
-        self.nota_fiscal_mip_sincronizada_em = timezone.now()
-        self.save(update_fields=["nota_fiscal_mip", "nota_fiscal_mip_sincronizada_em"])
+    def adicionar_ou_substituir_nota_fiscal_mip(self, conteudo_pdf, nome_arquivo):
+        """Grava 1 Nota Fiscal (MIP) deste INEP em `NotaFiscalMip`
+        (abaixo) — pedido do usuário (2026-09-24): "vai ter INEPS que vai
+        receber mais de uma [Nota Fiscal], conforme esse caso de rateio"
+        (`escola_rateada_relatorio_eace_mip`, `apps.escolas.services`), 1
+        NF por fração/Cidade. Identificada pelo nome original do PDF
+        dentro do .zip/.rar: já existe uma NF desta Escola com esse mesmo
+        nome (mesma Nota, re-sincronizada) → SUBSTITUI (apaga o arquivo
+        anterior do disco antes de gravar o novo, mesmo padrão de sempre,
+        `Lote.substituir_notas_fiscais_zip`/`PlanilhaRelatorioEaceMip.
+        substituir`); nome nunca visto antes → ADICIONA como uma nova NF,
+        sem mexer nas já existentes desta Escola — nunca apaga uma NF só
+        porque uma rodada nova trouxe uma Nota diferente. Chamado por
+        `apps.escolas.services.sincronizar_notas_fiscais_mip_lote_em_
+        andamento`, nunca por upload manual (não existe tela para isso,
+        RN-XXX)."""
+        agora = timezone.now()
+        existente = self.notas_fiscais_mip.filter(nome_original=nome_arquivo).first()
+        if existente is not None:
+            existente.arquivo.delete(save=False)
+            existente.arquivo.save(nome_arquivo, ContentFile(conteudo_pdf), save=False)
+            existente.sincronizada_em = agora
+            existente.save(update_fields=["arquivo", "sincronizada_em"])
+            return existente
+        nova = NotaFiscalMip(escola=self, nome_original=nome_arquivo, sincronizada_em=agora)
+        nova.arquivo.save(nome_arquivo, ContentFile(conteudo_pdf), save=False)
+        nova.save()
+        return nova
+
+
+class NotaFiscalMip(models.Model):
+    """RN a formalizar pelo Orquestrador em business_rules.md (pedido do
+    usuário, 2026-09-24): 1 ou mais PDFs de Nota Fiscal deste INEP,
+    recortados do .zip/.rar de Notas Fiscais ativo (`NotasFiscaisMip`,
+    tela "Administrador > Relatório EACE (MIP)") pelo botão "Sincronizar
+    Notas Fiscais dos INEPs" — só sincroniza INEPs de um `Lote` "Em
+    Andamento" no momento do clique (`apps.escolas.services.
+    sincronizar_notas_fiscais_mip_lote_em_andamento`), casando pelo
+    "CÓDIGO INEPS" de dentro do PDF (uma Nota pode ter vários INEPs — o
+    mesmo PDF é gravado em cada Escola que ela referencia).
+
+    Substitui o antigo campo único `Escola.nota_fiscal_mip` (bug real
+    reportado pelo usuário: um INEP rateado — `escola_rateada_relatorio_
+    eace_mip`, mesmo INEP com mais de 1 Cidade na planilha da EACE —
+    recebe mais de 1 Nota Fiscal do financeiro, 1 por fração/Cidade; o
+    campo único perdia silenciosamente toda NF exceto a última
+    sincronizada) — uma Escola agora pode ter várias, nunca mais só 1.
+    Pedido explícito do usuário: continuam disponíveis para download em
+    QUALQUER Status (MIP), não só em "Em Andamento" — por isso vive presa
+    à Escola, não ao Lote/status atual."""
+
+    escola = models.ForeignKey(Escola, on_delete=models.CASCADE, related_name="notas_fiscais_mip")
+    arquivo = models.FileField(
+        "Arquivo", upload_to="notas_fiscais_mip/escolas/%Y/%m/", max_length=255
+    )
+    nome_original = models.CharField(
+        "Nome do arquivo",
+        max_length=255,
+        help_text="Nome do PDF dentro do .zip/.rar sincronizado — usado para reconhecer a mesma Nota numa rodada nova.",
+    )
+    sincronizada_em = models.DateTimeField("Sincronizada em")
+
+    class Meta:
+        verbose_name = "Nota Fiscal (MIP)"
+        verbose_name_plural = "Notas Fiscais (MIP)"
+        ordering = ["sincronizada_em"]
+
+    def __str__(self):
+        return f"{self.escola.inep} — {self.nome_original}"
 
 
 class PlanilhaRelatorioEaceMip(models.Model):
@@ -378,8 +432,8 @@ class Lote(models.Model):
     Estado/Município/Data início/Data fim gravados aqui são só o "rótulo"
     do lote (o filtro usado na hora da criação, exibido na tela "Projeto >
     MIP (LOTE)") — quem de fato compõe o lote são os INEPs em `escolas`.
-    Ao entrar aqui, cada INEP ganha `Escola.status_mip =
-    "aguardando_encerramento_lote"` e um novo `RiHistorico` (campo "Status
+    Ao entrar aqui, cada INEP ganha `Escola.status_mip = "em_andamento"`
+    (pedido do usuário, 2026-09-26) e um novo `RiHistorico` (campo "Status
     (MIP)" + campo "LOTE", pedido explícito do usuário) — nenhum outro dado
     do INEP é alterado.
 
@@ -453,14 +507,17 @@ class Lote(models.Model):
     EM_FATURAMENTO = "em_faturamento"
     FATURAMENTO_CONCLUIDO = "faturamento_concluido"
     STATUS_CHOICES = [
-        (AGUARDANDO_ENCERRAMENTO, "Aguardando Encerramento LOTE"),
+        # Pedido do usuário (2026-09-26): "Aguardando Encerramento LOTE" saiu
+        # — o LOTE nasce "Em Andamento MIP" (constante mantida só para valor
+        # antigo).
         # (EMAIL_ENVIADO, "Email em LOTE enviado"),  # e-mail do LOTE comentado (pedido do usuário, 2026-09-15)
-        (EM_ANDAMENTO, "Em Andamento"),
+        # Mesmo rótulo do `Escola.status_mip` (pedido do usuário, 2026-09-25).
+        (EM_ANDAMENTO, "Em Andamento MIP"),
         (EM_FATURAMENTO, "Em Faturamento"),
         (FATURAMENTO_CONCLUIDO, "Processo Concluído"),
     ]
     status = models.CharField(
-        "Status", max_length=30, choices=STATUS_CHOICES, default=AGUARDANDO_ENCERRAMENTO
+        "Status", max_length=30, choices=STATUS_CHOICES, default=EM_ANDAMENTO
     )
     # Pedido do usuário (2026-09-17): depois que o financeiro gera as Notas
     # Fiscais de todo o LOTE, ele devolve tudo junto num único .zip — este
@@ -569,3 +626,174 @@ class NotasFiscaisMip(models.Model):
         """Único registro ativo, se houver — `None` quando nenhum arquivo
         foi enviado ainda."""
         return cls.objects.first()
+
+
+class ValidacaoNfMip(models.Model):
+    """RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
+    do usuário, 2026-09-28): tela "Projeto > Validação MIP (NF)" — 1
+    execução da rotina que lê, no portal EACE, os cards de município do
+    pedido de MAIOR número do MIP (`apps.integracoes.eace.rpa_mip`, em
+    modo somente leitura: nunca anexa nada) e guarda município, valor e
+    status de cada card (`CardValidacaoNfMip`).
+
+    Roda sozinha de hora em hora, das 08:00 às 19:00
+    (`origem=agendada`), e também sob demanda pelo botão "Rodar agora"
+    (`origem=manual`). Nos 2 casos só entra na fila — quem executa de
+    verdade é o worker do MIP (`processar_validacao_nf_mip`), 1 por vez,
+    mesmo padrão da fila do RPA EACE (ADR-005)."""
+
+    NA_FILA = "na_fila"
+    PROCESSANDO = "processando"
+    SUCESSO = "sucesso"
+    ERRO = "erro"
+    STATUS_CHOICES = [
+        (NA_FILA, "Na fila"),
+        (PROCESSANDO, "Processando"),
+        (SUCESSO, "Sucesso"),
+        (ERRO, "Erro"),
+    ]
+
+    AGENDADA = "agendada"
+    MANUAL = "manual"
+    ORIGEM_CHOICES = [
+        (AGENDADA, "Agendada"),
+        (MANUAL, "Manual"),
+    ]
+
+    status = models.CharField("Status", max_length=20, choices=STATUS_CHOICES, default=NA_FILA)
+    origem = models.CharField("Origem", max_length=20, choices=ORIGEM_CHOICES)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Solicitado por",
+    )
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    iniciado_em = models.DateTimeField("Iniciado em", null=True, blank=True)
+    finalizado_em = models.DateTimeField("Finalizado em", null=True, blank=True)
+    # Vazio = pedido de maior numero no grid de MIPs (sempre assim na
+    # agendada); preenchido pelo campo "Nº do pedido" do botão "Rodar agora".
+    pedido_solicitado = models.CharField("Pedido solicitado", max_length=20, blank=True)
+    pedido = models.CharField("Pedido", max_length=20, blank=True)
+    motivo_erro = models.CharField("Motivo do erro", max_length=255, blank=True)
+    etapa_atual = models.CharField("Etapa atual", max_length=100, blank=True)
+    progresso_pct = models.PositiveSmallIntegerField("Progresso (%)", default=0)
+
+    class Meta:
+        verbose_name = "Validação MIP (NF)"
+        verbose_name_plural = "Validações MIP (NF)"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"Validação MIP (NF) #{self.pk} - {self.get_status_display()}"
+
+    @property
+    def em_andamento(self):
+        return self.status in (self.NA_FILA, self.PROCESSANDO)
+
+
+class CardValidacaoNfMip(models.Model):
+    """1 card de município lido do portal EACE numa `ValidacaoNfMip`
+    (Município, Cod. IBGE, Status e "Valor total a ser emitido")."""
+
+    validacao = models.ForeignKey(
+        ValidacaoNfMip, on_delete=models.CASCADE, related_name="cards", verbose_name="Validação"
+    )
+    ordem = models.PositiveIntegerField("Ordem no portal")
+    municipio = models.CharField("Município", max_length=150)
+    uf = models.CharField("UF", max_length=10, blank=True)
+    codigo_ibge = models.CharField("Cod. IBGE", max_length=10, blank=True)
+    status_portal = models.CharField("Status no portal", max_length=60)
+    valor = models.DecimalField("Valor total a ser emitido", max_digits=14, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Card da Validação MIP (NF)"
+        verbose_name_plural = "Cards da Validação MIP (NF)"
+        ordering = ["ordem"]
+
+    def __str__(self):
+        return f"{self.municipio} - {self.status_portal}"
+
+
+class LogRpaEaceMip(models.Model):
+    """RN-XXX (a formalizar pelo Orquestrador em business_rules.md; pedido
+    do usuário, 2026-09-29): 1 envio da Nota Fiscal de um LOTE (MIP) para o
+    portal EACE pelo RPA do MIP (`apps.integracoes.eace.rpa_mip`) - botão
+    "Enviar ao portal EACE" em "Projeto > MIP (LOTE)".
+
+    A NF é a comum a todos os INEPs do LOTE (a NF do município,
+    `apps.escolas.rpa_mip_lote.nota_fiscal_comum_do_lote`). Entra na MESMA
+    fila do RPA EACE do RI (mesmo worker, `processar_fila_rpa_eace`, 1
+    execução por vez em todo o sistema - RN-058), mas com log próprio: o
+    log do RI (`apps.ri.models.LogRpaEace`) não muda. Mesmas regras de
+    reprocessamento da RN-058 (`MOTIVOS_REGRA_DE_NEGOCIO_MIP`).
+
+    Botão do LOTE segue o último log: Na fila/Processando -> inacessível;
+    Sucesso -> desabilitado de vez; Erro (ou nenhum log) -> habilitado."""
+
+    NA_FILA = "na_fila"
+    PROCESSANDO = "processando"
+    SUCESSO = "sucesso"
+    ERRO = "erro"
+    RESULTADO_CHOICES = [
+        (NA_FILA, "Na fila"),
+        (PROCESSANDO, "Processando"),
+        (SUCESSO, "Sucesso"),
+        (ERRO, "Erro"),
+    ]
+
+    lote = models.ForeignKey(Lote, on_delete=models.CASCADE, related_name="logs_rpa_mip", verbose_name="LOTE")
+    nota_fiscal = models.ForeignKey(
+        NotaFiscalMip, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", verbose_name="Nota Fiscal"
+    )
+    nome_nota_fiscal = models.CharField("Nome da Nota Fiscal", max_length=255)
+    municipio = models.CharField("Município", max_length=150)
+    resultado = models.CharField("Resultado", max_length=11, choices=RESULTADO_CHOICES, default=NA_FILA)
+    motivo_erro = models.CharField("Motivo do erro", max_length=50, blank=True)
+    valor_pdf = models.CharField("Valor extraído do PDF", max_length=20, blank=True)
+    valor_portal = models.CharField("Valor exibido no portal EACE", max_length=20, blank=True)
+    status_portal = models.CharField("Status do card no portal EACE", max_length=60, blank=True)
+    pedido = models.CharField("Pedido", max_length=20, blank=True)
+    tentativas = models.PositiveIntegerField("Tentativas", default=0)
+    enfileirado_em = models.DateTimeField("Enfileirado em")
+    executado_em = models.DateTimeField("Executado em", null=True, blank=True)
+    etapa_atual = models.CharField("Etapa atual da RPA", max_length=100, blank=True)
+    progresso_pct = models.PositiveSmallIntegerField("Progresso da RPA (%)", default=0)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Solicitado por",
+    )
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Log da RPA EACE (MIP)"
+        verbose_name_plural = "Logs da RPA EACE (MIP)"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"{self.lote} - {self.get_resultado_display()}"
+
+    @property
+    def em_andamento(self):
+        return self.resultado in (self.NA_FILA, self.PROCESSANDO)
+
+    @property
+    def ja_estava_no_portal(self):
+        """Pedido do usuário (2026-09-29): "documento já enviado" (card do
+        município não está mais Pendente) conta como enviado - o ícone
+        fica desabilitado como no Sucesso, tentar de novo nunca daria certo."""
+        return self.resultado == self.ERRO and self.motivo_erro == "documento_ja_enviado"
+
+    @property
+    def motivo_erro_legivel(self):
+        from .validacao_nf_mip import mensagem_motivo
+
+        if self.motivo_erro == "documento_ja_enviado" and self.status_portal:
+            return f"O card do município no portal está \"{self.status_portal}\" (NF já enviada)."
+        return mensagem_motivo(self.motivo_erro) if self.motivo_erro else ""

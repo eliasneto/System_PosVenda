@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import openpyxl
+import requests
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
 from django.core import mail
@@ -419,14 +420,14 @@ class RiStatusUpdateViewTests(TestCase):
         self.assertEqual(ri.status, Ri.ENVIO_EMAIL_FATURAMENTO)
 
     def test_correcao_mega_so_a_partir_de_andamento(self):
-        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
         self.client.force_login(self.user)
         self.client.post(
             reverse("ri_status_update", kwargs={"pk": ri.pk}),
             {"status": Ri.CORRECAO_MEGA, "next": reverse("grid_inep")},
         )
         ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.status, Ri.ENVIO_EMAIL_FATURAMENTO)
 
     def test_troca_de_status_gera_entrada_automatica_no_historico(self):
         """FEAT-014/RN-008: mudança de status grava rótulo + valor
@@ -716,7 +717,7 @@ class RiStatusUpdateViewTests(TestCase):
         resp = self.client.get(reverse("grid_inep"))
         self.assertContains(resp, '<option value="andamento"')
         self.assertContains(resp, '<option value="envio_email_faturamento"', count=1)
-        self.assertContains(resp, '<option value="faturamento_concluido"', count=1)
+        self.assertContains(resp, '<option value="faturamento_ri_concluido"', count=1)
         self.assertContains(resp, '<option value="correcao_mega"', count=1)
 
     def test_select_da_tela_de_detalhe_so_oferece_em_andamento_a_partir_de_implantacao_eace(self):
@@ -730,37 +731,31 @@ class RiStatusUpdateViewTests(TestCase):
         self.assertNotContains(resp, '<option value="faturamento_concluido"')
         self.assertNotContains(resp, '<option value="correcao_mega"')
 
-    def test_select_esconde_validacao_eace_e_faturamento_concluido_antes_de_resposta_financeiro(self):
-        """RN-067 (pedido do usuário, 2026-09-05): "Aguardando validação
-        EACE" e "Faturamento Concluído" não podem aparecer no <select>
-        antes de "Resposta Financeiro" - aqui a partir de "Em Andamento"."""
+    def test_select_esconde_faturamento_ri_concluido_antes_de_resposta_financeiro(self):
+        """RN-067 (revista em 2026-09-26): "Faturamento RI Concluído" (marcar
+        o anexo feito no EACE) não aparece no <select> antes de "Resposta
+        Financeiro" — aqui a partir de "Em Andamento" (só no filtro)."""
         Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.user)
         resp = self.client.get(reverse("grid_inep"))
-        self.assertContains(resp, '<option value="aguardando_validacao_eace"', count=1)
-        self.assertContains(resp, '<option value="faturamento_concluido"', count=1)
+        self.assertContains(resp, '<option value="faturamento_ri_concluido"', count=1)
 
-    def test_select_mostra_validacao_eace_a_partir_de_resposta_financeiro(self):
-        """RN-067: a partir de "Resposta Financeiro", "Aguardando validação
-        EACE" volta a aparecer (RN-001) - "Faturamento Concluído" continua
-        escondido, só entra a partir de "Aguardando validação EACE"."""
+    def test_select_mostra_faturamento_ri_concluido_a_partir_de_resposta_financeiro(self):
+        """RN-067: a partir de "Resposta Financeiro", "Faturamento RI
+        Concluído" aparece no drill-down (filtro + drill-down = 2)."""
         Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
         self.client.force_login(self.user)
         resp = self.client.get(reverse("grid_inep"))
-        self.assertContains(resp, '<option value="aguardando_validacao_eace"', count=2)
-        self.assertContains(resp, '<option value="faturamento_concluido"', count=1)
+        self.assertContains(resp, '<option value="faturamento_ri_concluido"', count=2)
 
-    def test_select_mostra_faturamento_concluido_a_partir_de_aguardando_validacao_eace(self):
-        """RN-067: "Faturamento Concluído" só aparece a partir de
-        "Aguardando validação EACE". Testado via `ri_detail` (RN-092,
-        2026-09-10): um RI já em "Aguardando validação EACE" sai do grid
-        de Equipamentos (handoff pro MIP) — sem o filtro de status do
-        grid, só a própria pill de status conta aqui (count=1)."""
-        escola = Escola.objects.create(inep="30000004", nome="Escola RI Status RN-067 (2)")
-        Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+    def test_detalhe_sem_select_de_status_com_inep_no_mip(self):
+        """Pedido do usuário (2026-09-26): INEP no MIP — status do RI
+        controlado pelo MIP, sem <select> na tela de detalhe."""
+        escola = Escola.objects.create(inep="30000004", nome="Escola RI Status no MIP")
+        Ri.objects.create(escola=escola, status=Ri.FATURAMENTO_RI_CONCLUIDO)
         self.client.force_login(self.user)
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": escola.inep}))
-        self.assertContains(resp, '<option value="faturamento_concluido"', count=1)
+        self.assertNotContains(resp, 'action="%s"' % reverse("ri_status_update", kwargs={"pk": escola.ris.get().pk}))
 
     def test_select_da_tela_de_detalhe_tambem_esconde_antes_de_resposta_financeiro(self):
         """RN-067: mesma restrição no <select> da tela de detalhe (grid e
@@ -787,30 +782,6 @@ class RiStatusUpdateViewTests(TestCase):
         self.assertEqual(entrada.valor_novo, "Resposta Financeiro")
         self.assertEqual(entrada.autor, self.admin)
 
-    def test_analista_nao_troca_status_a_partir_de_faturamento_concluido(self):
-        """RN-020: com o RI em "Faturamento Concluído", só o Administrador
-        troca o status — Analista perde a opção que tem nos demais status
-        editáveis (RN-001)."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
-        self.client.force_login(self.user)
-        self.client.post(
-            reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.ANDAMENTO, "next": reverse("grid_inep")},
-        )
-        ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.FATURAMENTO_CONCLUIDO)
-
-    def test_administrador_troca_status_a_partir_de_faturamento_concluido(self):
-        """RN-020: a exceção do bloqueio é só para o Administrador."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
-        self.client.force_login(self.admin)
-        self.client.post(
-            reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.ANDAMENTO, "next": reverse("grid_inep")},
-        )
-        ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.ANDAMENTO)
-
     def test_marca_anexo_eace_a_partir_de_resposta_financeiro(self):
         """FEAT-010/RF-10: Analista e Administrador podem marcar o anexo
         feito no portal EACE a partir de "Resposta Financeiro"."""
@@ -818,10 +789,10 @@ class RiStatusUpdateViewTests(TestCase):
         self.client.force_login(self.user)
         self.client.post(
             reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+            {"status": Ri.FATURAMENTO_RI_CONCLUIDO, "next": reverse("grid_inep")},
         )
         ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
 
     def test_marca_anexo_eace_bloqueada_com_log_rpa_pendente(self):
         """RN-099 (2026-09-14): a marcação manual do anexo (RN-001) exige
@@ -833,7 +804,7 @@ class RiStatusUpdateViewTests(TestCase):
         self.client.force_login(self.user)
         self.client.post(
             reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+            {"status": Ri.FATURAMENTO_RI_CONCLUIDO, "next": reverse("grid_inep")},
         )
         ri.refresh_from_db()
         self.assertEqual(ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
@@ -847,7 +818,7 @@ class RiStatusUpdateViewTests(TestCase):
         self.client.force_login(self.user)
         self.client.post(
             reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+            {"status": Ri.FATURAMENTO_RI_CONCLUIDO, "next": reverse("grid_inep")},
         )
         ri.refresh_from_db()
         self.assertEqual(ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
@@ -862,10 +833,10 @@ class RiStatusUpdateViewTests(TestCase):
         self.client.force_login(self.user)
         self.client.post(
             reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+            {"status": Ri.FATURAMENTO_RI_CONCLUIDO, "next": reverse("grid_inep")},
         )
         ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
 
     def test_marca_anexo_eace_bloqueada_fora_de_resposta_financeiro(self):
         """FEAT-010/RF-10: fora de "Resposta Financeiro", a marcação é
@@ -875,66 +846,27 @@ class RiStatusUpdateViewTests(TestCase):
         self.client.force_login(self.admin)
         self.client.post(
             reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
+            {"status": Ri.FATURAMENTO_RI_CONCLUIDO, "next": reverse("grid_inep")},
         )
         ri.refresh_from_db()
         self.assertEqual(ri.status, Ri.ANDAMENTO)
 
-    def test_administrador_marca_anexo_eace_a_partir_de_faturamento_concluido(self):
-        """RN-020: correção do Administrador — volta um RI já concluído
-        para "Aguardando validação EACE" continua permitida (não é a
-        marcação normal do fluxo, é a exceção já aberta pela RN-020)."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
-        self.client.force_login(self.admin)
-        self.client.post(
-            reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.AGUARDANDO_VALIDACAO_EACE, "next": reverse("grid_inep")},
-        )
-        ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
-
-    def test_conclui_faturamento_a_partir_de_aguardando_validacao_eace(self):
-        """FEAT-010/RF-11: conclusão manual, disponível a partir de
-        "Aguardando validação EACE" — grava `concluido_em`."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
-        self.assertIsNone(ri.concluido_em)
-        self.client.force_login(self.user)
-        self.client.post(
-            reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.FATURAMENTO_CONCLUIDO, "next": reverse("grid_inep")},
-        )
-        ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.FATURAMENTO_CONCLUIDO)
-        self.assertIsNotNone(ri.concluido_em)
-
-    def test_conclusao_bloqueada_fora_de_aguardando_validacao_eace(self):
-        """FEAT-010/RF-11: "Botão de conclusão só habilitado depois da
-        marcação de anexo" (checklist.md) — sem passar por "Aguardando
-        validação EACE", a conclusão manual é rejeitada."""
+    def test_marca_anexo_gera_entrada_no_historico_e_grava_concluido_em(self):
+        """RN-008: a marcação manual do anexo grava log igual às demais
+        trocas de status (autor = usuário) e `concluido_em` (FEAT-010,
+        revisto em 2026-09-26: "Faturamento RI Concluído" é o novo fim do RI)."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
         self.client.force_login(self.user)
         self.client.post(
             reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.FATURAMENTO_CONCLUIDO, "next": reverse("grid_inep")},
+            {"status": Ri.FATURAMENTO_RI_CONCLUIDO, "next": reverse("grid_inep")},
         )
         ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
-        self.assertIsNone(ri.concluido_em)
-
-    def test_conclusao_gera_entrada_no_historico(self):
-        """RN-008: a conclusão manual grava log igual às demais trocas de
-        status, identificando o usuário como autor."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
-        self.client.force_login(self.user)
-        self.client.post(
-            reverse("ri_status_update", kwargs={"pk": ri.pk}),
-            {"status": Ri.FATURAMENTO_CONCLUIDO, "next": reverse("grid_inep")},
-        )
+        self.assertIsNotNone(ri.concluido_em)
         entrada = RiHistorico.objects.get(ri=ri, tipo=RiHistorico.LOG_STATUS)
-        self.assertEqual(entrada.valor_anterior, "Aguardando validação EACE")
-        self.assertEqual(entrada.valor_novo, "Faturamento Concluído")
+        self.assertEqual(entrada.valor_anterior, "Resposta Financeiro")
+        self.assertEqual(entrada.valor_novo, "Faturamento RI Concluído")
         self.assertEqual(entrada.autor, self.user)
-
 
 class RiLogRpaEaceDispararViewTests(TestCase):
     """FEAT-033 (Fase 3, RN-056/RN-058): "Disparar RPA" só enfileira - quem
@@ -1129,7 +1061,7 @@ class MarcarLogRpaEaceConcluidoManualmenteServiceTests(TestCase):
         marcar_log_rpa_eace_concluido_manualmente(log2, usuario=self.user)
 
         self.ri.refresh_from_db()
-        self.assertEqual(self.ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
 
     def test_nao_avanca_status_se_sobrar_outro_log_sem_sucesso(self):
         from apps.ri.services import marcar_log_rpa_eace_concluido_manualmente
@@ -1192,6 +1124,190 @@ class RiLogRpaEaceMarcarManualViewTests(TestCase):
 
         self.log.refresh_from_db()
         self.assertEqual(self.log.resultado, LogRpaEace.NA_FILA, "não pode atropelar o consumidor da fila")
+
+
+class RiLogRpaEaceManualECancelamentoTests(TestCase):
+    """Pedido do usuário (2026-09-25): o financeiro às vezes manda a NF
+    corrigida por fora do e-mail — o usuário cria um processamento RPA
+    manual (upload de PDF+XML, já entra na fila) e cancela o processamento
+    com a NF errada (motivo obrigatório; só Pendente/Erro). Cancelado não
+    conta para o INEP (RN-056/RN-099). Administrador e Analista, qualquer
+    status do RI."""
+
+    def setUp(self):
+        self._media_root = tempfile.mkdtemp()
+        self._override = override_settings(MEDIA_ROOT=self._media_root)
+        self._override.enable()
+        self.analista = User.objects.create_user(
+            username="analista-rpa-manual", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.admin = User.objects.create_user(
+            username="admin-rpa-manual", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR
+        )
+        self.visualizador = User.objects.create_user(
+            username="visualizador-rpa-manual", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR
+        )
+        self.escola = Escola.objects.create(inep="35099001", nome="Escola RPA Manual")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit Wi-Fi Indoor", quantidade=1,
+            valor_unitario="350.00", eh_kit=True, num_osp="OSP-1",
+        )
+
+    def tearDown(self):
+        self._override.disable()
+        shutil.rmtree(self._media_root, ignore_errors=True)
+
+    def _arquivos(self, nome_pdf="nf_corrigida.pdf", nome_xml="nf_corrigida.xml"):
+        return {
+            "arquivo_pdf": SimpleUploadedFile(nome_pdf, b"%PDF-1.4 teste", content_type="application/pdf"),
+            "arquivo_xml": SimpleUploadedFile(nome_xml, b"<nfe/>", content_type="application/xml"),
+        }
+
+    def _criar_manual(self, **extra):
+        return self.client.post(
+            reverse("ri_log_rpa_eace_criar_manual", kwargs={"pk": self.ri.pk}),
+            {"next": "", **self._arquivos(), **extra},
+        )
+
+    def _cancelar(self, log, motivo="NF com valor errado"):
+        return self.client.post(
+            reverse("ri_log_rpa_eace_cancelar", kwargs={"pk": log.pk}),
+            {"next": "", "motivo_cancelamento": motivo},
+        )
+
+    # --- criação manual ---
+
+    def test_analista_cria_processamento_manual_na_fila(self):
+        self.client.force_login(self.analista)
+        self._criar_manual()
+
+        log = LogRpaEace.objects.get(ri=self.ri)
+        self.assertTrue(log.criado_manualmente)
+        self.assertEqual(log.resultado, LogRpaEace.NA_FILA)
+        self.assertIsNotNone(log.enfileirado_em)
+        self.assertEqual(log.documento_pdf.tipo, Documento.NOTA_FISCAL_PDF)
+        self.assertEqual(log.documento_xml.tipo, Documento.XML)
+        historico = self.ri.historico.get(campo=f"RPA EACE (Nota Fiscal #{log.pk})")
+        self.assertEqual(historico.autor, self.analista)
+        self.assertIn("Processamento manual", historico.valor_novo)
+        self.assertEqual(historico.documentos.count(), 2)
+
+    def test_cria_processamento_manual_em_qualquer_status(self):
+        self.client.force_login(self.admin)
+        for status in (Ri.ANDAMENTO, Ri.AGUARDANDO_VALIDACAO_EACE, Ri.FATURAMENTO_CONCLUIDO):
+            with self.subTest(status=status):
+                Ri.objects.filter(pk=self.ri.pk).update(status=status)
+                antes = LogRpaEace.objects.filter(ri=self.ri).count()
+                self._criar_manual()
+                self.assertEqual(LogRpaEace.objects.filter(ri=self.ri).count(), antes + 1)
+
+    def test_visualizador_nao_cria_processamento_manual(self):
+        self.client.force_login(self.visualizador)
+        self._criar_manual()
+        self.assertFalse(LogRpaEace.objects.filter(ri=self.ri).exists())
+        self.assertFalse(Documento.objects.filter(ri=self.ri).exists())
+
+    def test_recusa_sem_xml(self):
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_log_rpa_eace_criar_manual", kwargs={"pk": self.ri.pk}),
+            {"next": "", "arquivo_pdf": self._arquivos()["arquivo_pdf"]},
+        )
+        self.assertFalse(LogRpaEace.objects.filter(ri=self.ri).exists())
+
+    def test_recusa_extensao_invalida(self):
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_log_rpa_eace_criar_manual", kwargs={"pk": self.ri.pk}),
+            {"next": "", **self._arquivos(nome_pdf="nota.txt")},
+        )
+        self.assertFalse(LogRpaEace.objects.filter(ri=self.ri).exists())
+        self.assertFalse(Documento.objects.filter(ri=self.ri).exists())
+
+    def test_recusa_ri_sem_osp(self):
+        self.ri.itens_relatorio_eace.update(num_osp="")
+        self.client.force_login(self.analista)
+        self._criar_manual()
+        self.assertFalse(LogRpaEace.objects.filter(ri=self.ri).exists())
+
+    # --- cancelamento ---
+
+    def test_cancela_log_com_erro_e_grava_historico(self):
+        log = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO, motivo_erro="valor_divergente")
+        self.client.force_login(self.analista)
+        self._cancelar(log)
+
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.CANCELADO)
+        self.assertEqual(log.motivo_cancelamento, "NF com valor errado")
+        self.assertEqual(log.cancelado_por, self.analista)
+        self.assertIsNotNone(log.cancelado_em)
+        historico = self.ri.historico.get(campo=f"RPA EACE (Nota Fiscal #{log.pk})")
+        self.assertEqual(historico.valor_anterior, "Erro")
+        self.assertIn("NF com valor errado", historico.valor_novo)
+
+    def test_cancelamento_exige_motivo(self):
+        log = LogRpaEace.objects.create(ri=self.ri)
+        self.client.force_login(self.analista)
+        self._cancelar(log, motivo="   ")
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.PENDENTE)
+
+    def test_nao_cancela_sucesso_na_fila_ou_processando(self):
+        self.client.force_login(self.admin)
+        for resultado in (LogRpaEace.SUCESSO, LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO):
+            with self.subTest(resultado=resultado):
+                log = LogRpaEace.objects.create(ri=self.ri, resultado=resultado)
+                self._cancelar(log)
+                log.refresh_from_db()
+                self.assertEqual(log.resultado, resultado)
+
+    def test_visualizador_nao_cancela(self):
+        log = LogRpaEace.objects.create(ri=self.ri)
+        self.client.force_login(self.visualizador)
+        self._cancelar(log)
+        log.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.PENDENTE)
+
+    def test_cancelado_nao_conta_no_avanco_do_ri(self):
+        """RN-056: com 1 NF processada e a errada cancelada, o RI avança."""
+        LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.SUCESSO)
+        errado = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO)
+        self.client.force_login(self.analista)
+        self._cancelar(errado)
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+
+    def test_cancelar_todos_nao_avanca_ri_sem_nenhum_sucesso(self):
+        log = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO)
+        self.client.force_login(self.analista)
+        self._cancelar(log)
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_cancelado_nao_bloqueia_marcacao_manual_do_anexo(self):
+        """RN-099: a troca manual para "Faturamento RI Concluído" (antes "Aguardando validação EACE" ignora
+        log cancelado."""
+        from apps.ri.views import _validar_transicao_status_ri
+
+        LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.SUCESSO)
+        LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.CANCELADO)
+        erro = _validar_transicao_status_ri(self.ri, Ri.FATURAMENTO_RI_CONCLUIDO, self.admin)
+        self.assertIsNone(erro)
+
+    def test_tela_mostra_cancelado_e_botoes(self):
+        LogRpaEace.objects.create(
+            ri=self.ri, resultado=LogRpaEace.CANCELADO, motivo_cancelamento="NF com valor errado",
+        )
+        LogRpaEace.objects.create(ri=self.ri)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "Novo processamento manual")
+        self.assertContains(resp, "Motivo:</span> NF com valor errado")
+        self.assertContains(resp, "Confirmar cancelamento")
 
 
 class FilaRpaEaceViewTests(TestCase):
@@ -1640,7 +1756,7 @@ class ProcessarFilaRpaEaceTests(TestCase):
         self.assertEqual(log.resultado, LogRpaEace.SUCESSO)
         self.assertEqual(log.tentativas, 1)
         self.assertEqual(log.produto_pdf, "Kit Cobertura Wi-Fi")
-        self.assertEqual(self.ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
 
     def test_erro_de_regra_de_negocio_e_definitivo_na_1a_tentativa(self):
         from apps.ri.services import processar_proximo_da_fila_rpa_eace
@@ -1733,7 +1849,7 @@ class ProcessarFilaRpaEaceTests(TestCase):
         with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=sucesso):
             processar_proximo_da_fila_rpa_eace()
         self.ri.refresh_from_db()
-        self.assertEqual(self.ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
 
     def test_usa_a_osp_do_item_que_bate_com_o_valor_da_nf_quando_ri_tem_varias_osps(self):
         """RN-064 (correção 2026-09-04): usuário reportou (INEP 53005090,
@@ -3399,28 +3515,36 @@ class SincronizarEmailFinanceiroTests(TestCase):
         self.assertEqual(resultado["sem_ri_aguardando"], 1)
         self.assertFalse(EmailFinanceiroLog.objects.exists())
 
-    def test_resposta_apos_ri_sair_de_aguardando_financeiro_fica_visivel_na_linha_do_tempo(self):
-        """Correção 2026-09-08 (bug real, INEP 35455477: usuário reportou
-        "a resposta do e-mail não entrou no sistema"): o RI avançou pra
-        "Aguardando financeiro", o e-mail foi enviado, mas o usuário
-        mudou o status de volta manualmente ANTES da resposta chegar -
-        a busca por RI "Aguardando financeiro" não achava mais nada e a
-        resposta sumia sem deixar rastro (só um `logger.warning`, que
-        ninguém vê). Nunca reabre o status sozinho - só passa a avisar
-        na linha do tempo do RI mais recente desse INEP, pra não
-        desaparecer de vez."""
-        self.ri.status = Ri.ANDAMENTO
-        self.ri.save()
+    def test_resposta_com_ri_fora_de_aguardando_financeiro_e_processada_sem_mudar_status(self):
+        """Correção (pedido do usuário, 2026-09-25 — revisão da RN-016): o
+        e-mail do financeiro chega em qualquer status do RI (ex.: usuário
+        voltou para "Em Andamento" para corrigir o Lado IXC). PDF/XML são
+        salvos, as Notas Fiscais aparecem para o RPA e o e-mail vai para a
+        linha do tempo — mas o status atual é mantido (decisão do
+        usuário)."""
+        for status in (Ri.ANDAMENTO, Ri.ENVIO_EMAIL_FATURAMENTO, Ri.AGUARDANDO_ANEXO_PORTAL_EACE):
+            with self.subTest(status=status):
+                Ri.objects.filter(pk=self.ri.pk).update(status=status)
+                bruto = _montar_email_bytes(
+                    self.assunto_padrao,
+                    anexos=[
+                        ("nota_fiscal.pdf", "application", "pdf", b"%PDF-1.4 conteudo"),
+                        ("nota_fiscal.xml", "text", "xml", b"<nfe></nfe>"),
+                    ],
+                )
+                logs_antes = LogRpaEace.objects.filter(ri=self.ri).count()
+                resultado = self._rodar_sync([(f"<msg-{status}@financeiro>", bruto)])
 
-        resultado = self._rodar_sync([("<msg-tarde@financeiro>", _montar_email_bytes(self.assunto_padrao))])
-
-        self.assertEqual(resultado["sem_ri_aguardando"], 1)
-        self.ri.refresh_from_db()
-        self.assertEqual(self.ri.status, Ri.ANDAMENTO, "nunca reabre o status sozinho")
-        self.assertFalse(EmailFinanceiroLog.objects.exists(), "continua sem duplicar o fluxo normal de resposta")
-        aviso = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.EMAIL)
-        self.assertIn("NÃO processada automaticamente", aviso.mensagem)
-        self.assertIn("Em Andamento", aviso.mensagem)
+                self.assertEqual(resultado["identificados"], 1)
+                self.ri.refresh_from_db()
+                self.assertEqual(self.ri.status, status, "status mantido")
+                self.assertEqual(LogRpaEace.objects.filter(ri=self.ri).count(), logs_antes + 1)
+                entrada = RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.EMAIL).latest("criado_em")
+                self.assertEqual(entrada.documentos.count(), 2)
+                self.assertIn("status mantido", entrada.mensagem)
+                self.assertTrue(
+                    EmailFinanceiroLog.objects.filter(mensagem_id_externo=f"<msg-{status}@financeiro>").exists()
+                )
 
     def test_resposta_tardia_de_remetente_fora_do_financeiro_nao_gera_aviso(self):
         """RN-016: sem confirmar que é mesmo o financeiro respondendo,
@@ -3588,6 +3712,70 @@ class SincronizarEmailFinanceiroTests(TestCase):
         self.assertIsNotNone(estado.ultima_sincronizacao_em)
         self.assertEqual(estado.ultimo_erro, "")
 
+    def test_falha_ao_baixar_mensagem_mantem_cursor_e_reprocessa_na_proxima_passada(self):
+        """Correção 2026-09-28 (produção, INEP 35010328): queda de rede ao
+        baixar uma resposta do financeiro avançava o delta link e a
+        mensagem se perdia. Agora o cursor anterior é mantido e a próxima
+        passada processa a mensagem normalmente."""
+        estado = EmailFinanceiroSync.obter_configuracao("posvendas@megainfraestrutura.com.br")
+        estado.delta_link = "https://graph.microsoft.com/v1.0/.../delta?token=anterior"
+        estado.save()
+        bruto = _montar_email_bytes(
+            self.assunto_padrao,
+            anexos=[
+                ("nota_fiscal.pdf", "application", "pdf", b"%PDF-1.4 conteudo"),
+                ("nota_fiscal.xml", "text", "xml", b"<nfe></nfe>"),
+            ],
+        )
+        resposta = _RespostaGraphFake({
+            "value": [{"id": "graph-id-0", "internetMessageId": "<msg-rede@financeiro>"}],
+            "@odata.deltaLink": "https://graph.microsoft.com/v1.0/.../delta?token=novo",
+        })
+
+        with patch("apps.ri.services._obter_token", return_value="token-de-teste"), patch(
+            "apps.ri.services._graph_get", return_value=resposta
+        ), patch(
+            "apps.ri.services._buscar_mime",
+            side_effect=requests.exceptions.ConnectionError("Network is unreachable"),
+        ):
+            sincronizar_respostas_financeiro()
+
+        estado.refresh_from_db()
+        self.assertEqual(estado.delta_link, "https://graph.microsoft.com/v1.0/.../delta?token=anterior")
+        self.assertIn("1 mensagem(ns) com erro", estado.ultimo_erro)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_FINANCEIRO)
+
+        with patch("apps.ri.services._obter_token", return_value="token-de-teste"), patch(
+            "apps.ri.services._graph_get", return_value=resposta
+        ), patch("apps.ri.services._buscar_mime", return_value=bruto):
+            resultado = sincronizar_respostas_financeiro()
+
+        self.assertEqual(resultado["identificados"], 1)
+        estado.refresh_from_db()
+        self.assertEqual(estado.delta_link, "https://graph.microsoft.com/v1.0/.../delta?token=novo")
+        self.assertEqual(estado.ultimo_erro, "")
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_falha_no_meio_do_processamento_nao_deixa_documento_parcial(self):
+        """Erro depois de salvar os documentos (ex.: banco, como no INEP
+        17052556) desfaz a mensagem inteira — a nova tentativa não duplica
+        Nota Fiscal/XML."""
+        bruto = _montar_email_bytes(
+            self.assunto_padrao,
+            anexos=[
+                ("nota_fiscal.pdf", "application", "pdf", b"%PDF-1.4 conteudo"),
+                ("nota_fiscal.xml", "text", "xml", b"<nfe></nfe>"),
+            ],
+        )
+        with patch("apps.ri.services.EmailFinanceiroLog.objects.create", side_effect=RuntimeError("banco")):
+            self._rodar_sync([("<msg-parcial@financeiro>", bruto)])
+
+        self.assertFalse(Documento.objects.filter(ri=self.ri).exists())
+        estado = EmailFinanceiroSync.objects.get(mailbox="posvendas@megainfraestrutura.com.br")
+        self.assertEqual(estado.delta_link, "")
+
     def test_falha_de_autenticacao_no_graph_nao_e_tratada_como_fora_do_padrao(self):
         """Erro de autenticação é uma falha de verdade (avisa o operador),
         diferente de "e-mail fora do padrão" (RN-005, que nunca bloqueia)."""
@@ -3643,7 +3831,7 @@ class SincronizarEmailFinanceiroCommandTests(TestCase):
         ), patch("apps.ri.services._buscar_mime", return_value=bruto):
             call_command("sincronizar_email_financeiro", stdout=saida)
 
-        self.assertIn("RIs com status alterado: 1", saida.getvalue())
+        self.assertIn("Respostas processadas: 1", saida.getvalue())
         self.assertIn("documentos anexados: 0", saida.getvalue())
         self.assertIn("fora do padrão: 1", saida.getvalue())
 
@@ -4024,18 +4212,14 @@ class RiDetailViewTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp.url, reverse("grid_inep"))
 
-    def test_pill_de_status_trava_para_analista_em_faturamento_concluido(self):
-        """RN-020: com o RI em "Faturamento Concluído", a pill de status
-        da tela de detalhe trava no valor atual para o Analista (sem
-        `<select>`) — o backend também recusa (`RiStatusUpdateViewTests`,
-        `test_analista_nao_troca_status_a_partir_de_faturamento_concluido`),
-        aqui é só a UI. Movida do grid de Equipamentos (RN-092,
-        2026-09-10): um RI em "Faturamento Concluído" agora sai daquele
-        grid — o INEP continua acessível aqui, na tela de detalhe."""
-        Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+    def test_pill_de_status_so_leitura_com_inep_no_mip(self):
+        """Pedido do usuário (2026-09-26): INEP no MIP — a pill de status da
+        tela de detalhe fica só leitura (sem `<select>`), até para o
+        Administrador; o backend também recusa."""
+        Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_RI_CONCLUIDO)
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
-        self.assertContains(resp, "Só Administrador altera o status a partir de")
+        self.assertContains(resp, "INEP no MIP: altere o Status (MIP) na tela do MIP")
         self.assertNotContains(resp, '<select name="status"')
 
     def test_iniciar_ri_cria_com_status_implantacao_eace(self):
@@ -5614,11 +5798,13 @@ class RiDetailViewTests(TestCase):
         self.assertContains(resp, "bloqueia o envio ao financeiro")
 
     # RN-020 (2026-08-27): com o RI em "Faturamento Concluído", os campos
-    # do Lado IXC e do Lado Relatório EACE ficam bloqueados para os dois
-    # perfis — só o Administrador troca o status para liberar de novo
-    # (guard de status coberto em RiStatusUpdateViewTests).
+    # do Lado Relatório EACE ficam bloqueados para os dois perfis — só o
+    # Administrador troca o status para liberar de novo (guard de status
+    # coberto em RiStatusUpdateViewTests). O Lado IXC não entra mais nesse
+    # bloqueio (RN-052 revista em 2026-09-25): editável em qualquer status
+    # por Administrador e Analista, sempre com registro no histórico.
 
-    def test_bloqueia_salvar_ixc_com_ri_em_faturamento_concluido(self):
+    def test_salvar_ixc_liberado_com_ri_em_faturamento_concluido(self):
         ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
         self.client.force_login(self.admin)
@@ -5634,9 +5820,14 @@ class RiDetailViewTests(TestCase):
             },
         )
         self.assertRedirects(resp, reverse("ri_detail", kwargs={"inep": self.escola.inep}))
-        self.assertFalse(RiItemIxc.objects.filter(ri=ri).exists())
+        self.assertTrue(RiItemIxc.objects.filter(ri=ri, eh_kit=True).exists())
+        self.assertTrue(
+            RiHistorico.objects.filter(
+                ri=ri, tipo=RiHistorico.LOG_CAMPO, campo="KIT Instalado (Lado IXC)", autor=self.admin
+            ).exists()
+        )
 
-    def test_bloqueia_editar_item_ixc_com_ri_em_faturamento_concluido(self):
+    def test_editar_item_ixc_liberado_para_admin_com_ri_em_faturamento_concluido(self):
         ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
         item = RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
@@ -5647,11 +5838,109 @@ class RiDetailViewTests(TestCase):
             {"descricao_item": "Roteador Wi-Fi 6", "quantidade": 2, "valor_unitario": "150.00"},
         )
         item.refresh_from_db()
-        self.assertEqual(item.descricao_item, "Roteador")
+        self.assertEqual(item.descricao_item, "Roteador Wi-Fi 6")
+        self.assertTrue(
+            RiHistorico.objects.filter(
+                ri=ri, campo="Item do Lado IXC (editado)", autor=self.admin
+            ).exists()
+        )
 
-    def test_bloqueia_excluir_item_ixc_com_ri_em_faturamento_concluido(self):
-        """Bloqueio vale até para o Administrador, que teria permissão de
-        excluir (RN-004) fora desse status."""
+    def test_analista_nao_mexe_no_lado_ixc_com_ri_em_faturamento_concluido(self):
+        """Pedido do usuário (2026-09-25): com o RI em "Faturamento
+        Concluído" (Processo Concluído no MIP), só o Administrador mexe no
+        RI — Analista não lança, edita nem exclui no Lado IXC."""
+        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
+        ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        item = RiItemIxc.objects.create(
+            ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
+        )
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_item_ixc_update", kwargs={"item_pk": item.pk}),
+            {"descricao_item": "Roteador Wi-Fi 6", "quantidade": 2, "valor_unitario": "150.00"},
+        )
+        resp = self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
+            follow=True,
+        )
+        item.refresh_from_db()
+        self.assertEqual(item.descricao_item, "Roteador")
+        self.assertFalse(RiItemIxc.objects.filter(ri=ri, eh_kit=True).exists())
+        self.assertContains(resp, "só o Administrador pode alterar")
+        self.assertFalse(resp.context["lado_ixc_editavel"])
+
+    def test_analista_nao_troca_responsavel_com_ri_em_faturamento_concluido(self):
+        ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO, responsavel=self.admin)
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_responsavel_update", kwargs={"pk": ri.pk}), {"responsavel": self.analista.pk},
+        )
+        ri.refresh_from_db()
+        self.assertEqual(ri.responsavel, self.admin)
+
+    def test_analista_ainda_registra_mensagem_no_historico_com_ri_em_faturamento_concluido(self):
+        """Decisão do usuário (2026-09-25): o bloqueio vale para tudo,
+        menos mensagem no histórico."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
+        self.client.force_login(self.analista)
+        self.client.post(
+            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+            {"acao": "adicionar_historico", "mensagem": "Conferido com o financeiro."},
+        )
+        self.assertTrue(
+            RiHistorico.objects.filter(ri=ri, tipo=RiHistorico.MENSAGEM, autor=self.analista).exists()
+        )
+
+    def test_tela_do_ri_mostra_status_mip_de_inep_em_lote(self):
+        """Pedido do usuário (2026-09-25): o Status (MIP) de INEP dentro de
+        um LOTE aparece na tela do RI e no grid de Equipamentos."""
+        from apps.escolas.models import Lote
+
+        Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        Escola.objects.filter(pk=self.escola.pk).update(status_mip=Escola.EM_FATURAMENTO_LOTE)
+        Lote.objects.create(estado="CE", municipio="Fortaleza").escolas.add(self.escola)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "MIP: Em Faturamento")
+        resp_grid = self.client.get(reverse("grid_inep"), {"q": self.escola.inep})
+        self.assertContains(resp_grid, "MIP: Em Faturamento")
+
+    def test_filtro_status_do_grid_oferece_e_aplica_status_mip(self):
+        """Pedido do usuário (2026-09-25): os status do MIP refletidos no
+        RI também entram no filtro "Status do RI" do grid de Equipamentos."""
+        from apps.escolas.models import Lote
+
+        Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        Escola.objects.filter(pk=self.escola.pk).update(status_mip=Escola.EM_FATURAMENTO_LOTE)
+        Lote.objects.create(estado="CE", municipio="Fortaleza").escolas.add(self.escola)
+        outra = Escola.objects.create(inep="20000099", nome="Outra Escola", status_mip=Escola.EM_FATURAMENTO_LOTE)
+        Ri.objects.create(escola=outra, status=Ri.AGUARDANDO_VALIDACAO_EACE)  # fora de LOTE
+        self.client.force_login(self.analista)
+
+        resp = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp, 'value="mip:em_faturamento_lote"')
+        self.assertContains(resp, "MIP: Processo Concluído")
+
+        resp = self.client.get(reverse("grid_inep"), {"status_ri": "mip:em_faturamento_lote"})
+        ineps = [linha["escola"].inep for linha in resp.context["page_obj"].object_list]
+        self.assertEqual(ineps, [self.escola.inep])
+
+    def test_tela_do_ri_mostra_status_mip_como_rotulo(self):
+        """Pedido do usuário (2026-09-26): INEP no MIP mostra o Status (MIP)
+        no RI só como rótulo — em qualquer Status (MIP), não só em LOTE."""
+        Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_RI_CONCLUIDO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(resp, "MIP: Aguardando Validação EACE")
+
+    def test_tela_do_ri_fora_do_mip_nao_mostra_status_mip(self):
+        Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+        self.assertNotContains(resp, "MIP: ")
+
+    def test_excluir_item_ixc_liberado_para_admin_com_ri_em_faturamento_concluido(self):
         ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
         item = RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
@@ -5659,7 +5948,10 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.admin)
         resp = self.client.post(reverse("ri_item_ixc_delete", kwargs={"item_pk": item.pk}))
         self.assertRedirects(resp, reverse("ri_detail", kwargs={"inep": self.escola.inep}))
-        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
+        self.assertFalse(RiItemIxc.objects.filter(pk=item.pk).exists())
+        self.assertTrue(
+            RiHistorico.objects.filter(ri=ri, campo="Item do Lado IXC (excluído)", autor=self.admin).exists()
+        )
 
     def test_bloqueia_salvar_relatorio_eace_com_ri_em_faturamento_concluido(self):
         ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
@@ -5704,14 +5996,10 @@ class RiDetailViewTests(TestCase):
         self.assertRedirects(resp, reverse("ri_detail", kwargs={"inep": self.escola.inep}))
         self.assertTrue(RiItemRelatorioEace.objects.filter(pk=item.pk).exists())
 
-    def test_tela_esconde_formularios_e_acoes_dos_2_lados_em_faturamento_concluido(self):
-        """RN-020 (Lado Relatório EACE) + RN-052 (Lado IXC — "Faturamento
-        Concluído" é só um dos casos de "fora de Em Andamento"): os dois
-        lados ficam sem ação de editar/excluir item; o Lado Relatório EACE
-        esconde o formulário inteiro (RN-020, comportamento inalterado); o
-        Lado IXC mantém os campos visíveis (usuário precisa continuar
-        vendo Data Ativação/CNPJ/Município/Estado já lançados), só que
-        desabilitados (RN-052)."""
+    def test_tela_bloqueia_so_relatorio_eace_em_faturamento_concluido(self):
+        """RN-020 (Lado Relatório EACE): sem ação de editar/excluir item e
+        formulário inteiro escondido. RN-052 (revista 2026-09-25): o Lado
+        IXC continua editável nesse status para Administrador/Analista."""
         ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_CONCLUIDO)
         RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="0", eh_kit=True,
@@ -5722,90 +6010,60 @@ class RiDetailViewTests(TestCase):
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
 
-        # RN-020: Lado Relatório EACE — formulário inteiro some, sem ação
-        # de editar/excluir item.
-        self.assertContains(resp, "Bloqueado (Faturamento Concluído)")
+        self.assertContains(resp, "Bloqueado (Processo Concluído)")
         self.assertContains(
             resp,
-            'RI em "Faturamento Concluído" — lançamento bloqueado até o Administrador trocar o status (RN-020).',
+            'INEP em "Processo Concluído" (MIP) — lançamento bloqueado (RN-020).',
         )
         self.assertNotContains(resp, 'name="acao" value="salvar_relatorio_eace"')
         self.assertNotContains(resp, "ri_item_relatorio_eace_delete")
 
-        # RN-052: Lado IXC — formulário continua renderizado (campos
-        # visíveis), mas desabilitado; sem ação de editar/excluir item.
-        self.assertFalse(resp.context["lado_ixc_editavel"])
-        self.assertTrue(resp.context["kit_form"].fields["kit"].disabled)
-        self.assertTrue(resp.context["data_ativacao_form"].fields["data_ativacao"].disabled)
-        self.assertContains(resp, 'name="acao" value="salvar_ixc"')
-        self.assertContains(resp, 'Somente visualização (fora de "Em Andamento")')
-        self.assertContains(
-            resp, 'RI fora de "Em Andamento" — campos do Lado IXC em modo visualização (RN-052).'
-        )
-        self.assertNotContains(resp, "ri_item_ixc_delete")
+        self.assertTrue(resp.context["lado_ixc_editavel"])
+        self.assertFalse(resp.context["kit_form"].fields["kit"].disabled)
+        self.assertFalse(resp.context["data_ativacao_form"].fields["data_ativacao"].disabled)
+        self.assertNotContains(resp, "Campos do Lado IXC em modo visualização")
 
-    def test_lado_ixc_bloqueia_lancamento_fora_de_em_andamento(self):
-        """RN-052 (2026-09-02): "Salvar" do Lado IXC só aceita POST com o
-        RI em "Em Andamento" — em qualquer outro status (aqui,
-        "Implantação EACE", o status inicial) o lançamento é recusado,
-        sem criar item."""
+    def test_analista_lanca_ixc_em_qualquer_status(self):
+        """RN-052 (revista 2026-09-25, bug reportado pelo usuário): com o
+        RI em "Envio de Email para faturamento" o usuário precisava voltar
+        para "Em Andamento" só para corrigir o Lado IXC. Agora o
+        lançamento é aceito em qualquer status, sem mexer no status, e vai
+        para o histórico."""
         kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
-        ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
         self.client.force_login(self.analista)
-        resp = self.client.post(
-            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
-            follow=True,
-        )
-        self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 0)
-        # Mensagem exibida via django.contrib.messages, auto-escapada pelo
-        # template (`"` vira `&quot;`) — checa um trecho sem aspas.
-        self.assertContains(resp, "só são editáveis com o RI em")
-        self.assertContains(resp, "RN-052")
+        for status in (Ri.IMPLANTACAO_EACE, Ri.ENVIO_EMAIL_FATURAMENTO, Ri.AGUARDANDO_FINANCEIRO):
+            with self.subTest(status=status):
+                Ri.objects.filter(escola=self.escola).delete()
+                ri = Ri.objects.create(escola=self.escola, status=status)
+                resp = self.client.post(
+                    reverse("ri_detail", kwargs={"inep": self.escola.inep}),
+                    {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
+                )
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 1)
+                ri.refresh_from_db()
+                self.assertEqual(ri.status, status)
+                self.assertTrue(
+                    RiHistorico.objects.filter(
+                        ri=ri, campo="KIT Instalado (Lado IXC)", autor=self.analista
+                    ).exists()
+                )
 
-    def test_administrador_tambem_nao_lanca_ixc_fora_de_em_andamento(self):
-        """RN-052: o bloqueio vale para os dois perfis, sem exceção de
-        Administrador — mesmo espírito da RN-020."""
-        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
-        ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
-        self.client.force_login(self.admin)
-        self.client.post(
-            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
-        )
-        self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 0)
-
-    def test_lado_ixc_bloqueia_edicao_e_exclusao_de_item_fora_de_em_andamento(self):
-        """RN-052: com o item já lançado, editar/excluir também exige o RI
-        em "Em Andamento" — mesmo padrão de bloqueio de campo da RN-020,
-        agora aplicado a este lado."""
-        ri = Ri.objects.create(escola=self.escola, status=Ri.ENVIO_EMAIL_FATURAMENTO)
+    def test_visualizador_nao_edita_lado_ixc(self):
+        """RN-052/RN-093: Visualizador segue somente leitura no Lado IXC —
+        POST recusado (middleware) e item intacto."""
+        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
         item = RiItemIxc.objects.create(
             ri=ri, descricao_item="Roteador", quantidade=1, valor_unitario="100.00"
         )
-        self.client.force_login(self.admin)
+        self.client.force_login(self.visualizador)
         self.client.post(
             reverse("ri_item_ixc_update", kwargs={"item_pk": item.pk}),
             {"descricao_item": "Roteador Wi-Fi 6", "quantidade": 2, "valor_unitario": "150.00"},
         )
         item.refresh_from_db()
         self.assertEqual(item.descricao_item, "Roteador")
-
-        self.client.post(reverse("ri_item_ixc_delete", kwargs={"item_pk": item.pk}))
-        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
-
-    def test_lado_ixc_libera_lancamento_quando_ri_volta_para_em_andamento(self):
-        """RN-052: não é um travamento permanente — com o RI em "Em
-        Andamento" o Lado IXC aceita lançamento normalmente."""
-        kit = KitPadrao.objects.create(descricao="Kit Wi-Fi Indoor", unidade="Escola")
-        ri = Ri.objects.create(escola=self.escola, status=Ri.ANDAMENTO)
-        self.client.force_login(self.analista)
-        resp = self.client.post(
-            reverse("ri_detail", kwargs={"inep": self.escola.inep}),
-            {"acao": "salvar_ixc", "kit": kit.pk, **self.FORMSET_PRODUTO_VAZIO, **self.FORMSET_PRODUTO_SERVICO_VAZIO},
-        )
-        self.assertEqual(resp.status_code, 302)
-        self.assertEqual(RiItemIxc.objects.filter(ri=ri).count(), 1)
+        self.assertFalse(RiHistorico.objects.filter(ri=ri).exists())
 
     def test_lado_relatorio_eace_continua_editavel_fora_de_em_andamento(self):
         """RN-052 não altera o Lado Relatório EACE — usuário pediu o
@@ -6866,11 +7124,14 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
         ])
         resultado = sincronizar_relatorio_eace_da_planilha(self.ri)
         self.ri.refresh_from_db()
-        self.assertEqual(self.ri.status, Ri.IMPLANTACAO_EACE)
+        # Pedido do usuário (2026-09-26): RI em "Implantação EACE" que ganha Lado 3
+        # vai para "Em Andamento" — nenhum outro status muda (RN-024 retirada).
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
         self.assertIsNone(self.ri.concluido_em)
         self.assertEqual(len(resultado["criados"]), 1)
-        self.assertFalse(
-            RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.LOG_STATUS).exists()
+        self.assertEqual(
+            list(RiHistorico.objects.filter(ri=self.ri, tipo=RiHistorico.LOG_STATUS).values_list("valor_anterior", "valor_novo")),
+            [("Implantação EACE", "Em Andamento")],
         )
 
     def test_sincronizar_nao_encerra_correcao_mega(self):
@@ -6904,7 +7165,9 @@ class SincronizarRelatorioEaceDaPlanilhaTests(TestCase):
         mensagens = list(resp.context["messages"])
         self.assertEqual(mensagens[-1].tags, "success")
         self.ri.refresh_from_db()
-        self.assertEqual(self.ri.status, Ri.IMPLANTACAO_EACE)
+        # Pedido do usuário (2026-09-26): RI em "Implantação EACE" que ganha Lado 3
+        # vai para "Em Andamento" — nenhum outro status muda (RN-024 retirada).
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
 
     def test_view_lanca_via_botao_sincronizador(self):
         self._upload_planilha([
@@ -7447,7 +7710,9 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
         ])
         sincronizar_relatorio_eace_de_todas_as_ri()
         self.ri_1.refresh_from_db()
-        self.assertEqual(self.ri_1.status, Ri.IMPLANTACAO_EACE)
+        # Pedido do usuário (2026-09-26): RI em "Implantação EACE" que ganha Lado 3
+        # vai para "Em Andamento" — nenhum outro status muda (RN-024 retirada).
+        self.assertEqual(self.ri_1.status, Ri.ANDAMENTO)
         self.assertIsNone(self.ri_1.concluido_em)
 
     def test_status_escola_gravado_por_item_tambem_no_lote(self):
@@ -7511,7 +7776,9 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
         ])
         processados = sincronizar_relatorio_eace_de_todas_as_ri()
         ri_novo = Ri.objects.get(escola=escola_sem_ri)
-        self.assertEqual(ri_novo.status, Ri.IMPLANTACAO_EACE)
+        # Pedido do usuário (2026-09-26): RI em "Implantação EACE" que ganha Lado 3
+        # vai para "Em Andamento" — nenhum outro status muda (RN-024 retirada).
+        self.assertEqual(ri_novo.status, Ri.ANDAMENTO)
         resultados_por_ri = {ri.pk: resultado for ri, resultado in processados}
         self.assertEqual(len(resultados_por_ri[ri_novo.pk]["criados"]), 1)
 
@@ -7540,7 +7807,10 @@ class SincronizarRelatorioEaceDeTodasAsRiTests(TestCase):
         # (2026-09-04) tira mais 1 consulta: "já existe KIT lançado?"
         # (RN-015) passa a ser calculado a partir da lista de itens já
         # carregada, em vez de um `.filter(eh_kit=True).exists()` à parte.
-        with self.assertNumQueries(9):
+        # +3 (pedido do usuário, 2026-09-26): o INEP que ganha Lado 3 sai de
+        # "Implantação EACE" para "Em Andamento" (UPDATE do RI + histórico +
+        # auditoria) — só de quem muda de status, não por Escola.
+        with self.assertNumQueries(12):
             sincronizar_relatorio_eace_de_todas_as_ri()
 
 
@@ -7664,7 +7934,9 @@ class PlanilhaEaceSincronizarTodasViewTests(TestCase):
         mensagens = [str(m) for m in resp.context["messages"]]
         self.assertEqual(mensagens, ["Sincronização em lote: 0 INEP(s) atualizado(s)."])
         self.ri.refresh_from_db()
-        self.assertEqual(self.ri.status, Ri.IMPLANTACAO_EACE)
+        # Pedido do usuário (2026-09-26): RI em "Implantação EACE" que ganha Lado 3
+        # vai para "Em Andamento" — nenhum outro status muda (RN-024 retirada).
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
         self.assertIsNone(self.ri.concluido_em)
         self.assertFalse(
             RiHistorico.objects.filter(
@@ -7769,6 +8041,154 @@ class DashboardFinanceiroTests(TestCase):
         self.assertEqual(resultado["percentual_faturado_pct"], Decimal("200.00"))  # 3.000/1.500
         self.assertEqual(resultado["percentual_faturado_css"], "100.00")  # barra capada
         self.assertEqual(resultado["percentual_faltante_css"], "0.00")
+
+
+class DashboardFaturamentoPorStatusRiTests(TestCase):
+    """Pedido do usuário (2026-09-25): 1 card por status do RI no dashboard
+    Faturamento — soma do Lado Relatório EACE (3º lado) do RI mais recente
+    de cada INEP, com os mesmos filtros dos cards principais."""
+
+    def setUp(self):
+        from apps.ri.services import montar_faturamento_por_status_ri
+
+        self.montar = montar_faturamento_por_status_ri
+        self.kit = "Kit Cobertura Wi-Fi - 4 Access Points"
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 4 Access Points (serviços, materiais e equipamentos)",
+            lote=1, unidade="Escola", valor_equipamento="1000.00",
+        )
+        KitPadrao.objects.create(descricao="Nobreak", lote=1, unidade="Unidade", valor_equipamento="200.00")
+        self.escola_sp = Escola.objects.create(inep="70000001", nome="Escola SP", estado="SP", municipio="Santos", lote=1)
+        self.escola_rj = Escola.objects.create(inep="70000002", nome="Escola RJ", estado="RJ", municipio="Rio", lote=1)
+        self.ri_sp = Ri.objects.create(escola=self.escola_sp, status=Ri.ANDAMENTO)
+        RiItemRelatorioEace.objects.create(ri=self.ri_sp, descricao_item=self.kit, quantidade=1, valor_unitario="1000.00", eh_kit=True)
+        RiItemRelatorioEace.objects.create(ri=self.ri_sp, descricao_item="Nobreak", quantidade=2, valor_unitario="200.00")
+        self.ri_rj = Ri.objects.create(escola=self.escola_rj, status=Ri.FATURAMENTO_CONCLUIDO)
+        RiItemRelatorioEace.objects.create(ri=self.ri_rj, descricao_item=self.kit, quantidade=1, valor_unitario="1000.00", eh_kit=True)
+
+    def _por_status(self, **filtros):
+        return {card["status"]: card for card in self.montar(**filtros)["cards"]}
+
+    def test_status_selecionado_abre_valores_por_estado(self):
+        """Pedido do usuário (2026-09-25): clicar no card abre o status
+        por Estado."""
+        outra_sp = Escola.objects.create(inep="70000003", nome="Outra SP", estado="SP", lote=1)
+        ri = Ri.objects.create(escola=outra_sp, status=Ri.ANDAMENTO)
+        RiItemRelatorioEace.objects.create(ri=ri, descricao_item="Nobreak", quantidade=1, valor_unitario="200.00")
+        escola_go = Escola.objects.create(inep="70000004", nome="Escola GO", estado="GO", lote=1)
+        ri_go = Ri.objects.create(escola=escola_go, status=Ri.ANDAMENTO)
+        RiItemRelatorioEace.objects.create(ri=ri_go, descricao_item="Nobreak", quantidade=1, valor_unitario="200.00")
+
+        linhas = self.montar(status_selecionado=Ri.ANDAMENTO)["por_estado"]
+        self.assertEqual(
+            [(l["estado"], l["valor"], l["quantidade_ineps"]) for l in linhas],
+            [("SP", Decimal("1600.00"), 2), ("GO", Decimal("200.00"), 1)],
+        )
+        self.assertEqual(linhas[0]["percentual_css"], "100.0")
+        self.assertEqual(self.montar()["por_estado"], [])
+
+        linhas = self.montar(status_selecionado=Ri.ANDAMENTO, uf_selecionada="SP")["por_estado"]
+        self.assertEqual(
+            [(i["inep"], i["valor"]) for i in linhas[0]["ineps"]],
+            [(self.escola_sp.inep, Decimal("1400.00")), (outra_sp.inep, Decimal("200.00"))],
+        )
+        self.assertEqual(linhas[1]["ineps"], [])  # GO não foi aberta
+
+    def test_clique_no_card_e_na_uf_monta_os_filtros(self):
+        usuario = User.objects.create_user(
+            username="admin-dash-clique", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR
+        )
+        self.client.force_login(usuario)
+        resp = self.client.get(reverse("home"))
+        card = next(c for c in resp.context["faturamento_por_status_ri"] if c["status"] == Ri.ANDAMENTO)
+        self.assertEqual(card["href"], "?status_ri=andamento")
+
+        resp = self.client.get(reverse("home"), {"status_ri": Ri.ANDAMENTO})
+        self.assertContains(resp, "Em Andamento por Estado")
+        linha = resp.context["faturamento_status_ri_por_estado"][0]
+        # Clicar na UF abre os INEPs dela, sem filtrar o dashboard por
+        # estado (pedido do usuário: estados → INEPs, sem municípios).
+        self.assertEqual(linha["href"], "?status_ri=andamento&status_uf=SP")
+        self.assertEqual(linha["ineps"], [])
+
+        resp = self.client.get(reverse("home"), {"status_ri": Ri.ANDAMENTO, "status_uf": "SP"})
+        linha = resp.context["faturamento_status_ri_por_estado"][0]
+        self.assertTrue(linha["selecionado"])
+        self.assertEqual(
+            [(i["inep"], i["valor"]) for i in linha["ineps"]], [(self.escola_sp.inep, Decimal("1400.00"))]
+        )
+        self.assertEqual(linha["href"], "?status_ri=andamento")  # clicar de novo fecha a UF
+        self.assertContains(resp, reverse("ri_detail", kwargs={"inep": self.escola_sp.inep}))
+        self.assertIsNone(resp.context["estado_filtrado"])  # dashboard continua sem filtro de estado
+        self.assertEqual(resp.context["faturamento_por_municipio"], [])
+        card = next(c for c in resp.context["faturamento_por_status_ri"] if c["status"] == Ri.ANDAMENTO)
+        self.assertTrue(card["selecionado"])
+        self.assertEqual(card["href"], "?")  # clicar de novo fecha
+
+        resp = self.client.get(reverse("home"), {"status_ri": "invalido"})
+        self.assertIsNone(resp.context["status_ri_selecionado"])
+
+    def test_conta_ineps_sem_valor_no_lado_3(self):
+        """Pedido do usuário (2026-09-26): quantos INEPs ainda estão sem
+        valor no Lado 3 — sem item nenhum ou com itens zerados."""
+        sem_item = Escola.objects.create(inep="70000005", nome="Sem item", estado="SP", lote=1)
+        Ri.objects.create(escola=sem_item, status=Ri.ANDAMENTO)
+        zerado = Escola.objects.create(inep="70000006", nome="Zerado", estado="GO", lote=1)
+        ri_zerado = Ri.objects.create(escola=zerado, status=Ri.ANDAMENTO)
+        RiItemRelatorioEace.objects.create(ri=ri_zerado, descricao_item="Nobreak", quantidade=1, valor_unitario="0")
+
+        por_status = self._por_status()
+        self.assertEqual(por_status[Ri.ANDAMENTO]["quantidade_ineps"], 3)
+        self.assertEqual(por_status[Ri.ANDAMENTO]["sem_valor"], 2)
+        self.assertEqual(por_status[Ri.FATURAMENTO_RI_CONCLUIDO]["sem_valor"], 0)
+        linhas = {l["estado"]: l for l in self.montar(status_selecionado=Ri.ANDAMENTO)["por_estado"]}
+        self.assertEqual(linhas["SP"]["sem_valor"], 1)
+        self.assertEqual(linhas["GO"]["sem_valor"], 1)
+
+        usuario = User.objects.create_user(
+            username="admin-dash-sem-valor", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR
+        )
+        self.client.force_login(usuario)
+        resp = self.client.get(reverse("home"), {"status_ri": Ri.ANDAMENTO, "status_uf": "GO"})
+        self.assertContains(resp, "2 Sem valor do lado (EACE)")
+        self.assertContains(resp, "1 Sem valor do lado (EACE)")  # linha da UF GO
+        self.assertNotContains(resp, "Lado 3")
+
+    def test_um_card_por_status_do_ri_inclusive_zerados(self):
+        cards = self.montar()["cards"]
+        self.assertEqual([c["status"] for c in cards], [valor for valor, _ in Ri.STATUS_CHOICES])
+        por_status = self._por_status()
+        self.assertEqual(por_status[Ri.IMPLANTACAO_EACE]["valor"], Decimal("0.00"))
+        self.assertEqual(por_status[Ri.IMPLANTACAO_EACE]["quantidade_ineps"], 0)
+
+    def test_soma_lado_relatorio_eace(self):
+        por_status = self._por_status()
+        self.assertEqual(por_status[Ri.ANDAMENTO]["valor"], Decimal("1400.00"))  # 1000 + 2 x 200
+        self.assertEqual(por_status[Ri.ANDAMENTO]["quantidade_ineps"], 1)
+        self.assertEqual(por_status[Ri.FATURAMENTO_RI_CONCLUIDO]["valor"], Decimal("1000.00"))
+
+    def test_conta_so_o_ri_mais_recente_de_cada_inep(self):
+        novo = Ri.objects.create(escola=self.escola_sp, status=Ri.CORRECAO_MEGA)
+        RiItemRelatorioEace.objects.create(ri=novo, descricao_item="Nobreak", quantidade=1, valor_unitario="200.00")
+        por_status = self._por_status()
+        self.assertEqual(por_status[Ri.ANDAMENTO]["quantidade_ineps"], 0)
+        self.assertEqual(por_status[Ri.CORRECAO_MEGA]["valor"], Decimal("200.00"))
+
+    def test_respeita_filtros_de_estado_e_kit(self):
+        self.assertEqual(self._por_status(estado="RJ")[Ri.ANDAMENTO]["quantidade_ineps"], 0)
+        self.assertEqual(self._por_status(estado="SP", municipio="Santos")[Ri.ANDAMENTO]["valor"], Decimal("1400.00"))
+        self.assertEqual(self._por_status(kit=self.kit)[Ri.ANDAMENTO]["valor"], Decimal("1000.00"))
+        self.assertEqual(self._por_status(produto="Nobreak")[Ri.ANDAMENTO]["valor"], Decimal("400.00"))
+
+    def test_dashboard_mostra_os_cards(self):
+        usuario = User.objects.create_user(
+            username="admin-dash-status", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR
+        )
+        self.client.force_login(usuario)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, "Faturamento por status do RI")
+        self.assertContains(resp, "Correção MEGA")
+        self.assertEqual(len(resp.context["faturamento_por_status_ri"]), len(Ri.STATUS_CHOICES))
 
 
 class DashboardFinanceiroPorEstadoTests(TestCase):
@@ -8004,11 +8424,14 @@ def _marcar_transicao_aguardando_validacao_eace(ri, quando, usuario=None):
     criado_em` é `auto_now_add`, então o valor real só pode ser fixado
     depois, via `.update()` (não dispara `auto_now_add`, ao contrário de
     `.save()`). `quando` é `date`; vira meia-noite (fuso do projeto) para
-    caber num `DateTimeField` sem aviso de datetime "naive"."""
-    trocar_status_com_log(ri, Ri.AGUARDANDO_VALIDACAO_EACE, usuario)
+    caber num `DateTimeField` sem aviso de datetime "naive".
+
+    Pedido do usuário (2026-09-26): o envio ao portal EACE agora grava
+    "Faturamento RI Concluído" (antes "Aguardando validação EACE")."""
+    trocar_status_com_log(ri, Ri.FATURAMENTO_RI_CONCLUIDO, usuario)
     historico = RiHistorico.objects.filter(
         ri=ri, tipo=RiHistorico.LOG_STATUS, campo="Status do RI",
-        valor_novo="Aguardando validação EACE",
+        valor_novo="Faturamento RI Concluído",
     ).latest("id")
     momento = timezone.make_aware(timezone.datetime.combine(quando, timezone.datetime.min.time()))
     RiHistorico.objects.filter(pk=historico.pk).update(criado_em=momento)
@@ -8218,6 +8641,48 @@ class MontarRelatorioFaturamentoEaceMateriaisTests(TestCase):
             linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
         self.assertEqual(linha["nota_fiscal_switch"], "")
 
+    def test_nf_do_processamento_manual_entra_e_nf_cancelada_sai(self):
+        """Pedido do usuário (2026-09-25): a NF errada veio no e-mail e
+        teve o processamento cancelado; a corrigida veio por fora e entrou
+        por processamento RPA manual — o relatório usa só a corrigida."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Switch 8 portas", quantidade=1, valor_unitario="300.00",
+        )
+        doc_errado = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-errada.pdf", b"conteudo-errado"), ativo=True,
+        )
+        email = RiHistorico.objects.create(ri=self.ri, tipo=RiHistorico.EMAIL, mensagem="Resposta do financeiro.")
+        email.documentos.set([doc_errado])
+        LogRpaEace.objects.create(ri=self.ri, documento_pdf=doc_errado, resultado=LogRpaEace.CANCELADO)
+        doc_corrigido = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-corrigida.pdf", b"conteudo-corrigido"), ativo=True,
+        )
+        LogRpaEace.objects.create(
+            ri=self.ri, documento_pdf=doc_corrigido, resultado=LogRpaEace.SUCESSO, criado_manualmente=True,
+        )
+
+        respostas = {
+            str(doc_errado.arquivo.path): {
+                "numero_nf": "1004", "inep": "60000020", "item_lpu": "Switch 8 portas",
+                "itens": [], "ilegivel": False,
+            },
+            str(doc_corrigido.arquivo.path): {
+                "numero_nf": "1099", "inep": "60000020", "item_lpu": "Switch 8 portas",
+                "itens": [], "ilegivel": False,
+            },
+        }
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_validacao_nf",
+            side_effect=lambda caminho: respostas[caminho],
+        ):
+            linha = montar_relatorio_faturamento_eace_materiais(date(2026, 8, 1), date(2026, 8, 31))[0]
+            linhas_novo = montar_relatorio_faturamento_eace_materiais_novo(date(2026, 8, 1), date(2026, 8, 31))
+        self.assertEqual(linha["nota_fiscal_switch"], "1099")
+        self.assertIn("1099", [l["nota_fiscal"] for l in linhas_novo])
+        self.assertNotIn("1004", [l["nota_fiscal"] for l in linhas_novo])
+
     def test_reabertura_de_ri_concluido_nao_conta_como_envio(self):
         """RN-082 (revista, 2026-09-09): reabrir um RI já concluído pra
         correção ("Faturamento Concluído" → "Aguardando validação EACE")
@@ -8327,6 +8792,23 @@ class GerarZipArquivosRelatorioFaturamentoEaceMateriaisTests(TestCase):
         nomes = zipfile.ZipFile(BytesIO(conteudo)).namelist()
         self.assertIn("60000040/nota1.pdf", nomes)
         self.assertIn("60000040/nota1.xml", nomes)
+
+    def test_zip_tira_arquivos_de_processamento_cancelado(self):
+        """Pedido do usuário (2026-09-25): PDF/XML de processamento RPA
+        cancelado (NF errada) fica fora; os do processamento manual
+        entram."""
+        errado_pdf, errado_xml = self._criar_documentos(self.ri, "errada.pdf", "errada.xml")
+        LogRpaEace.objects.create(
+            ri=self.ri, documento_pdf=errado_pdf, documento_xml=errado_xml, resultado=LogRpaEace.CANCELADO,
+        )
+        certo_pdf, certo_xml = self._criar_documentos(self.ri, "corrigida.pdf", "corrigida.xml")
+        LogRpaEace.objects.create(
+            ri=self.ri, documento_pdf=certo_pdf, documento_xml=certo_xml,
+            resultado=LogRpaEace.SUCESSO, criado_manualmente=True,
+        )
+        linhas = [{"ri_id": self.ri.pk, "inep": self.escola.inep}]
+        nomes = zipfile.ZipFile(BytesIO(gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas))).namelist()
+        self.assertEqual(sorted(nomes), ["60000040/corrigida.pdf", "60000040/corrigida.xml"])
 
     def test_zip_ignora_ri_fora_das_linhas_do_periodo(self):
         outra_escola = Escola.objects.create(inep="60000043", nome="Fora do período", estado="PE")
@@ -8852,7 +9334,7 @@ class ImportarRiLegadoEaceTests(TestCase):
         self.assertTrue(escola.legado)
 
         ri = Ri.objects.get(escola=escola)
-        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
         self.assertEqual(ri.data_ativacao, date(2026, 8, 31))
 
         itens = list(ri.itens_ixc.order_by("id"))
@@ -8903,7 +9385,7 @@ class ImportarRiLegadoEaceTests(TestCase):
         self.assertTrue(escola.legado)
 
         ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
         self.assertEqual(ri.itens_ixc.count(), 2)
 
     def test_ri_com_progresso_real_nunca_e_mexido(self):
@@ -8916,11 +9398,11 @@ class ImportarRiLegadoEaceTests(TestCase):
         escola.refresh_from_db()
         ri.refresh_from_db()
         self.assertFalse(escola.legado)
-        self.assertEqual(ri.status, Ri.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
         self.assertEqual(ri.itens_ixc.count(), 0)
         self.assertEqual(ri.historico.count(), 0)
 
-    def test_incluir_com_progresso_reverte_faturamento_concluido_sem_duplicar_itens(self):
+    def test_incluir_com_progresso_mantem_processo_concluido_sem_duplicar_itens(self):
         """Pedido do usuário (2026-09-10, ampliação): --incluir-com-progresso
         estende o tratamento mesmo a um RI já "Faturamento Concluído" com
         KIT/Nobreak já lançados (idênticos ao que a planilha traria) — o
@@ -8941,8 +9423,10 @@ class ImportarRiLegadoEaceTests(TestCase):
         escola.refresh_from_db()
         ri.refresh_from_db()
         self.assertTrue(escola.legado)
-        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
-        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        # Pedido do usuário (2026-09-26): RI de INEP no MIP já é "Faturamento
+        # RI Concluído" — o comando não reabre mais o "Processo Concluído".
+        self.assertEqual(escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
         # Nao duplicou: continuam so os 2 itens ja lancados antes, com o
         # valor original (nunca sobrescrito por este comando).
         self.assertEqual(ri.itens_ixc.count(), 2)
@@ -9004,7 +9488,7 @@ class ImportarRiLegadoEaceTests(TestCase):
         call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
 
         ri.refresh_from_db()
-        self.assertEqual(ri.status, Ri.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
         self.assertEqual(ri.itens_ixc.count(), 0)
 
     def test_ri_intocado_mas_com_item_ja_lancado_nao_e_mexido(self):
@@ -9043,7 +9527,7 @@ class ImportarRiLegadoEaceTests(TestCase):
         call_command("importar_ri_legado_eace", str(caminho), "--aplicar")
 
         ri = Ri.objects.get(escola__inep="35057873")
-        self.assertEqual(ri.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
         self.assertFalse(ri.itens_ixc.filter(eh_kit=True).exists())
         self.assertTrue(ri.itens_ixc.filter(descricao_item="Nobreak").exists())
 
@@ -9160,6 +9644,24 @@ class ValidarNotasFiscaisFinanceiroServiceTests(TestCase):
             return_value=dados_pdf,
         ):
             return validar_notas_fiscais_financeiro(self.ri, self.usuario)
+
+    def test_valida_nf_do_processamento_manual(self):
+        """Pedido do usuário (2026-09-25): NF corrigida recebida por fora
+        do e-mail (processamento RPA manual) também é validada."""
+        manual = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-manual.pdf", b"conteudo-manual"), ativo=True,
+        )
+        LogRpaEace.objects.create(ri=self.ri, documento_pdf=manual, criado_manualmente=True)
+        resultados = self._validar(self._dados_pdf())
+        self.assertEqual(
+            sorted(r["documento_id"] for r in resultados), sorted([self.documento.pk, manual.pk])
+        )
+
+    def test_nao_valida_nf_de_processamento_cancelado(self):
+        LogRpaEace.objects.create(ri=self.ri, documento_pdf=self.documento, resultado=LogRpaEace.CANCELADO)
+        resultados = self._validar(self._dados_pdf())
+        self.assertEqual(resultados, [])
 
     def test_ok_quando_tudo_bate(self):
         resultados = self._validar(self._dados_pdf())
@@ -9370,3 +9872,281 @@ class RiValidarNotasFiscaisViewTests(TestCase):
             resp = self._validar()
         mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
         self.assertTrue(any("com divergência" in m for m in mensagens))
+
+
+
+class FaturamentoRiConcluidoTests(TestCase):
+    """Pedido do usuário (2026-09-26): INEP no MIP (qualquer Status (MIP))
+    fica no RI como "Faturamento RI Concluído" — o Status (MIP) aparece no
+    RI só como rótulo; "Processo Concluído" é o faturamento encerrado."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-ri-concluido", password="senha-teste-123", perfil=User.PERFIL_ANALISTA
+        )
+        self.admin = User.objects.create_user(
+            username="admin-ri-concluido", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR
+        )
+        self.escola = Escola.objects.create(inep="36000001", nome="Escola RI Concluído")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def test_rpa_concluida_leva_ri_para_faturamento_ri_concluido_e_inep_para_o_mip(self):
+        from apps.ri.services import marcar_log_rpa_eace_concluido_manualmente
+
+        LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.SUCESSO)
+        log = LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO)
+        marcar_log_rpa_eace_concluido_manualmente(log, usuario=self.user)
+
+        self.ri.refresh_from_db()
+        self.escola.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+        self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertTrue(self.ri.historico.filter(valor_novo="Faturamento RI Concluído").exists())
+
+    def test_faturamento_concluido_vira_ri_concluido_com_mip_processo_concluido(self):
+        self.ri.status = Ri.FATURAMENTO_CONCLUIDO
+        self.ri.save()
+
+        self.ri.refresh_from_db()
+        self.escola.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+        self.assertEqual(self.escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+        self.assertTrue(self.ri.faturamento_encerrado)
+
+    def test_salvar_ri_de_novo_nao_tira_inep_do_lote(self):
+        self.ri.status = Ri.FATURAMENTO_RI_CONCLUIDO
+        self.ri.save()
+        Escola.objects.filter(pk=self.escola.pk).update(status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
+        self.ri.refresh_from_db()
+
+        self.ri.save()
+
+        self.escola.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
+        self.assertFalse(self.ri.faturamento_encerrado)
+
+    def test_em_andamento_mip_nao_reabre_o_ri(self):
+        self.ri.status = Ri.FATURAMENTO_RI_CONCLUIDO
+        self.ri.save()
+        self.client.force_login(self.user)
+
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.EM_ANDAMENTO},
+        )
+
+        self.ri.refresh_from_db()
+        self.escola.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.EM_ANDAMENTO)
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+
+    def test_processo_concluido_no_mip_mantem_ri_concluido_e_encerra(self):
+        self.ri.status = Ri.FATURAMENTO_RI_CONCLUIDO
+        self.ri.save()
+        self.client.force_login(self.user)
+
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.FATURAMENTO_CONCLUIDO},
+        )
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+        self.assertTrue(self.ri.faturamento_encerrado)
+        self.assertIn(self.ri, Ri.objects.filter(Ri.q_faturamento_encerrado()))
+
+    def test_status_do_ri_nao_muda_manualmente_com_inep_no_mip(self):
+        self.ri.status = Ri.FATURAMENTO_RI_CONCLUIDO
+        self.ri.save()
+        self.client.force_login(self.admin)
+
+        self.client.post(
+            reverse("ri_status_update", kwargs={"pk": self.ri.pk}),
+            {"status": Ri.ANDAMENTO, "next": reverse("grid_inep")},
+        )
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+
+    def test_detalhe_mostra_status_mip_como_rotulo(self):
+        self.ri.status = Ri.FATURAMENTO_RI_CONCLUIDO
+        self.ri.save()
+        self.client.force_login(self.user)
+
+        resp = self.client.get(reverse("ri_detail", kwargs={"inep": self.escola.inep}))
+
+        self.assertContains(resp, "Faturamento RI Concluído")
+        self.assertContains(resp, "MIP: Aguardando Validação EACE")
+
+    def test_migracao_converte_os_ris_antigos(self):
+        from importlib import import_module
+
+        from django.apps import apps as django_apps
+
+        migracao = import_module("apps.ri.migrations.0037_ri_status_faturamento_ri_concluido")
+        # Estado antigo gravado direto no banco (sem o `Ri.save()` novo).
+        LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.SUCESSO)  # RPA concluída, parado
+        escola_validacao = Escola.objects.create(inep="36000002", nome="Em validação")
+        ri_validacao = Ri.objects.create(escola=escola_validacao, status=Ri.IMPLANTACAO_EACE)
+        escola_concluida = Escola.objects.create(inep="36000003", nome="Concluída")
+        ri_concluido = Ri.objects.create(escola=escola_concluida, status=Ri.IMPLANTACAO_EACE)
+        escola_em_andamento = Escola.objects.create(inep="36000004", nome="Em Andamento MIP")
+        ri_em_andamento = Ri.objects.create(escola=escola_em_andamento, status=Ri.IMPLANTACAO_EACE)
+        escola_pendente = Escola.objects.create(inep="36000005", nome="RPA pendente")
+        ri_pendente = Ri.objects.create(escola=escola_pendente, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        LogRpaEace.objects.create(ri=ri_pendente, resultado=LogRpaEace.ERRO)
+        Ri.objects.filter(pk=ri_validacao.pk).update(status=Ri.AGUARDANDO_VALIDACAO_EACE)
+        Escola.objects.filter(pk=escola_validacao.pk).update(status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
+        Ri.objects.filter(pk=ri_concluido.pk).update(status=Ri.FATURAMENTO_CONCLUIDO)
+        Ri.objects.filter(pk=ri_em_andamento.pk).update(status=Ri.ANDAMENTO)
+        Escola.objects.filter(pk=escola_em_andamento.pk).update(status_mip=Escola.EM_ANDAMENTO)
+
+        migracao.migrar_ris_para_faturamento_ri_concluido(django_apps, None)
+
+        for obj in (self.ri, ri_validacao, ri_concluido, ri_em_andamento, ri_pendente,
+                    self.escola, escola_validacao, escola_concluida, escola_em_andamento):
+            obj.refresh_from_db()
+        for ri in (self.ri, ri_validacao, ri_concluido, ri_em_andamento):
+            self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+        self.assertEqual(ri_pendente.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(escola_validacao.status_mip, Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
+        self.assertEqual(escola_concluida.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(escola_em_andamento.status_mip, Escola.EM_ANDAMENTO)
+        self.assertTrue(
+            ri_em_andamento.historico.filter(valor_anterior="Em Andamento", valor_novo="Faturamento RI Concluído").exists()
+        )
+
+    def test_valor_ja_faturado_igual_ao_card_faturamento_ri_concluido(self):
+        from apps.ri.services import montar_dashboard_financeiro, montar_faturamento_por_status_ri
+
+        self.ri.status = Ri.FATURAMENTO_RI_CONCLUIDO
+        self.ri.save()
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit 1", quantidade=2, valor_unitario=Decimal("100.00"), eh_kit=True,
+        )
+        escola_andamento = Escola.objects.create(inep="36000009", nome="Fora do MIP")
+        ri_andamento = Ri.objects.create(escola=escola_andamento, status=Ri.ANDAMENTO)
+        RiItemRelatorioEace.objects.create(
+            ri=ri_andamento, descricao_item="Kit 1", quantidade=1, valor_unitario=Decimal("50.00"), eh_kit=True,
+        )
+
+        card = next(
+            c for c in montar_faturamento_por_status_ri()["cards"] if c["status"] == Ri.FATURAMENTO_RI_CONCLUIDO
+        )
+        self.assertEqual(montar_dashboard_financeiro()["valor_faturado"], Decimal("200.00"))
+        self.assertEqual(card["valor"], Decimal("200.00"))
+
+
+class ImplantacaoComLado3VaiParaAndamentoTests(TestCase):
+    """Pedido do usuário (2026-09-26): RI em "Implantação EACE" com o Lado
+    Relatório EACE preenchido vai para "Em Andamento"."""
+
+    def setUp(self):
+        self.escola = Escola.objects.create(inep="37000001", nome="Escola Implantação")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.IMPLANTACAO_EACE)
+
+    def test_com_lado3_vai_para_andamento(self):
+        from apps.ri.services import avancar_implantacao_com_lado3
+
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit 1", quantidade=1, valor_unitario=Decimal("10.00"), eh_kit=True,
+        )
+        avancar_implantacao_com_lado3(self.ri)
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
+        self.assertTrue(self.ri.historico.filter(valor_anterior="Implantação EACE", valor_novo="Em Andamento").exists())
+
+    def test_sem_lado3_continua_em_implantacao(self):
+        from apps.ri.services import avancar_implantacao_com_lado3
+
+        avancar_implantacao_com_lado3(self.ri)
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.IMPLANTACAO_EACE)
+
+    def test_outro_status_nao_muda(self):
+        from apps.ri.services import avancar_implantacao_com_lado3
+
+        Ri.objects.filter(pk=self.ri.pk).update(status=Ri.ENVIO_EMAIL_FATURAMENTO)
+        self.ri.refresh_from_db()
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit 1", quantidade=1, valor_unitario=Decimal("10.00"), eh_kit=True,
+        )
+        avancar_implantacao_com_lado3(self.ri)
+
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.ENVIO_EMAIL_FATURAMENTO)
+
+    def test_migracao_move_os_antigos(self):
+        from importlib import import_module
+
+        from django.apps import apps as django_apps
+
+        migracao = import_module("apps.ri.migrations.0040_implantacao_com_lado3_vai_para_andamento")
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Kit 1", quantidade=1, valor_unitario=Decimal("10.00"), eh_kit=True,
+        )
+        escola_vazia = Escola.objects.create(inep="37000002", nome="Sem Lado 3")
+        ri_vazio = Ri.objects.create(escola=escola_vazia, status=Ri.IMPLANTACAO_EACE)
+
+        migracao.mover_para_andamento(django_apps, None)
+
+        self.ri.refresh_from_db()
+        ri_vazio.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
+        self.assertEqual(ri_vazio.status, Ri.IMPLANTACAO_EACE)
+
+
+class CardImplantacaoEaceValorLado1Tests(TestCase):
+    """Pedido do usuário (2026-09-26): no dashboard Faturamento, o card
+    "Implantação EACE" soma o Lado 1 (1º status, ainda sem Lado 3) + o
+    Nobreak declarado; a meta ("Valor Total do Projeto") é só equipamento."""
+
+    def test_implantacao_usa_lado1_e_demais_status_usam_lado3(self):
+        from apps.ri.services import montar_faturamento_por_status_ri
+
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        KitPadrao.objects.create(descricao="Nobreak", lote=9, valor_equipamento="40.00", valor_servico="5.00")
+        escola_declarado = Escola.objects.create(
+            inep="38000001", nome="Kit declarado", lote=9, kit_inicial="Kit Cobertura Wi-Fi - 2 Access Points",
+        )
+        Ri.objects.create(escola=escola_declarado, status=Ri.IMPLANTACAO_EACE)
+        escola_lancado = Escola.objects.create(inep="38000002", nome="Lado 1 lançado", lote=9)
+        ri_lancado = Ri.objects.create(escola=escola_lancado, status=Ri.IMPLANTACAO_EACE)
+        RiItemEace.objects.create(ri=ri_lancado, descricao_item="Kit X", quantidade=2, valor_unitario=Decimal("150.00"))
+        escola_andamento = Escola.objects.create(inep="38000003", nome="Em andamento", lote=9)
+        ri_andamento = Ri.objects.create(escola=escola_andamento, status=Ri.ANDAMENTO)
+        RiItemEace.objects.create(ri=ri_andamento, descricao_item="Kit X", quantidade=1, valor_unitario=Decimal("999.00"))
+        RiItemRelatorioEace.objects.create(
+            ri=ri_andamento, descricao_item="Kit Y", quantidade=1, valor_unitario=Decimal("80.00"), eh_kit=True,
+        )
+
+        cards = {c["status"]: c for c in montar_faturamento_por_status_ri()["cards"]}
+
+        valor_declarado = KitPadrao.resolver_kit_declarado(escola_declarado.kit_inicial, lote=9).valor_faturavel
+        nobreak = KitPadrao.resolver_nobreak_declarado("Nobreak", lote=9)
+        valor_nobreak = nobreak.valor_faturavel if nobreak else Decimal("0")
+        self.assertEqual(
+            cards[Ri.IMPLANTACAO_EACE]["valor"], valor_declarado + Decimal("300.00") + 2 * valor_nobreak
+        )
+        self.assertEqual(cards[Ri.IMPLANTACAO_EACE]["quantidade_ineps"], 2)
+        self.assertEqual(cards[Ri.ANDAMENTO]["valor"], Decimal("80.00"))
+
+    def test_valor_total_do_projeto_so_equipamento(self):
+        from apps.ri.services import montar_dashboard_financeiro
+
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        Escola.objects.create(
+            inep="38000010", nome="Meta", lote=9, kit_inicial="Kit Cobertura Wi-Fi - 2 Access Points",
+            nobreak_inicial="",
+        )
+
+        self.assertEqual(montar_dashboard_financeiro()["valor_total_projeto"], Decimal("1000.00"))

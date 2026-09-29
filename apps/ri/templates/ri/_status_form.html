@@ -22,16 +22,11 @@ opção é "Em Andamento" (backend também recusa qualquer outra).
     <input type="hidden" name="next" value="{{ next_url }}">
     <input type="hidden" name="origem" value="grid">
     <label class="text-[10px] font-black uppercase text-amber-800 dark:text-amber-300">Status do RI</label>
-    {% comment %}
-    RN-020: com o RI em "Faturamento Concluído", só o Administrador troca o
-    status — para o Analista, o <select> trava no valor atual em vez de
-    oferecer os demais status editáveis (o backend também recusa, aqui é
-    só para não sugerir uma troca que vai ser rejeitada).
-    {% endcomment %}
-    {% if ri.status == 'faturamento_concluido' and not usuario_administrador %}
-    <select name="status" disabled title="Só Administrador altera o status a partir de &quot;Faturamento Concluído&quot; (RN-020)"
+    {% if ri.escola.status_mip %}
+    {% comment %}Pedido do usuário (2026-09-26): INEP no MIP — status do RI controlado pelo MIP (backend também recusa).{% endcomment %}
+    <select name="status" disabled title="INEP no MIP: altere o Status (MIP) na tela do MIP"
             class="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg text-xs font-bold text-gray-500 dark:text-gray-400 cursor-not-allowed">
-        <option value="{{ ri.status }}" selected>{{ ri.get_status_display }} (só Administrador)</option>
+        <option value="{{ ri.status }}" selected>{{ ri.get_status_display }} (controlado pelo MIP)</option>
     </select>
     {% else %}
     <select name="status" class="flex-1 px-3 py-2 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">

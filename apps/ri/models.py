@@ -42,6 +42,11 @@ class Ri(models.Model):
     AGUARDANDO_FINANCEIRO = "aguardando_financeiro"
     AGUARDANDO_ANEXO_PORTAL_EACE = "aguardando_anexo_portal_eace"
     AGUARDANDO_VALIDACAO_EACE = "aguardando_validacao_eace"
+    # Pedido do usuário (2026-09-26; a formalizar pelo Orquestrador em
+    # business_rules.md): status do RI de todo INEP no MIP — destino do
+    # avanço automático da RPA EACE (RN-056) e de qualquer Status (MIP),
+    # ver `save()`. O Status (MIP) aparece no RI só como rótulo.
+    FATURAMENTO_RI_CONCLUIDO = "faturamento_ri_concluido"
     FATURAMENTO_CONCLUIDO = "faturamento_concluido"
     CORRECAO_MEGA = "correcao_mega"
 
@@ -51,8 +56,12 @@ class Ri(models.Model):
         (ENVIO_EMAIL_FATURAMENTO, "Envio de Email para faturamento"),
         (AGUARDANDO_FINANCEIRO, "Aguardando financeiro"),
         (AGUARDANDO_ANEXO_PORTAL_EACE, "Resposta Financeiro"),
-        (AGUARDANDO_VALIDACAO_EACE, "Aguardando validação EACE"),
-        (FATURAMENTO_CONCLUIDO, "Faturamento Concluído"),
+        # Pedido do usuário (2026-09-26): "Aguardando validação EACE" saiu
+        # do RI — constante mantida só para quem ainda grava esse valor
+        # (`save()` troca por "Faturamento RI Concluído").
+        (FATURAMENTO_RI_CONCLUIDO, "Faturamento RI Concluído"),
+        # Pedido do usuário (2026-09-26): "Faturamento Concluído" também
+        # saiu do RI — o fim do processo é o "Processo Concluído" do MIP.
         (CORRECAO_MEGA, "Correção MEGA"),
     ]
 
@@ -147,35 +156,59 @@ class Ri(models.Model):
     def __str__(self):
         return f"RI {self.escola.inep} - {self.get_status_display()}"
 
+    @property
+    def faturamento_encerrado(self):
+        """Pedido do usuário (2026-09-26): com o INEP no MIP o RI fica em
+        "Faturamento RI Concluído"; o faturamento está encerrado quando o
+        MIP chega em "Processo Concluído" — critério do bloqueio da RN-020
+        e dos relatórios de equipamentos."""
+        return (
+            self.status == self.FATURAMENTO_RI_CONCLUIDO
+            and self.escola.status_mip == Escola.FATURAMENTO_CONCLUIDO
+        )
+
+    @classmethod
+    def q_faturamento_encerrado(cls, prefixo=""):
+        """Mesmo critério de `faturamento_encerrado` para querysets —
+        `prefixo` é o caminho até o RI (ex.: "ri__")."""
+        return models.Q(
+            **{
+                f"{prefixo}status": cls.FATURAMENTO_RI_CONCLUIDO,
+                f"{prefixo}escola__status_mip": Escola.FATURAMENTO_CONCLUIDO,
+            }
+        )
+
     def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # RN-092 (2026-09-10; revista no mesmo dia): sempre que este RI
-        # chega em "Aguardando validação EACE" ou "Faturamento Concluído",
-        # sincroniza o mesmo valor em `Escola.status_mip` — não só na 1ª
-        # vez. A partir daí o INEP "sai" do grid de Equipamentos (FEAT-007)
-        # e passa a ser controlado só pelo MIP.
-        #
-        # Revisão: "Em Andamento" (MIP) é o único status que faz o INEP
-        # "voltar" pro RI de verdade (mesmo `Ri.status="andamento"`, mesmo
-        # acesso de sempre — RN-052/RN-011 — na tela de Equipamentos, ver
-        # `apps.escolas.views.mip_status_update_view`). Por isso, quando o
-        # RI volta a progredir sozinho (fluxo normal de e-mail/financeiro,
-        # RN-001) e chega de novo em "Aguardando validação EACE" ou
-        # "Faturamento Concluído", este `save()` precisa sincronizar
-        # `status_mip` de novo (não só a 1ª vez) — senão o INEP ficaria
-        # preso mostrando "Em Andamento" no MIP para sempre, mesmo já
-        # tendo avançado.
-        #
-        # No `save()` do model (não em `trocar_status_com_log`) para
-        # cobrir qualquer caminho que grave o status — troca manual/
-        # automática, criação direta (`Ri.objects.create(status=...)`,
-        # comandos de gestão, admin) —, sem depender de cada chamador
-        # lembrar de fazer o handoff.
+        # RN-092 (2026-09-10), revista pelo pedido do usuário (2026-09-26; a
+        # formalizar pelo Orquestrador em business_rules.md): INEP no MIP
+        # (qualquer Status (MIP)) fica no RI como "Faturamento RI
+        # Concluído". Chegar em "Aguardando validação EACE" ou "Faturamento
+        # Concluído" (valores antigos, fora das opções — criação direta,
+        # comandos, admin) grava
+        # "Faturamento RI Concluído" no RI e leva o valor original para o
+        # `Escola.status_mip` (mesmos valores em Ri e Escola). No `save()`
+        # para cobrir qualquer caminho que grave o status, sem depender de
+        # cada chamador lembrar do handoff.
+        status_mip_destino = None
         if self.status in (self.AGUARDANDO_VALIDACAO_EACE, self.FATURAMENTO_CONCLUIDO):
-            escola = self.escola
-            if escola.status_mip != self.status:
-                escola.status_mip = self.status  # mesmos valores em Ri e Escola
-                escola.save(update_fields=["status_mip"])
+            status_mip_destino = self.status
+            self.status = self.FATURAMENTO_RI_CONCLUIDO
+        super().save(*args, **kwargs)
+        if self.status != self.FATURAMENTO_RI_CONCLUIDO:
+            return
+        escola = self.escola
+        if status_mip_destino == self.FATURAMENTO_CONCLUIDO:
+            novo_status_mip = Escola.FATURAMENTO_CONCLUIDO
+        elif not escola.status_mip:
+            # Só entra no MIP quem ainda não está nele — um INEP já em LOTE
+            # não volta para "Aguardando Validação EACE" só porque o RI foi
+            # salvo de novo.
+            novo_status_mip = Escola.AGUARDANDO_VALIDACAO_EACE
+        else:
+            return
+        if escola.status_mip != novo_status_mip:
+            escola.status_mip = novo_status_mip
+            escola.save(update_fields=["status_mip"])
 
 
 class KitPadrao(models.Model):
@@ -647,13 +680,22 @@ class LogRpaEace(models.Model):
     PROCESSANDO = "processando"
     SUCESSO = "sucesso"
     ERRO = "erro"
+    # Processamento manual/cancelamento (pedido do usuário, 2026-09-25; a
+    # formalizar pelo Orquestrador em business_rules.md): NF errada
+    # enviada pelo financeiro — log "Pendente"/"Erro" pode ser cancelado
+    # (com motivo) e deixa de contar para o avanço do RI (RN-056/RN-099).
+    CANCELADO = "cancelado"
     RESULTADO_CHOICES = [
         (PENDENTE, "Pendente"),
         (NA_FILA, "Na fila"),
         (PROCESSANDO, "Processando"),
         (SUCESSO, "Sucesso"),
         (ERRO, "Erro"),
+        (CANCELADO, "Cancelado"),
     ]
+    # Resultados que não seguram o avanço do RI (RN-056/RN-099): "Sucesso"
+    # libera e "Cancelado" é ignorado.
+    RESULTADOS_IGNORADOS_NO_AVANCO = (SUCESSO, CANCELADO)
 
     ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="logs_rpa_eace")
     documento_pdf = models.ForeignKey(
@@ -693,6 +735,16 @@ class LogRpaEace(models.Model):
     # que este campo marca que não foi a automação que fez, pra tela
     # distinguir sem inventar um resultado novo.
     concluido_manualmente = models.BooleanField("Concluído manualmente", default=False)
+    # Pedido do usuário (2026-09-25): financeiro manda a NF corrigida por
+    # fora do e-mail — usuário sobe PDF+XML na tela e cria um log novo,
+    # que não nasceu da resposta do financeiro (RN-016).
+    criado_manualmente = models.BooleanField("Criado manualmente", default=False)
+    motivo_cancelamento = models.CharField("Motivo do cancelamento", max_length=255, blank=True)
+    cancelado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name="Cancelado por",
+    )
+    cancelado_em = models.DateTimeField("Cancelado em", null=True, blank=True)
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:

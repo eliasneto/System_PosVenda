@@ -1,0 +1,62 @@
+{% comment %}
+RN-XXX (a formalizar pelo Orquestrador; pedido do usuário, 2026-09-29):
+ícone "Enviar ao portal EACE" do LOTE (`apps.escolas.rpa_mip_lote`) - mesmo
+padrão dos demais ícones da coluna Ações (w-8 h-8, legenda em balão ao
+passar o mouse, pedido do usuário).
+- Na fila/Processando: inacessível (ícone girando); reatualiza a cada 3 s
+  (HTMX) até terminar.
+- Sucesso, ou card já não estava Pendente ("documento já enviado"):
+  desabilitado de vez (check verde) - pedido do usuário, 2026-09-29.
+- Erro ou nunca enviado: habilitado (erro = ponto vermelho + motivo no balão).
+- Sem 1 NF comum a todos os INEPs: desabilitado, motivo no balão.
+Contexto: `lote`, `rpa_mip` (EstadoRpaMipLote), `next` (volta da tela).
+{% endcomment %}
+<div id="rpa-mip-lote-{{ lote.pk }}" class="relative group"
+     {% if rpa_mip.em_andamento %}hx-get="{% url 'rpa_mip_lote_status' pk=lote.pk %}?next={{ next|urlencode }}" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+    {% if rpa_mip.em_andamento %}
+    {% with log=rpa_mip.ultimo_log %}
+    <button type="button" disabled
+            title="{% if log.resultado == 'processando' %}Enviando NF ao portal EACE — {{ log.progresso_pct }}%{% else %}Envio da NF ao portal EACE na fila{% endif %}"
+            class="inline-flex items-center justify-center w-8 h-8 border-2 border-purple-500 text-purple-600 dark:text-purple-400 rounded-lg cursor-not-allowed">
+        <i data-lucide="loader" class="w-4 h-4 animate-spin"></i>
+    </button>
+    <span aria-hidden="true" class="pointer-events-none absolute bottom-full right-0 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">
+        {% if log.resultado == 'processando' %}Enviando {{ log.progresso_pct }}%{% if log.etapa_atual %} — {{ log.etapa_atual }}{% endif %}{% else %}Na fila{% endif %}
+    </span>
+    {% endwith %}
+
+    {% elif rpa_mip.enviado %}
+    <button type="button" disabled
+            title="{% if rpa_mip.ja_estava_no_portal %}NF já estava no portal EACE{% if rpa_mip.ultimo_log.status_portal %} (card {{ rpa_mip.ultimo_log.status_portal }}){% endif %} — conferido em {{ rpa_mip.ultimo_log.executado_em|date:'d/m/Y H:i' }}{% else %}NF enviada ao portal EACE em {{ rpa_mip.ultimo_log.executado_em|date:'d/m/Y H:i' }}{% endif %}{% if rpa_mip.ultimo_log.pedido %} (pedido {{ rpa_mip.ultimo_log.pedido }}){% endif %}"
+            class="inline-flex items-center justify-center w-8 h-8 border-2 border-green-600 text-green-600 dark:text-green-400 rounded-lg cursor-not-allowed">
+        <i data-lucide="check-circle-2" class="w-4 h-4"></i>
+    </button>
+    <span aria-hidden="true" class="pointer-events-none absolute bottom-full right-0 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">{% if rpa_mip.ja_estava_no_portal %}NF já estava no portal{% if rpa_mip.ultimo_log.status_portal %} ({{ rpa_mip.ultimo_log.status_portal }}){% endif %}{% else %}NF enviada em {{ rpa_mip.ultimo_log.executado_em|date:"d/m/Y H:i" }}{% endif %}</span>
+
+    {% elif rpa_mip.nota_fiscal %}
+    <form method="POST" action="{% url 'rpa_mip_lote_enviar' pk=lote.pk %}" class="contents">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ next }}">
+        <button type="button"
+                data-confirmar
+                data-confirmar-titulo="Enviar a Nota Fiscal ao portal EACE?"
+                data-confirmar-mensagem="A Nota Fiscal {{ rpa_mip.nota_fiscal.nome_original }} vai para a fila e será anexada no card de {{ lote.municipio }} do pedido mais recente no portal EACE (só se o card estiver Pendente e o valor bater)."
+                data-confirmar-texto-botao="Enviar ao portal"
+                title="{% if rpa_mip.motivo_erro_legivel %}Tentar de novo — erro: {{ rpa_mip.motivo_erro_legivel }}{% else %}Enviar ao portal EACE{% endif %}"
+                class="relative inline-flex items-center justify-center w-8 h-8 bg-pv-black text-pv-yellow rounded-lg hover:bg-gray-800 transition">
+            <i data-lucide="upload-cloud" class="w-4 h-4"></i>
+            {% if rpa_mip.motivo_erro_legivel %}<span class="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900"></span>{% endif %}
+        </button>
+    </form>
+    <span aria-hidden="true" class="pointer-events-none absolute bottom-full right-0 mb-1.5 {% if rpa_mip.motivo_erro_legivel %}w-56 whitespace-normal text-center{% else %}whitespace-nowrap{% endif %} rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">
+        {% if rpa_mip.motivo_erro_legivel %}Tentar de novo — Erro: {{ rpa_mip.motivo_erro_legivel }}{% else %}Enviar ao portal EACE{% endif %}
+    </span>
+
+    {% else %}
+    <button type="button" disabled title="Enviar ao portal EACE — {{ rpa_mip.motivo_sem_nota }}"
+            class="inline-flex items-center justify-center w-8 h-8 bg-gray-50 dark:bg-gray-800 text-gray-300 dark:text-gray-600 rounded-lg cursor-not-allowed">
+        <i data-lucide="upload-cloud" class="w-4 h-4"></i>
+    </button>
+    <span aria-hidden="true" class="pointer-events-none absolute bottom-full right-0 mb-1.5 w-56 whitespace-normal text-center rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">{{ rpa_mip.motivo_sem_nota }}</span>
+    {% endif %}
+</div>

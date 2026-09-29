@@ -60,3 +60,9 @@ doc/MIP/
 # acima, dado real de negocio (CNPJ/valor/contrato), nunca versionar.
 doc/LIBERAÇÃO 22 -- PEDIDO 506/
 doc/LIBERAÇÃO 22 -- PEDIDO 506.zip
+
+# Planilha real da EACE (RI-MEGA) usada de referencia pra conferir a
+# melhoria de rateio de INEP por Cidade (RN a formalizar, 2026-09-24) -
+# mesmo criterio acima, dado real de negocio (municipio/valor de
+# contrato por INEP), nunca versionar.
+doc/_Base contrato_taxa_instalação RI -MEGA - 22-09-2026 NOVA.xlsx

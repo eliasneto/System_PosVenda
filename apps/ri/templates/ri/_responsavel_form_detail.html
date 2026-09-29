@@ -12,7 +12,7 @@ reposto na resposta HTMX.
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ next_url }}">
         <input type="hidden" name="origem" value="detail">
-        <select name="responsavel" class="select-pv-dark bg-transparent border-none outline-none text-sm font-black italic text-pv-yellow cursor-pointer">
+        <select name="responsavel" {% if ri.faturamento_encerrado and not request.user.is_administrador %}disabled title="INEP em &quot;Processo Concluído&quot; (MIP): só o Administrador pode alterar"{% endif %} class="disabled:cursor-not-allowed disabled:opacity-60 select-pv-dark bg-transparent border-none outline-none text-sm font-black italic text-pv-yellow cursor-pointer">
             {% if not ri.responsavel %}
             <option value="" selected>Não atribuído</option>
             {% endif %}

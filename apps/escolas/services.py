@@ -213,21 +213,51 @@ def _iterar_pdfs_do_arquivo_notas_fiscais(notas_fiscais_mip):
                     yield nome, pdf_extraido.read()
 
 
+def concluir_inep_com_nota_fiscal_mip(escola, usuario=None):
+    """Pedido do usuário (2026-09-26; a formalizar pelo Orquestrador em
+    business_rules.md): INEP do LOTE que recebe a Nota Fiscal (PDF) vai
+    para "Processo Concluído" — com registro no histórico do RI atual. O
+    RI continua em "Faturamento RI Concluído" (`Ri.save()`)."""
+    if escola.status_mip == Escola.FATURAMENTO_CONCLUIDO:
+        return
+    status_anterior = escola.get_status_mip_display()
+    escola.status_mip = Escola.FATURAMENTO_CONCLUIDO
+    escola.save(update_fields=["status_mip"])
+    ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+    if ri_atual:
+        _registrar_log_campo_lote(
+            ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
+        )
+
+
 def sincronizar_notas_fiscais_mip_lote_em_andamento():
     """Botão "Sincronizar Notas Fiscais dos INEPs" (RN-XXX, a formalizar
     pelo Orquestrador em business_rules.md; pedido do usuário,
     2026-09-24), tela "Administrador > Relatório EACE (MIP)": lê o .zip/
     .rar ativo de Notas Fiscais (`NotasFiscaisMip`), extrai o(s) INEP(s)
     de dentro de cada PDF (`extrair_ineps_nota_fiscal_mip`) e grava o PDF
-    correspondente em cada `Escola` (`Escola.substituir_nota_fiscal_mip`)
-    — só nos INEPs de um `Lote` "Em Andamento" no momento do clique
-    (pedido explícito do usuário: "buscar dentro de MIP (LOTE) todos os
-    INEPS que o lote está com status de 'Em Andamento'"). Uma Nota que
-    referencia vários INEPs grava o MESMO PDF em cada Escola. INEP "Em
-    Andamento" sem Nota Fiscal correspondente no arquivo simplesmente não
-    é tocado (mantém o que já tinha, se houver, de uma sincronização
-    anterior) — nunca apaga uma Nota Fiscal já gravada só porque não
-    achou de novo nesta rodada.
+    correspondente em cada `Escola` (`Escola.adicionar_ou_substituir_
+    nota_fiscal_mip`) — só nos INEPs de um `Lote` "Em Andamento" no
+    momento do clique (pedido explícito do usuário: "buscar dentro de
+    MIP (LOTE) todos os INEPS que o lote está com status de 'Em
+    Andamento'"). Uma Nota que referencia vários INEPs grava o MESMO PDF
+    em cada Escola. INEP "Em Andamento" sem Nota Fiscal correspondente no
+    arquivo simplesmente não é tocado (mantém o que já tinha, se houver,
+    de uma sincronização anterior) — nunca apaga uma Nota Fiscal já
+    gravada só porque não achou de novo nesta rodada.
+
+    RN ampliada (bug real reportado pelo usuário, 2026-09-24): um INEP
+    rateado (`escola_rateada_relatorio_eace_mip` — mesmo INEP com mais de
+    1 Cidade na planilha da EACE) recebe do financeiro mais de 1 Nota
+    Fiscal (1 por fração/Cidade) — várias PDFs diferentes dentro do
+    mesmo .zip/.rar podem referenciar o MESMO INEP no "CÓDIGO INEPS".
+    Antes desta correção, só a última Nota lida para aquele INEP
+    sobrevivia (`mapa_inep_para_pdf[inep] = ...` sobrescrevia as
+    anteriores); agora todas as Notas encontradas para um INEP são
+    gravadas (`mapa_inep_para_pdfs[inep]`, lista) — cada uma vira 1
+    `NotaFiscalMip` própria (`adicionar_ou_substituir_nota_fiscal_mip`,
+    que só substitui quando o nome do PDF já foi sincronizado antes,
+    nunca apaga uma Nota diferente).
 
     Levanta `RelatorioEaceMipSincronizacaoError` sem nenhum arquivo ativo
     (nada para sincronizar) ou se a extração do .rar falhar por falta do
@@ -239,7 +269,7 @@ def sincronizar_notas_fiscais_mip_lote_em_andamento():
             "Nenhum arquivo de Notas Fiscais foi enviado ainda — envie um .zip/.rar antes de sincronizar."
         )
 
-    mapa_inep_para_pdf = {}
+    mapa_inep_para_pdfs = {}
     total_pdfs_lidos = 0
     total_pdfs_sem_inep_reconhecido = 0
     for nome_pdf, conteudo_pdf in _iterar_pdfs_do_arquivo_notas_fiscais(notas_fiscais_ativa):
@@ -251,17 +281,18 @@ def sincronizar_notas_fiscais_mip_lote_em_andamento():
             logger.warning("Nota Fiscal (MIP) sem 'CÓDIGO INEPS' reconhecível: %s", nome_pdf)
             continue
         for inep in ineps:
-            mapa_inep_para_pdf[inep] = (nome_pdf, conteudo_pdf)
+            mapa_inep_para_pdfs.setdefault(inep, []).append((nome_pdf, conteudo_pdf))
 
     escolas_em_andamento = list(Escola.objects.filter(lotes__status=Lote.EM_ANDAMENTO).distinct())
     total_sincronizadas = 0
     for escola in escolas_em_andamento:
-        correspondencia = mapa_inep_para_pdf.get(escola.inep)
-        if correspondencia is None:
+        pdfs_correspondentes = mapa_inep_para_pdfs.get(escola.inep)
+        if not pdfs_correspondentes:
             continue
-        nome_pdf, conteudo_pdf = correspondencia
-        escola.substituir_nota_fiscal_mip(conteudo_pdf, nome_pdf.rsplit("/", 1)[-1])
+        for nome_pdf, conteudo_pdf in pdfs_correspondentes:
+            escola.adicionar_ou_substituir_nota_fiscal_mip(conteudo_pdf, nome_pdf.rsplit("/", 1)[-1])
         total_sincronizadas += 1
+        concluir_inep_com_nota_fiscal_mip(escola)
 
     return {
         "total_escolas_em_andamento": len(escolas_em_andamento),
@@ -693,7 +724,10 @@ def _resolver_lado_ixc(ri, lote, catalogo):
     volta a aparecer lá normalmente, com o mesmo formulário de sempre.
     `pk` incluído para o template destacar em vermelho os itens
     divergentes do confronto com o Lado 3 (`itens_ixc_divergentes_pks`,
-    `apps.escolas.views._comparar_valor_servico_ixc_relatorio_mip`)."""
+    `apps.escolas.views._comparar_valor_servico_ixc_relatorio_mip`).
+    `eh_kit` incluído (pedido do usuário, 2026-09-24) para o template
+    decidir quem pode ser excluído pelo MIP — o KIT nunca pode
+    (`mip_item_ixc_delete_view`)."""
     if not ri:
         return []
     return [
@@ -702,6 +736,7 @@ def _resolver_lado_ixc(ri, lote, catalogo):
             "descricao": item.descricao_item,
             "quantidade": item.quantidade,
             "valor_servico": _valor_servico(item.descricao_item, item.eh_kit, lote, catalogo),
+            "eh_kit": item.eh_kit,
         }
         for item in ri.itens_ixc.all()
     ]
@@ -753,6 +788,68 @@ def _valor_total_itens(itens):
             continue
         total += item["quantidade"] * item["valor_servico"]
     return total, incompleto
+
+
+def _normalizar_texto_cidade(texto):
+    """Mesma normalização usada para comparar a Cidade de 1 grupo de
+    rateio com `Lote.municipio`/`Escola.municipio` — sem acento nem caixa
+    não importam aqui (RN a formalizar, pedido do usuário, 2026-09-24),
+    só o texto bruto (nunca alterado) é que aparece na tela/planilha."""
+    return (texto or "").strip().casefold()
+
+
+def _grupos_rateio_relatorio_eace_mip_da_escola(escola):
+    """Agrupa os itens do Lado 3 (Relatório EACE) desta Escola pela Cidade
+    da planilha de origem (coluna "Cidade", RN-069) — base da detecção de
+    rateio (pedido do usuário, 2026-09-24): a planilha da EACE às vezes
+    traz o mesmo INEP com linhas de Cidades diferentes (ex.: "Brasília" e
+    "Brasília2", a 2ª sendo a fração rateada do mesmo INEP). Ordem de 1ª
+    aparição (`EscolaItemRelatorioEaceMip` sem `ordering` próprio cai no
+    `pk`, criado na mesma ordem das linhas da planilha,
+    `_sincronizar_relatorio_eace_mip_da_escola`). Item sem Cidade
+    preenchida entra no grupo "" — nunca descartado, mas nunca conta como
+    rateio sozinho (`escola_rateada_relatorio_eace_mip`, abaixo)."""
+    grupos = {}
+    for item in escola.itens_relatorio_eace_mip.all():
+        cidade = (item.cidade or "").strip()
+        grupos.setdefault(cidade, []).append(item)
+    return grupos
+
+
+def escola_rateada_relatorio_eace_mip(escola):
+    """`True` quando os itens do Lado 3 (EACE) desta Escola vêm de 2 ou
+    mais Cidades diferentes e preenchidas (rateio, pedido do usuário
+    2026-09-24) — usado pela seta de detalhe no modal "Revisar INEPs do
+    LOTE" (`_modal_criar_lote.html`, `apps.escolas.views.mip_inep_view`) e
+    pela divisão da planilha de faturamento por Cidade
+    (`planilhas_faturamento_implantacao_lote`, abaixo). Cidade não
+    preenchida não conta (só 1 Cidade real, sem rateio de verdade)."""
+    grupos = _grupos_rateio_relatorio_eace_mip_da_escola(escola)
+    return sum(1 for cidade in grupos if cidade) > 1
+
+
+def rateio_relatorio_eace_mip_da_escola(escola):
+    """Detalhe do rateio desta Escola (pedido do usuário, 2026-09-24) — 1
+    linha por Cidade preenchida do Lado 3 (EACE), com a soma de
+    quantidade × Valor de serviço daquela Cidade (mesma conta de
+    `_valor_total_itens`, RN-076/RN-077, mas por grupo de Cidade) — usado
+    pela seta de detalhe no modal "Revisar INEPs do LOTE" e pela divisão
+    da planilha de faturamento por Cidade. Maior valor primeiro. `[]`
+    quando a Escola não está rateada
+    (`escola_rateada_relatorio_eace_mip`) — a tela só mostra a seta quando
+    há de fato mais de 1 Cidade."""
+    if not escola_rateada_relatorio_eace_mip(escola):
+        return []
+    detalhe = []
+    for cidade, itens in _grupos_rateio_relatorio_eace_mip_da_escola(escola).items():
+        if not cidade:
+            continue
+        valor, incompleto = _valor_total_itens(
+            [{"quantidade": item.quantidade, "valor_servico": item.valor_servico} for item in itens]
+        )
+        detalhe.append({"cidade": cidade, "valor": valor, "incompleto": incompleto})
+    detalhe.sort(key=lambda linha: linha["valor"] or Decimal("0.00"), reverse=True)
+    return detalhe
 
 
 # ---------------------------------------------------------------------------
@@ -809,7 +906,8 @@ def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim):
     if data_fim:
         escolas = escolas.filter(data_ativacao_ri_atual__lte=data_fim)
     escolas = escolas.order_by("nome").prefetch_related(
-        Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc"))
+        Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc")),
+        "itens_relatorio_eace_mip",
     )
 
     catalogo_kits = list(KitPadrao.objects.all())
@@ -828,6 +926,11 @@ def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim):
             and not incompleto3
             and valor_total_lado2 == valor_total_lado3
         ):
+            # Pedido do usuário (2026-09-25): valor total de cada INEP no
+            # modal "Revisar INEPs do LOTE" — Valor Total (IXC), o mesmo
+            # que o LOTE soma em "Valor Total do LOTE" (aqui já igual ao
+            # EACE, pela própria regra de elegibilidade).
+            escola.valor_total_lote_mip = valor_total_lado2
             elegiveis.append(escola)
     return elegiveis
 
@@ -884,8 +987,9 @@ def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_
     de sempre — todos os elegíveis entram, usado por quem chama esta
     função fora da tela (ex.: testes).
 
-    Cada INEP elegível ganha `Escola.status_mip =
-    "aguardando_encerramento_lote"` e 2 entradas no histórico do RI atual
+    Cada INEP elegível ganha `Escola.status_mip = "em_andamento"` ("Em
+    Andamento MIP", pedido do usuário 2026-09-26; o LOTE nasce no mesmo
+    status) e 2 entradas no histórico do RI atual
     (`RiHistorico`, painel reaproveitado do RI/MIP, RN-008): uma com a
     troca de Status (MIP), outra com o número do LOTE — pedido explícito
     do usuário ("dentro do histórico de cada INEP dentro do LOTE, deve ter
@@ -924,11 +1028,12 @@ def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_
 
     lote = Lote.objects.create(
         estado=estado, municipio=municipio, data_inicio=data_inicio, data_fim=data_fim, criado_por=usuario,
+        status=Lote.EM_ANDAMENTO,
     )
     lote.escolas.set(escolas)
     for escola in escolas:
         status_anterior = escola.get_status_mip_display()
-        escola.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        escola.status_mip = Escola.EM_ANDAMENTO
         escola.save(update_fields=["status_mip"])
         ris_da_escola = list(escola.ris.all())
         ri_atual = ris_da_escola[0] if ris_da_escola else None
@@ -969,9 +1074,16 @@ def desfazer_lote_mip(lote, usuario):
     porque o envio de e-mail do LOTE foi comentado (não é mais alcançado
     por um LOTE novo) - mantido só como valor histórico possível em LOTE
     antigo, sem tratamento especial aqui."""
-    if lote.status != Lote.AGUARDANDO_ENCERRAMENTO:
+    # Pedido do usuário (2026-09-26): o LOTE nasce "Em Andamento MIP" —
+    # desfazer vale nesse status (e no antigo "Aguardando Encerramento"),
+    # enquanto nenhum INEP dele recebeu Nota Fiscal ("Processo Concluído").
+    if lote.status not in (Lote.EM_ANDAMENTO, Lote.AGUARDANDO_ENCERRAMENTO):
         raise LoteMipError(
             f'Não é possível desfazer {lote} — já está em "{lote.get_status_display()}".'
+        )
+    if lote.escolas.filter(status_mip=Escola.FATURAMENTO_CONCLUIDO).exists():
+        raise LoteMipError(
+            f'Não é possível desfazer {lote} — há INEP em "Processo Concluído" (Nota Fiscal já recebida).'
         )
 
     identificacao_lote = str(lote)
@@ -1227,6 +1339,17 @@ def nome_arquivo_planilha_faturamento_implantacao(lote):
     return f"FATURAMENTO IMPLANTAÇÃO EACE - {municipio_limpo}-{lote.estado} - {lote}.xlsx"
 
 
+def _nome_arquivo_planilha_faturamento_implantacao_rateio(lote, cidade):
+    """Nome do .xlsx extra gerado quando o LOTE tem algum INEP rateado
+    (pedido do usuário, 2026-09-24) — 1 arquivo por Cidade diferente da do
+    LOTE (`nome_arquivo_planilha_faturamento_implantacao`, acima), mesmo
+    padrão de nome, trocando o Município pela Cidade da planilha de
+    origem (ex.: "Brasília2") e marcando "RATEIO" para não confundir com o
+    arquivo principal do LOTE."""
+    cidade_limpa = _CARACTERES_INVALIDOS_ARQUIVO_IMPLANTACAO.sub("", cidade or "").strip()
+    return f"FATURAMENTO IMPLANTAÇÃO EACE - {cidade_limpa}-{lote.estado} - {lote} (RATEIO).xlsx"
+
+
 def gerar_planilha_faturamento_implantacao(estado, municipio, data_envio):
     """Planilha de faturamento de implantação (`doc/FATURAMENTO
     IMPLANTAÇÃO.xlsx`) pedida pelo usuário: 1 arquivo por Estado+Município
@@ -1286,7 +1409,10 @@ def gerar_planilha_faturamento_implantacao(estado, municipio, data_envio):
     ri_atual_qs = Ri.objects.filter(escola=OuterRef("pk")).order_by("-criado_em")
     escolas = list(
         Escola.objects.annotate(status_ri_atual=Subquery(ri_atual_qs.values("status")[:1]))
-        .filter(status_ri_atual=Ri.AGUARDANDO_VALIDACAO_EACE, estado=estado, municipio=municipio)
+        .filter(
+            status_ri_atual=Ri.FATURAMENTO_RI_CONCLUIDO,
+            estado=estado, municipio=municipio,
+        )
         .order_by("nome")
         .prefetch_related(
             Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc"))
@@ -1342,26 +1468,139 @@ def gerar_planilha_faturamento_implantacao_lote(lote, data_envio):
     )
 
 
+def planilhas_faturamento_implantacao_lote(lote, data_envio):
+    """RN a formalizar pelo Orquestrador em business_rules.md (pedido do
+    usuário, 2026-09-24): mesma planilha de `gerar_planilha_faturamento_
+    implantacao_lote` (acima), mas dividida em mais de 1 arquivo quando o
+    LOTE tem algum INEP rateado (RN-069: mesma planilha da EACE trazendo o
+    mesmo INEP com linhas de Cidades diferentes, ex.: "Brasília" e
+    "Brasília2" — `escola_rateada_relatorio_eace_mip`).
+
+    1 arquivo para o Município do LOTE (`lote.municipio`, sempre o
+    primeiro da lista, mesmo nome de arquivo de sempre,
+    `nome_arquivo_planilha_faturamento_implantacao`) — recebe o Valor
+    Total (IXC) cheio de cada INEP não rateado, e só a fração da Cidade
+    que bate com `lote.municipio` de cada INEP rateado (comparação sem
+    acento/caixa, `_normalizar_texto_cidade`) — mais 1 arquivo extra por
+    Cidade DIFERENTE encontrada entre os INEPs rateados
+    (`_nome_arquivo_planilha_faturamento_implantacao_rateio`), cada um só
+    com a fração daquele INEP para aquela Cidade (nunca o valor cheio).
+    Ordem alfabética entre os arquivos extras.
+
+    A fração de cada Cidade vem do Lado 3/EACE
+    (`rateio_relatorio_eace_mip_da_escola`, soma de quantidade × Valor de
+    serviço só daquela Cidade) — não do Lado 2/IXC (que não guarda Cidade
+    por item); como a elegibilidade do LOTE já exige Valor Total (IXC) ==
+    Valor Total (EACE) por INEP (RN-076/RN-077), a soma das frações de
+    Cidade do Lado 3 sempre fecha com o Valor Total (IXC) inteiro do INEP.
+    Item do INEP rateado sem Cidade preenchida (raro — `rateio_relatorio_
+    eace_mip_da_escola` só lista Cidade preenchida) entra na fração do
+    Município do LOTE — nunca é descartado (CLAUDE.md §9: nunca perde
+    valor lançado).
+
+    Sem nenhum INEP rateado, devolve sempre 1 único item na lista — mesmo
+    conteúdo de `gerar_planilha_faturamento_implantacao_lote`. Devolve
+    lista de `(nome_arquivo, Workbook)`. Levanta
+    `PlanilhaFaturamentoImplantacaoError` nas mesmas condições de `gerar_
+    planilha_faturamento_implantacao_lote` (LOTE sem nenhum INEP)."""
+    escolas = list(
+        lote.escolas.order_by("nome").prefetch_related(
+            Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc")),
+            "itens_relatorio_eace_mip",
+        )
+    )
+    if not escolas:
+        raise PlanilhaFaturamentoImplantacaoError(f"{lote} não tem nenhum INEP.")
+
+    catalogo_kits = list(KitPadrao.objects.all())
+    municipio_lote_normalizado = _normalizar_texto_cidade(lote.municipio)
+
+    contribuicoes_municipio_lote = []
+    contribuicoes_por_cidade_extra = {}
+    for escola in escolas:
+        if not escola_rateada_relatorio_eace_mip(escola):
+            ris_da_escola = list(escola.ris.all())
+            ri_atual = ris_da_escola[0] if ris_da_escola else None
+            itens_ixc = _resolver_lado_ixc(ri_atual, escola.lote, catalogo_kits)
+            valor_total_ixc, _incompleto = _valor_total_itens(itens_ixc)
+            contribuicoes_municipio_lote.append((escola, valor_total_ixc))
+            continue
+
+        for linha_rateio in rateio_relatorio_eace_mip_da_escola(escola):
+            cidade = linha_rateio["cidade"]
+            valor = linha_rateio["valor"]
+            if _normalizar_texto_cidade(cidade) == municipio_lote_normalizado:
+                contribuicoes_municipio_lote.append((escola, valor))
+            else:
+                contribuicoes_por_cidade_extra.setdefault(cidade, []).append((escola, valor))
+
+        # Item sem Cidade preenchida não aparece em `rateio_relatorio_eace_
+        # mip_da_escola` (só lista Cidade preenchida) — nunca descartado
+        # aqui: entra na fração do Município do LOTE (nunca perde valor
+        # lançado, CLAUDE.md §9).
+        itens_sem_cidade = _grupos_rateio_relatorio_eace_mip_da_escola(escola).get("", [])
+        if itens_sem_cidade:
+            valor_sem_cidade, _incompleto = _valor_total_itens(
+                [{"quantidade": item.quantidade, "valor_servico": item.valor_servico} for item in itens_sem_cidade]
+            )
+            contribuicoes_municipio_lote.append((escola, valor_sem_cidade))
+
+    planilhas = [
+        (
+            nome_arquivo_planilha_faturamento_implantacao(lote),
+            _montar_planilha_faturamento_implantacao_de_contribuicoes(
+                contribuicoes_municipio_lote, estado=lote.estado, municipio=lote.municipio, data_envio=data_envio
+            ),
+        )
+    ]
+    for cidade in sorted(contribuicoes_por_cidade_extra):
+        workbook = _montar_planilha_faturamento_implantacao_de_contribuicoes(
+            contribuicoes_por_cidade_extra[cidade], estado=lote.estado, municipio=cidade, data_envio=data_envio
+        )
+        planilhas.append((_nome_arquivo_planilha_faturamento_implantacao_rateio(lote, cidade), workbook))
+    return planilhas
+
+
 def _montar_planilha_faturamento_implantacao(escolas, *, estado, municipio, data_envio):
     """Preenche o modelo `doc/FATURAMENTO IMPLANTAÇÃO.xlsx` a partir de uma
     lista de `escolas` já resolvida pelo chamador — compartilhado por
     `gerar_planilha_faturamento_implantacao` (filtro Estado+Município do
     grid "Projeto > MIP") e `gerar_planilha_faturamento_implantacao_lote`
     (INEPs fixos de um `Lote`, FEAT-045): só muda de onde vêm as escolas, o
-    preenchimento da planilha é sempre o mesmo. Ver as duas funções acima
-    para o detalhamento de cada célula calculada (VALOR R$/H10, CÓDIGO
-    INEPS/F10, VENCIMENTO/E10, aba/A13)."""
+    preenchimento da planilha é sempre o mesmo — 1 contribuição por Escola,
+    sempre o Valor Total (IXC) cheio dela. Ver `_montar_planilha_
+    faturamento_implantacao_de_contribuicoes` (abaixo) para o caso de uma
+    Escola contribuir só com uma fração do valor (INEP rateado,
+    `planilhas_faturamento_implantacao_lote`)."""
     # Catálogo carregado uma única vez (fora do loop), mesmo padrão anti-N+1
     # já usado pelo grid do MIP (RN-010/RN-076).
     catalogo_kits = list(KitPadrao.objects.all())
-    total_valor_ixc = Decimal("0.00")
-    codigos_ineps = []
+    contribuicoes = []
     for escola in escolas:
         ris_da_escola = list(escola.ris.all())
         ri_atual = ris_da_escola[0] if ris_da_escola else None
         itens_ixc = _resolver_lado_ixc(ri_atual, escola.lote, catalogo_kits)
         valor_total_ixc, _incompleto = _valor_total_itens(itens_ixc)
-        total_valor_ixc += valor_total_ixc or Decimal("0.00")
+        contribuicoes.append((escola, valor_total_ixc))
+
+    return _montar_planilha_faturamento_implantacao_de_contribuicoes(
+        contribuicoes, estado=estado, municipio=municipio, data_envio=data_envio
+    )
+
+
+def _montar_planilha_faturamento_implantacao_de_contribuicoes(contribuicoes, *, estado, municipio, data_envio):
+    """Mesmo preenchimento de `_montar_planilha_faturamento_implantacao`
+    (acima), mas a partir de uma lista `(escola, valor)` já resolvida pelo
+    chamador, em vez de recalcular o Valor Total (IXC) cheio de cada
+    Escola — usada pela divisão da planilha de faturamento por Cidade de
+    um INEP rateado (pedido do usuário, 2026-09-24,
+    `planilhas_faturamento_implantacao_lote`), onde a MESMA Escola pode
+    aparecer em mais de 1 planilha, cada uma só com a fração de valor
+    daquela Cidade (nunca o Valor Total (IXC) inteiro dela)."""
+    total_valor_ixc = Decimal("0.00")
+    codigos_ineps = []
+    for escola, valor in contribuicoes:
+        total_valor_ixc += valor or Decimal("0.00")
         codigos_ineps.append(f"{escola.inep}/{escola.cod_fornecedor}")
 
     data_vencimento = data_envio + datetime.timedelta(days=30)

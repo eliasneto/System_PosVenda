@@ -1,0 +1,65 @@
+{% comment %}
+Processamento RPA manual (pedido do usuário, 2026-09-25; a formalizar pelo
+Orquestrador em business_rules.md): o financeiro às vezes manda a NF
+corrigida por fora do e-mail. O botão abre os 2 campos (PDF + XML) e
+"Processar" cria um processamento novo já na fila do RPA EACE — mesmo
+comportamento do "Processar" de cada Nota Fiscal. Administrador e Analista.
+{% endcomment %}
+{% if ri.faturamento_encerrado and not request.user.is_administrador %}
+<p class="text-[11px] font-bold text-gray-400 dark:text-gray-500">INEP em "Processo Concluído" (MIP): só o Administrador pode criar processamento manual.</p>
+{% elif not request.user.is_visualizador %}
+<div>
+    <button type="button"
+            onclick="document.getElementById('rpa-manual-novo-{{ ri.pk }}').classList.toggle('hidden')"
+            class="inline-flex items-center gap-2 px-4 py-2 border-2 border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-black uppercase text-[11px] rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+        Novo processamento manual
+    </button>
+    <form id="rpa-manual-novo-{{ ri.pk }}" method="POST" enctype="multipart/form-data"
+          action="{% url 'ri_log_rpa_eace_criar_manual' pk=ri.pk %}"
+          hx-post="{% url 'ri_log_rpa_eace_criar_manual' pk=ri.pk %}" hx-encoding="multipart/form-data" hx-swap="none"
+          class="hidden mt-3 border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <p class="text-[11px] text-gray-500 dark:text-gray-400">
+            Use quando o financeiro enviou a Nota Fiscal corrigida por fora do e-mail. O processamento novo entra na fila do RPA EACE; cancele o processamento com a NF errada no card dele.
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {% comment %}
+            Mesmo padrão de upload do sistema (backup, Planilha EACE, MIP):
+            input nativo escondido (o texto dele vem do navegador, em
+            inglês) e botão/nome do arquivo em português. Sem `required`
+            no input escondido — o aviso nativo também sairia em inglês; a
+            view valida e responde em português.
+            {% endcomment %}
+            <div>
+                <span class="block text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 mb-1">Nota fiscal (PDF)</span>
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <label for="rpa-manual-pdf-{{ ri.pk }}" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-lg cursor-pointer hover:bg-gray-800 transition">
+                    Escolher arquivo
+                </label>
+                <span id="rpa-manual-pdf-nome-{{ ri.pk }}" class="min-w-0 text-xs font-bold text-gray-500 dark:text-gray-400 [overflow-wrap:anywhere]">Nenhum arquivo selecionado</span>
+                <input id="rpa-manual-pdf-{{ ri.pk }}" type="file" name="arquivo_pdf" accept=".pdf,application/pdf" class="sr-only"
+                       onchange="document.getElementById('rpa-manual-pdf-nome-{{ ri.pk }}').textContent = this.files.length ? this.files[0].name : 'Nenhum arquivo selecionado'">
+                </div>
+            </div>
+            <div>
+                <span class="block text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 mb-1">XML</span>
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <label for="rpa-manual-xml-{{ ri.pk }}" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-lg cursor-pointer hover:bg-gray-800 transition">
+                    Escolher arquivo
+                </label>
+                <span id="rpa-manual-xml-nome-{{ ri.pk }}" class="min-w-0 text-xs font-bold text-gray-500 dark:text-gray-400 [overflow-wrap:anywhere]">Nenhum arquivo selecionado</span>
+                <input id="rpa-manual-xml-{{ ri.pk }}" type="file" name="arquivo_xml" accept=".xml,text/xml,application/xml" class="sr-only"
+                       onchange="document.getElementById('rpa-manual-xml-nome-{{ ri.pk }}').textContent = this.files.length ? this.files[0].name : 'Nenhum arquivo selecionado'">
+                </div>
+            </div>
+        </div>
+        <div>
+            <button type="submit" class="px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 transition shadow">
+                Processar
+            </button>
+        </div>
+    </form>
+</div>
+{% endif %}

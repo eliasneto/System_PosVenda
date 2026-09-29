@@ -237,7 +237,7 @@
                                      Faturamento"/"Processo Concluído" o RI de
                                      cada INEP já pode ter sido reaberto/o
                                      processo já foi encerrado de verdade. -->
-                                {% if linha.lote.status == 'aguardando_encerramento' %}
+                                {% if linha.lote.status == 'aguardando_encerramento' or linha.lote.status == 'em_andamento' %}
                                 <form method="POST" action="{% url 'mip_lote_desfazer' pk=linha.lote.pk %}" class="contents">
                                     {% csrf_token %}
                                     <input type="hidden" name="next" value="{{ request.get_full_path }}">
@@ -256,6 +256,7 @@
                                     </div>
                                 </form>
                                 {% endif %}
+                                {% include "escolas/_rpa_mip_lote_acao.html" with lote=linha.lote rpa_mip=linha.rpa_mip next=request.get_full_path %}
                             </div>
                             {% if linha.lote.email_enviado_em %}
                             <span class="text-[9px] font-bold text-gray-400 dark:text-gray-500">Enviado em {{ linha.lote.email_enviado_em|date:"d/m/Y H:i" }}</span>
@@ -307,19 +308,21 @@
                                                 {{ item.escola.get_status_mip_display }}
                                             </span>
                                         </td>
-                                        {# Pedido do usuário (2026-09-24): ícone de download da Nota Fiscal (MIP) deste INEP — habilitado só quando já sincronizada (`Escola.nota_fiscal_mip`, botão "Sincronizar Notas Fiscais dos INEPs" em Administrador > Relatório EACE MIP); `stopPropagation` evita que o clique dispare a navegação da linha inteira (`data-inep-navegar`, script no fim do arquivo). #}
+                                        {# Pedido do usuário (2026-09-24): ícone(s) de download da(s) Nota(s) Fiscal(is) (MIP) deste INEP — habilitado só quando já sincronizada(s) (`NotaFiscalMip`, botão "Sincronizar Notas Fiscais dos INEPs" em Administrador > Relatório EACE MIP); `stopPropagation` evita que o clique dispare a navegação da linha inteira (`data-inep-navegar`, script no fim do arquivo). RN ampliada (bug real reportado pelo usuário, 2026-09-24): INEP rateado pode ter mais de 1 Nota Fiscal — 1 ícone por Nota (`item.notas_fiscais`), não mais só 1. #}
                                         <td class="px-4 py-2 text-center" onclick="event.stopPropagation()">
-                                            {% if item.escola.nota_fiscal_mip %}
-                                            <a href="{{ item.escola.nota_fiscal_mip.url }}" target="_blank" title="Baixar Nota Fiscal"
-                                               class="inline-flex items-center justify-center w-7 h-7 bg-pv-black text-pv-yellow rounded-lg hover:bg-gray-800 transition">
-                                                <i data-lucide="file-check-2" class="w-3.5 h-3.5"></i>
-                                            </a>
-                                            {% else %}
-                                            <span title="Nenhuma Nota Fiscal sincronizada para este INEP"
-                                                  class="inline-flex items-center justify-center w-7 h-7 bg-gray-100 dark:bg-gray-800 text-gray-300 dark:text-gray-600 rounded-lg cursor-not-allowed">
-                                                <i data-lucide="file-x-2" class="w-3.5 h-3.5"></i>
-                                            </span>
-                                            {% endif %}
+                                            <div class="flex items-center justify-center gap-1">
+                                                {% for nota in item.notas_fiscais %}
+                                                <a href="{{ nota.arquivo.url }}" target="_blank" title="Baixar Nota Fiscal{% if nota.sincronizada_em %} (sincronizada em {{ nota.sincronizada_em|date:'d/m/Y' }}){% endif %}"
+                                                   class="inline-flex items-center justify-center w-7 h-7 bg-pv-black text-pv-yellow rounded-lg hover:bg-gray-800 transition">
+                                                    <i data-lucide="file-check-2" class="w-3.5 h-3.5"></i>
+                                                </a>
+                                                {% empty %}
+                                                <span title="Nenhuma Nota Fiscal sincronizada para este INEP"
+                                                      class="inline-flex items-center justify-center w-7 h-7 bg-gray-100 dark:bg-gray-800 text-gray-300 dark:text-gray-600 rounded-lg cursor-not-allowed">
+                                                    <i data-lucide="file-x-2" class="w-3.5 h-3.5"></i>
+                                                </span>
+                                                {% endfor %}
+                                            </div>
                                         </td>
                                         {% if not request.user.is_visualizador %}
                                         <td class="px-4 py-2">
@@ -406,7 +409,7 @@
     {% csrf_token %}
     <input type="hidden" name="next" value="{{ request.get_full_path }}">
     <button type="submit" name="status" value="em_andamento"
-            class="px-3 py-2 text-left text-[10px] font-black uppercase text-gray-700 dark:text-gray-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition">Em Andamento</button>
+            class="px-3 py-2 text-left text-[10px] font-black uppercase text-gray-700 dark:text-gray-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition">Em Andamento MIP</button>
     <button type="submit" name="status" value="em_faturamento"
             class="px-3 py-2 text-left text-[10px] font-black uppercase text-gray-700 dark:text-gray-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition border-t border-gray-100 dark:border-gray-800">Em Faturamento</button>
     <button type="submit" name="status" value="faturamento_concluido"

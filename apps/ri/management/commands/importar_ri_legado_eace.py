@@ -392,7 +392,7 @@ class Command(BaseCommand):
                     escolas_novas += 1
                 if ri_e_novo:
                     ris_novos += 1
-                elif ri.status != Ri.AGUARDANDO_VALIDACAO_EACE:
+                elif ri.status != Ri.FATURAMENTO_RI_CONCLUIDO:
                     ris_atualizados += 1
                 else:
                     ris_ja_no_status_correto += 1
@@ -409,15 +409,16 @@ class Command(BaseCommand):
 
                 # RN-092 (2026-09-10): `Ri.save()` (models.py) já faz o
                 # handoff pro MIP sozinho (`Escola.status_mip`) sempre que
-                # o status gravado é "Aguardando validação EACE" — cobre
+                # o status gravado é "Faturamento RI Concluído" (antes
+                # "Aguardando validação EACE", revisto em 2026-09-26) — cobre
                 # tanto a criação direta abaixo quanto a troca manual,
                 # sem precisar repetir a lógica aqui.
                 if ri_e_novo:
                     ri = Ri.objects.create(
-                        escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE, data_ativacao=data_ativacao,
+                        escola=escola, status=Ri.FATURAMENTO_RI_CONCLUIDO, data_ativacao=data_ativacao,
                     )
-                elif ri.status != Ri.AGUARDANDO_VALIDACAO_EACE:
-                    ri.status = Ri.AGUARDANDO_VALIDACAO_EACE
+                elif ri.status != Ri.FATURAMENTO_RI_CONCLUIDO:
+                    ri.status = Ri.FATURAMENTO_RI_CONCLUIDO
                     # Data de Ativação só é gravada num RI novo — nunca
                     # sobrescreve uma já existente (RI com progresso real
                     # pode já ter a dela própria, verdadeira).

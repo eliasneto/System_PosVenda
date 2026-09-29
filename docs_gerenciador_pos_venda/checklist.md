@@ -1134,6 +1134,18 @@ ordem, autorizada explicitamente pelo usuário em 2026-08-25).
   incorreto revertidos em produção e 3 respostas reais recuperadas
   retroativamente; correções implantadas em produção no mesmo dia (commit
   `f1c834a`). Suíte completa (316 testes) passando.
+- **Corrigido (2026-09-28, Dev):** resposta do financeiro perdida em
+  produção (INEP 35010328, RI 983; e INEP 17052556, RI 1785, em
+  2026-09-04). A falha ao baixar/processar uma mensagem (rede instável,
+  erro de banco) era só registrada, e o delta link avançava mesmo assim, de
+  modo que a mensagem nunca mais voltava. Agora, com qualquer falha na
+  passada, o cursor anterior é mantido (`EmailFinanceiroSync.ultimo_erro`
+  informa quantas mensagens falharam) e cada mensagem é processada em
+  `transaction.atomic`, para a nova tentativa não duplicar Nota
+  Fiscal/XML. Testes de regressão em `SincronizarEmailFinanceiroTests`.
+  Risco conhecido: uma mensagem com erro permanente segura o cursor e é
+  retentada a cada passada, visível pela Auditoria. Pendente: reprocessar
+  em produção as 2 respostas perdidas depois do deploy.
 
 ---
 

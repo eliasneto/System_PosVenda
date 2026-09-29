@@ -21,27 +21,33 @@
                 INEP {{ escola.inep }} — itens dos 3 lados (valor de serviço) e histórico
             </p>
         </div>
-        <!-- Pedido do usuário (2026-09-24): ícone para baixar a Nota
-             Fiscal (MIP) deste INEP, gravada pelo botão "Sincronizar
-             Notas Fiscais dos INEPs" (Administrador > Relatório EACE
-             MIP) — disponível em QUALQUER Status (MIP), não só "Em
-             Andamento" (por isso fica fora do bloco condicional de
-             status logo abaixo). Desabilitado (cinza, sem link) quando
-             o INEP nunca recebeu Nota Fiscal correspondente numa
-             sincronização. -->
-        <div class="relative group">
-            {% if escola.nota_fiscal_mip %}
-            <a href="{{ escola.nota_fiscal_mip.url }}" target="_blank" title="Baixar Nota Fiscal (MIP)"
-               class="inline-flex items-center justify-center w-11 h-11 bg-pv-black text-pv-yellow rounded-2xl shadow-lg hover:bg-gray-800 transition">
-                <i data-lucide="file-check-2" class="w-5 h-5"></i>
-            </a>
-            <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Baixar Nota Fiscal{% if escola.nota_fiscal_mip_sincronizada_em %} (sincronizada em {{ escola.nota_fiscal_mip_sincronizada_em|date:"d/m/Y" }}){% endif %}</span>
-            {% else %}
+        <!-- Pedido do usuário (2026-09-24): ícone(s) para baixar a(s)
+             Nota(s) Fiscal(is) (MIP) deste INEP, gravada(s) pelo botão
+             "Sincronizar Notas Fiscais dos INEPs" (Administrador >
+             Relatório EACE MIP) — disponível em QUALQUER Status (MIP),
+             não só "Em Andamento" (por isso fica fora do bloco
+             condicional de status logo abaixo). Desabilitado (cinza, sem
+             link) quando o INEP nunca recebeu Nota Fiscal correspondente
+             numa sincronização. RN ampliada (bug real reportado pelo
+             usuário, 2026-09-24): INEP rateado (mais de 1 Cidade na
+             planilha da EACE) pode receber mais de 1 Nota Fiscal do
+             financeiro — 1 ícone por Nota (`notas_fiscais_mip`), não mais
+             só 1. -->
+        <div class="flex items-center gap-2">
+            {% for nota in notas_fiscais_mip %}
+            <div class="relative group">
+                <a href="{{ nota.arquivo.url }}" target="_blank" title="Baixar Nota Fiscal (MIP)"
+                   class="inline-flex items-center justify-center w-11 h-11 bg-pv-black text-pv-yellow rounded-2xl shadow-lg hover:bg-gray-800 transition">
+                    <i data-lucide="file-check-2" class="w-5 h-5"></i>
+                </a>
+                <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Baixar Nota Fiscal{% if nota.sincronizada_em %} (sincronizada em {{ nota.sincronizada_em|date:"d/m/Y" }}){% endif %}</span>
+            </div>
+            {% empty %}
             <span title="Nenhuma Nota Fiscal sincronizada para este INEP ainda"
                   class="inline-flex items-center justify-center w-11 h-11 bg-gray-100 dark:bg-gray-800 text-gray-300 dark:text-gray-600 rounded-2xl cursor-not-allowed">
                 <i data-lucide="file-x-2" class="w-5 h-5"></i>
             </span>
-            {% endif %}
+            {% endfor %}
         </div>
         <!-- RN-092: Status próprio do MIP — independente do Status do RI
              (Projeto &gt; Equipamentos). Select com auto-submit ao trocar
@@ -55,6 +61,9 @@
                  sem formulário, o valor aparece como texto simples. -->
             {% if request.user.is_visualizador %}
             <p class="text-sm font-black italic text-pv-yellow">{{ escola.get_status_mip_display }}</p>
+            {% elif escola.status_mip == 'faturamento_concluido' and not request.user.is_administrador %}
+            {# Pedido do usuário (2026-09-25): "Processo Concluído" só o Administrador altera. #}
+            <p class="text-sm font-black italic text-pv-yellow" title="Só o Administrador pode alterar a partir de &quot;Processo Concluído&quot;">{{ escola.get_status_mip_display }}</p>
             {% else %}
             <form method="POST" action="{% url 'mip_status_update' inep=escola.inep %}" data-salvar-ao-trocar>
                 {% csrf_token %}
@@ -74,10 +83,10 @@
     <p class="text-[11px] text-gray-400 dark:text-gray-500 font-bold mb-4">
         Só leitura — lançar/editar continua em Projeto &gt; Equipamentos.
         {% if escola.status_mip == "em_andamento" %}
-        Status (MIP) em "Em Andamento": os campos do Lado IXC podem ser atualizados em Projeto &gt; Equipamentos, com o formulário normal.
+        Status (MIP) em "Em Andamento MIP": os campos do Lado IXC podem ser atualizados em Projeto &gt; Equipamentos, com o formulário normal.
         <a href="{% url 'ri_detail' inep=escola.inep %}" class="text-amber-600 dark:text-amber-400 hover:underline">Abrir em Equipamentos →</a>
         {% elif somente_servico_editavel and not request.user.is_visualizador %}
-        Exceção: com o Status (MIP) em "Aguardando Validação EACE", equipamento só com valor de serviço (sem "Equipamentos R$" na LPU) pode ser lançado/excluído direto aqui.
+        Exceção: com o Status (MIP) em "Aguardando Validação EACE", equipamento só com valor de serviço (sem "Equipamentos R$" na LPU) pode ser lançado direto aqui{% if request.user.is_administrador %}; qualquer Produto avulso do Lado IXC pode ser excluído (Administrador, nunca o KIT){% endif %}.
         {% endif %}
     </p>
     <!-- RN-071 (a criar): confronto de Valor de serviço entre o Lado IXC
@@ -128,8 +137,9 @@
                     <p class="text-gray-700 dark:text-gray-300{% if item.pk in divergencia_valor_servico.itens_ixc_divergentes_pks %} font-black text-amber-600 dark:text-amber-400{% endif %}">
                         {{ item.descricao }} — {{ item.quantidade }} un.{% if not request.user.is_visualizador %} — {% if item.valor_servico is not None %}R$ {{ item.valor_servico }}{% else %}<span class="text-gray-400 dark:text-gray-500">valor de serviço não encontrado</span>{% endif %}{% endif %}
                     </p>
-                    {% if somente_servico_editavel and item.descricao in descricoes_somente_servico and request.user.is_administrador %}
-                    <form method="POST" action="{% url 'mip_item_ixc_somente_servico_delete' item_pk=item.pk %}" class="shrink-0">
+                    {# RN ampliada (pedido do usuário, 2026-09-24): exclusão liberada pra qualquer Produto avulso do Lado IXC, nunca o KIT (`item.eh_kit`) — mesmo critério de Status (MIP)/Administrador de sempre. #}
+                    {% if somente_servico_editavel and not item.eh_kit and request.user.is_administrador %}
+                    <form method="POST" action="{% url 'mip_item_ixc_delete' item_pk=item.pk %}" class="shrink-0">
                         {% csrf_token %}
                         <button type="button"
                                 data-confirmar
@@ -137,7 +147,7 @@
                                 data-confirmar-mensagem="Excluir este equipamento?"
                                 data-confirmar-texto-botao="Excluir"
                                 data-confirmar-cor="perigo"
-                                class="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Excluir (equipamento só valor de serviço)">
+                                class="text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400" title="Excluir item (Lado IXC)">
                             <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                         </button>
                     </form>

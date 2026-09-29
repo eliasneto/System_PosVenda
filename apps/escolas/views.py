@@ -17,14 +17,14 @@ from django.utils import timezone
 
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
-from apps.ri.forms import RiHistoricoForm, RiItemIxcProdutoFormSet, catalogo_ixc_somente_servico
+from apps.ri.forms import RiHistoricoForm, RiItemIxcProdutoFormSet
 from apps.ri.models import Documento, EmailFinanceiroLog, KitPadrao, Ri, RiHistorico, RiItemIxc
 from apps.ri.services import sincronizar_divergencia_kit_relatorio, trocar_status_com_log
-from apps.ri.views import _validar_transicao_status_ri
 
 # `LoteEmailForm` — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.forms`).
 from .forms import LoteNotasFiscaisZipUploadForm, NotasFiscaisMipUploadForm, PlanilhaRelatorioEaceMipUploadForm
 from .models import Escola, EscolaItemRelatorioEaceMip, Lote, NotasFiscaisMip, PlanilhaRelatorioEaceMip
+from .rpa_mip_lote import estados_rpa_mip_dos_lotes
 from .services import (
     MIME_PLANILHA_FATURAMENTO_IMPLANTACAO,
     LoteMipError,
@@ -40,8 +40,8 @@ from .services import (
     # enviar_email_lote, montar_assunto_email_lote, montar_corpo_email_lote — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.services`).
     escolas_com_lado3_preenchido_no_arquivo_ativo,
     escolas_elegiveis_lote_mip,
-    gerar_planilha_faturamento_implantacao_lote,
-    nome_arquivo_planilha_faturamento_implantacao,
+    planilhas_faturamento_implantacao_lote,
+    rateio_relatorio_eace_mip_da_escola,
     sincronizar_notas_fiscais_mip_lote_em_andamento,
     sincronizar_relatorio_eace_mip_de_todas_as_escolas,
 )
@@ -413,6 +413,23 @@ def mip_inep_view(request):
             estado_filtro, municipio_filtro, data_inicial_validacao, data_final_validacao
         )
     total_elegiveis_lote = len(escolas_elegiveis_lote)
+    # RN a formalizar (pedido do usuário, 2026-09-24): rateio de cada INEP
+    # elegível (mesmo INEP com mais de 1 Cidade na planilha da EACE, ex.:
+    # "Brasília"/"Brasília2") — alimenta a seta de detalhe do modal de
+    # revisão (`_modal_criar_lote.html`). Calculado aqui (não no template)
+    # porque o template não pode chamar função com argumento; `escola`
+    # continua acessível dentro do dict, mesmo padrão já usado por
+    # `linha.escolas`/`item.escola` em `mip_lote_inep.html`.
+    escolas_elegiveis_lote_detalhe = [
+        {
+            "escola": escola,
+            "rateio": rateio_relatorio_eace_mip_da_escola(escola),
+            # Pedido do usuário (2026-09-25): valor total de cada INEP no
+            # modal (Valor Total (IXC), ver `escolas_elegiveis_lote_mip`).
+            "valor_total": escola.valor_total_lote_mip,
+        }
+        for escola in escolas_elegiveis_lote
+    ]
 
     # RN-081 (revista pela RN-092): INEPs encontrados na última
     # sincronização do Relatório EACE (MIP), mas cuja Escola não está com
@@ -471,6 +488,7 @@ def mip_inep_view(request):
             "filtro_lote_completo": filtro_lote_completo,
             "total_elegiveis_lote": total_elegiveis_lote,
             "escolas_elegiveis_lote": escolas_elegiveis_lote,
+            "escolas_elegiveis_lote_detalhe": escolas_elegiveis_lote_detalhe,
             "escolas_fora_da_validacao_eace": escolas_fora_da_validacao_eace,
             "q": q,
         },
@@ -630,6 +648,7 @@ def mip_lote_inep_view(request):
             queryset=Escola.objects.order_by("nome").prefetch_related(
                 Prefetch("ris", queryset=Ri.objects.order_by("-criado_em").prefetch_related("itens_ixc")),
                 "itens_relatorio_eace_mip",
+                "notas_fiscais_mip",
             ),
         )
     ).order_by("-criado_em")
@@ -661,6 +680,11 @@ def mip_lote_inep_view(request):
                     "valor_total_lado2": valor_total_lado2,
                     "valor_total_lado2_incompleto": incompleto2,
                     "valor_total_lado3": valor_total_lado3,
+                    # RN ampliada (bug real reportado pelo usuário,
+                    # 2026-09-24): INEP rateado pode ter mais de 1 Nota
+                    # Fiscal (`NotaFiscalMip`, 1 por fração/Cidade) —
+                    # lista, não mais um único arquivo.
+                    "notas_fiscais": list(escola.notas_fiscais_mip.all()),
                 }
             )
         # Pedido do usuário (2026-09-16): coluna "Valor Total do LOTE" na
@@ -677,9 +701,9 @@ def mip_lote_inep_view(request):
         valor_total_lote_incompleto = any(item["valor_total_lado2_incompleto"] for item in escolas_do_lote)
 
         if nf_filtro == "com":
-            escolas_exibidas = [item for item in escolas_do_lote if item["escola"].nota_fiscal_mip]
+            escolas_exibidas = [item for item in escolas_do_lote if item["notas_fiscais"]]
         elif nf_filtro == "sem":
-            escolas_exibidas = [item for item in escolas_do_lote if not item["escola"].nota_fiscal_mip]
+            escolas_exibidas = [item for item in escolas_do_lote if not item["notas_fiscais"]]
         else:
             escolas_exibidas = escolas_do_lote
         if nf_filtro and not escolas_exibidas:
@@ -728,6 +752,13 @@ def mip_lote_inep_view(request):
     paginator = Paginator(linhas_lote_filtradas, 25)
     page_obj = paginator.get_page(request.GET.get("page"))
     linhas_lote = page_obj.object_list
+    # RN-XXX (a formalizar pelo Orquestrador; pedido do usuário, 2026-09-29):
+    # estado do botão "Enviar ao portal EACE" de cada LOTE da página - 1
+    # consulta para todos os últimos envios, NF comum calculada sobre o
+    # prefetch acima (`escolas` + `notas_fiscais_mip`), sem N+1.
+    estados_rpa_mip = estados_rpa_mip_dos_lotes([linha["lote"] for linha in linhas_lote])
+    for linha in linhas_lote:
+        linha["rpa_mip"] = estados_rpa_mip[linha["lote"].pk]
 
     valor_total_geral = sum((linha["valor_total_lote"] for linha in linhas_lote_filtradas), Decimal("0.00"))
     valor_total_geral_incompleto = any(linha["valor_total_lote_incompleto"] for linha in linhas_lote_filtradas)
@@ -807,30 +838,51 @@ def mip_lote_baixar_planilha_view(request, pk):
     de implantação que seria anexada ao e-mail do LOTE (sem enviar nada) —
     mesmo padrão do botão "Baixar planilha" do RI
     (`apps.ri.views.ri_baixar_planilha_financeiro_view`), para o usuário
-    conferir os dados antes de confirmar o envio."""
+    conferir os dados antes de confirmar o envio.
+
+    RN a formalizar (pedido do usuário, 2026-09-24): quando o LOTE tem
+    algum INEP rateado (`planilhas_faturamento_implantacao_lote` devolve
+    mais de 1 arquivo), o download vira um .zip com 1 arquivo por Cidade
+    em vez do único .xlsx de sempre — mesmo padrão de nome/mensagem de
+    erro do "Baixar planilhas (.zip)" de vários LOTEs
+    (`mip_lote_baixar_planilhas_zip_view`, abaixo). Sem rateio, continua
+    baixando o único .xlsx, exatamente como antes."""
     lote = get_object_or_404(Lote, pk=pk)
     next_url = request.GET.get("next") or ""
     if not next_url.startswith("/"):
         next_url = reverse("mip_lote_inep")
 
     try:
-        workbook = gerar_planilha_faturamento_implantacao_lote(lote, data_envio=timezone.localdate())
+        planilhas = planilhas_faturamento_implantacao_lote(lote, data_envio=timezone.localdate())
     except PlanilhaFaturamentoImplantacaoError as erro:
         messages.error(request, str(erro))
         return redirect(next_url)
 
-    planilha_stream = io.BytesIO()
-    workbook.save(planilha_stream)
-    nome_planilha = nome_arquivo_planilha_faturamento_implantacao(lote)
+    if len(planilhas) == 1:
+        nome_planilha, workbook = planilhas[0]
+        planilha_stream = io.BytesIO()
+        workbook.save(planilha_stream)
 
-    resposta = HttpResponse(planilha_stream.getvalue(), content_type=MIME_PLANILHA_FATURAMENTO_IMPLANTACAO)
-    # Nome do município pode ter acento — filename comum (fallback ASCII) +
-    # filename* (RFC 5987/6266), mesmo padrão de
-    # `apps.ri.views.ri_baixar_planilha_financeiro_view`.
-    nome_ascii = nome_planilha.encode("ascii", "ignore").decode("ascii") or "faturamento.xlsx"
-    resposta["Content-Disposition"] = (
-        f'attachment; filename="{nome_ascii}"; filename*=UTF-8\'\'{quote(nome_planilha)}'
-    )
+        resposta = HttpResponse(planilha_stream.getvalue(), content_type=MIME_PLANILHA_FATURAMENTO_IMPLANTACAO)
+        # Nome do município pode ter acento — filename comum (fallback ASCII) +
+        # filename* (RFC 5987/6266), mesmo padrão de
+        # `apps.ri.views.ri_baixar_planilha_financeiro_view`.
+        nome_ascii = nome_planilha.encode("ascii", "ignore").decode("ascii") or "faturamento.xlsx"
+        resposta["Content-Disposition"] = (
+            f'attachment; filename="{nome_ascii}"; filename*=UTF-8\'\'{quote(nome_planilha)}'
+        )
+        return resposta
+
+    zip_stream = io.BytesIO()
+    with zipfile.ZipFile(zip_stream, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
+        for nome_planilha, workbook in planilhas:
+            planilha_stream = io.BytesIO()
+            workbook.save(planilha_stream)
+            arquivo_zip.writestr(nome_planilha, planilha_stream.getvalue())
+
+    resposta = HttpResponse(zip_stream.getvalue(), content_type="application/zip")
+    nome_zip = f"faturamento_implantacao_{lote}_rateio.zip".replace(" ", "_")
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_zip}"'
     return resposta
 
 
@@ -842,13 +894,18 @@ def mip_lote_baixar_planilhas_zip_view(request):
     `form="form-baixar-planilhas-lotes"` pra submeter aqui, já que cada
     linha tem forms próprios de status/desfazer) e baixa, num único .zip,
     a planilha de faturamento de implantação de cada LOTE marcado — mesma
-    `gerar_planilha_faturamento_implantacao_lote` já usada pelo botão
-    "Baixar planilha" individual (`mip_lote_baixar_planilha_view`) e pelo
-    e-mail do LOTE (comentado). Se 1 LOTE marcado não tiver planilha
-    gerável (ex.: sem nenhum INEP), aborta o .zip inteiro e mostra o erro
-    — decisão do Dev (2026-09-15, reversível/baixo risco, CLAUDE.md §9):
+    `planilhas_faturamento_implantacao_lote` já usada pelo botão "Baixar
+    planilha" individual (`mip_lote_baixar_planilha_view`) e pelo e-mail
+    do LOTE (comentado). Se 1 LOTE marcado não tiver planilha gerável
+    (ex.: sem nenhum INEP), aborta o .zip inteiro e mostra o erro —
+    decisão do Dev (2026-09-15, reversível/baixo risco, CLAUDE.md §9):
     mais simples e claro do que devolver um .zip parcial sem avisar qual
-    LOTE ficou de fora."""
+    LOTE ficou de fora.
+
+    RN a formalizar (pedido do usuário, 2026-09-24): LOTE com algum INEP
+    rateado entra neste .zip com mais de 1 arquivo (1 por Cidade,
+    `planilhas_faturamento_implantacao_lote`), em vez de só 1 — mesmo
+    critério do "Baixar planilha" individual."""
     if request.method != "POST":
         return redirect("mip_lote_inep")
 
@@ -863,13 +920,14 @@ def mip_lote_baixar_planilhas_zip_view(request):
     with zipfile.ZipFile(zip_stream, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
         for lote in lotes:
             try:
-                workbook = gerar_planilha_faturamento_implantacao_lote(lote, data_envio=timezone.localdate())
+                planilhas = planilhas_faturamento_implantacao_lote(lote, data_envio=timezone.localdate())
             except PlanilhaFaturamentoImplantacaoError as erro:
                 messages.error(request, f"{lote}: {erro}")
                 return redirect("mip_lote_inep")
-            planilha_stream = io.BytesIO()
-            workbook.save(planilha_stream)
-            arquivo_zip.writestr(nome_arquivo_planilha_faturamento_implantacao(lote), planilha_stream.getvalue())
+            for nome_planilha, workbook in planilhas:
+                planilha_stream = io.BytesIO()
+                workbook.save(planilha_stream)
+                arquivo_zip.writestr(nome_planilha, planilha_stream.getvalue())
 
     resposta = HttpResponse(zip_stream.getvalue(), content_type="application/zip")
     resposta["Content-Disposition"] = 'attachment; filename="faturamento_implantacao_lotes.zip"'
@@ -919,14 +977,9 @@ def mip_lote_status_update_view(request, pk):
     chegou em "Processo Concluído" (fim do processo, sem volta por aqui).
 
     Aplica a mudança a TODOS os INEPs do LOTE de uma vez, tudo ou nada
-    (`transaction.atomic`): "Em Andamento" reabre o RI de cada um de
-    verdade — mesma validação e log já usados no Grid de Equipamentos/MIP
-    individual (`_validar_transicao_status_ri`/`trocar_status_com_log`,
-    RN-011/RN-052/RN-092) — pedido do usuário: "vai para o RI como é
-    hoje". "Em Faturamento" e "Processo Concluído" só trocam o Status
-    (MIP) de cada um (mesmo critério do `mip_status_update_view`
-    individual, sem validação de RI — nenhum dos dois mexe em
-    `Ri.status`). Cada INEP ganha uma entrada no próprio histórico
+    (`transaction.atomic`), só no Status (MIP) de cada um — pedido do
+    usuário (2026-09-26): "Em Andamento" não reabre mais o RI (antes
+    reabria, RN-092). Cada INEP ganha uma entrada no próprio histórico
     (pedido explícito do usuário: "Tudo isso deve ser enviado para os
     históricos dos INEPS")."""
     lote = get_object_or_404(Lote, pk=pk)
@@ -949,54 +1002,28 @@ def mip_lote_status_update_view(request, pk):
         return redirect(next_url)
 
     escolas = list(lote.escolas.all())
-
-    if novo_status == Lote.EM_ANDAMENTO:
-        # Valida TODOS antes de mudar qualquer um — tudo ou nada, mesmo
-        # critério de `criar_lote_mip`: um INEP bloqueado (ex.: RN-020,
-        # divergência aberta) não pode deixar o LOTE pela metade.
-        ris_por_escola = {}
-        erros = []
+    # Pedido do usuário (2026-09-26): "Em Andamento MIP" deixou de reabrir o
+    # RI — os três status só trocam o Status (MIP) de cada INEP; o RI
+    # continua em "Faturamento RI Concluído" (`_refletir_status_mip_no_ri`).
+    status_escola_novo = {
+        Lote.EM_ANDAMENTO: Escola.EM_ANDAMENTO,
+        Lote.EM_FATURAMENTO: Escola.EM_FATURAMENTO_LOTE,
+        Lote.FATURAMENTO_CONCLUIDO: Escola.FATURAMENTO_CONCLUIDO,
+    }[novo_status]
+    with transaction.atomic():
         for escola in escolas:
-            ri = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
-            if not ri:
-                erros.append(f"{escola.inep} (sem RI)")
-                continue
-            erro = _validar_transicao_status_ri(ri, Ri.ANDAMENTO, request.user)
-            if erro:
-                erros.append(f"{escola.inep}: {erro}")
-            else:
-                ris_por_escola[escola.pk] = ri
-        if erros:
-            messages.error(
-                request,
-                'Não foi possível mudar o LOTE para "Em Andamento" — ' + "; ".join(erros),
-            )
-            return redirect(next_url)
-        with transaction.atomic():
-            for escola in escolas:
-                trocar_status_com_log(ris_por_escola[escola.pk], Ri.ANDAMENTO, request.user)
-                escola.status_mip = Escola.EM_ANDAMENTO
-                escola.save(update_fields=["status_mip"])
-            lote.status = Lote.EM_ANDAMENTO
-            lote.save(update_fields=["status"])
-        messages.success(request, f'{lote} atualizado para "Em Andamento" — RI de cada INEP reaberto.')
-    else:
-        status_escola_novo = (
-            Escola.EM_FATURAMENTO_LOTE if novo_status == Lote.EM_FATURAMENTO else Escola.FATURAMENTO_CONCLUIDO
-        )
-        with transaction.atomic():
-            for escola in escolas:
-                status_anterior = escola.get_status_mip_display()
-                escola.status_mip = status_escola_novo
-                escola.save(update_fields=["status_mip"])
-                ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
-                if ri_atual:
-                    _registrar_log_campo_mip(
-                        ri_atual, request.user, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
-                    )
-            lote.status = novo_status
-            lote.save(update_fields=["status"])
-        messages.success(request, f'{lote} atualizado para "{lote.get_status_display()}".')
+            status_anterior = escola.get_status_mip_display()
+            escola.status_mip = status_escola_novo
+            escola.save(update_fields=["status_mip"])
+            ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+            if ri_atual:
+                _registrar_log_campo_mip(
+                    ri_atual, request.user, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
+                )
+                _refletir_status_mip_no_ri(escola, ri_atual, request.user)
+        lote.status = novo_status
+        lote.save(update_fields=["status"])
+    messages.success(request, f'{lote} atualizado para "{lote.get_status_display()}".')
 
     return redirect(next_url)
 
@@ -1032,17 +1059,6 @@ def mip_lote_desfazer_view(request, pk):
         f'{identificacao_lote} desfeito — os INEPs voltaram para "Aguardando Validação EACE" no MIP.',
     )
     return redirect(next_url)
-
-
-def _descricoes_somente_servico(escola):
-    """RN-089/RN-092 (2026-09-10): Descrições do catálogo LPU sem
-    "Equipamentos (R$)" (só "Serviços (R$)") para o Lote desta escola —
-    mesmo catálogo do 2º bloco "+" do Lado IXC do RI (`ri_detail.html`),
-    usado aqui só para reconhecer, na lista já lançada, quais itens podem
-    ser excluídos direto do MIP (nunca um Produto normal nem o KIT)."""
-    return {
-        kit.descricao_curta or kit.descricao for kit in catalogo_ixc_somente_servico(escola)
-    }
 
 
 def _registrar_log_campo_mip(ri, usuario, campo, valor_anterior, valor_novo):
@@ -1102,6 +1118,13 @@ def mip_detail_view(request, inep):
     Andamento" (reabrindo o RI inteiro) só para incluir/remover um
     desses.
 
+    RN ampliada (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-24): a exclusão deixou de ser restrita ao
+    catálogo "só valor de serviço" — Administrador pode excluir qualquer
+    Produto avulso do Lado IXC por aqui (`mip_item_ixc_delete_view`),
+    nunca o KIT. O lançamento (adicionar item novo) continua restrito ao
+    catálogo "só valor de serviço" de sempre, sem mudança.
+
     RN-095 (nova, a formalizar pelo Orquestrador em business_rules.md;
     pedido do usuário, 2026-09-12): com `Escola.status_mip ==
     "Aguardando Validação EACE"`, o card do Lado 3 ganha também os dados
@@ -1125,6 +1148,10 @@ def mip_detail_view(request, inep):
     lado1_kit_declarado = _resolver_lado_kit_declarado(escola, ri, catalogo_kits)
     lado2_ixc = _resolver_lado_ixc(ri, escola.lote, catalogo_kits)
     lado3_relatorio_eace_mip = _resolver_lado3_relatorio_eace_mip(escola)
+    # RN ampliada (bug real reportado pelo usuário, 2026-09-24): INEP
+    # rateado pode ter mais de 1 Nota Fiscal (`NotaFiscalMip`, 1 por
+    # fração/Cidade) — lista, não mais um único arquivo.
+    notas_fiscais_mip = list(escola.notas_fiscais_mip.all())
     # RN-095: dados da própria RI só para comparação visual (ver docstring
     # acima) — calculado só quando o template vai exibi-lo, para não
     # gastar consulta/CPU à toa nos outros 2 status do MIP.
@@ -1160,7 +1187,6 @@ def mip_detail_view(request, inep):
     ]
 
     somente_servico_editavel = escola.status_mip == Escola.AGUARDANDO_VALIDACAO_EACE
-    descricoes_somente_servico = _descricoes_somente_servico(escola) if somente_servico_editavel else set()
     produto_servico_formset = None
     if somente_servico_editavel and ri:
         produto_servico_formset = RiItemIxcProdutoFormSet(
@@ -1187,6 +1213,7 @@ def mip_detail_view(request, inep):
             "lado2_ixc": lado2_ixc,
             "lado3_relatorio_eace_mip": lado3_relatorio_eace_mip,
             "lado3_relatorio_eace_ri": lado3_relatorio_eace_ri,
+            "notas_fiscais_mip": notas_fiscais_mip,
             "valor_total_lado1": valor_total_lado1,
             "valor_total_lado1_incompleto": valor_total_lado1_incompleto,
             "valor_total_lado2": valor_total_lado2,
@@ -1199,23 +1226,27 @@ def mip_detail_view(request, inep):
             "historico": historico_page_obj,
             "status_mip_opcoes": status_mip_opcoes_editavel,
             "somente_servico_editavel": somente_servico_editavel,
-            "descricoes_somente_servico": descricoes_somente_servico,
             "produto_servico_formset": produto_servico_formset,
         },
     )
 
 
+def _refletir_status_mip_no_ri(escola, ri, usuario):
+    """Pedido do usuário (2026-09-26; a formalizar pelo Orquestrador em
+    business_rules.md): INEP no MIP, qualquer Status (MIP), fica no RI como
+    "Faturamento RI Concluído" — o Status (MIP) aparece no RI só como
+    rótulo. Substitui a regra de 2026-09-25 ("Processo Concluído" gravava
+    o RI como "Faturamento Concluído")."""
+    if ri and escola.status_mip and ri.status != Ri.FATURAMENTO_RI_CONCLUIDO:
+        trocar_status_com_log(ri, Ri.FATURAMENTO_RI_CONCLUIDO, usuario)
+
+
 @login_required
 def mip_status_update_view(request, inep):
-    """RN-092 (revista em 2026-09-10): troca o Status (MIP). "Aguardando
-    Validação EACE" e "Faturamento Concluído" só mexem em
-    `Escola.status_mip` (label do MIP, sem tocar o RI). "Em Andamento" é
-    diferente — é o mesmo `Ri.status="andamento"` de sempre: passa pela
-    mesma validação de transição do RI (`_validar_transicao_status_ri`,
-    inclusive a exceção de Administrador da RN-020 quando o RI está
-    "Faturamento Concluído") e pelo mesmo `trocar_status_com_log`, pra ter
-    todo o acesso que "Em Andamento" já tem hoje na tela de Equipamentos
-    (RN-011/RN-052) — nada duplicado aqui.
+    """RN-092 (revista em 2026-09-26, pedido do usuário): troca o Status
+    (MIP). Nenhum status reabre mais o RI — ele fica em "Faturamento RI
+    Concluído" (`_refletir_status_mip_no_ri`), inclusive com "Em
+    Andamento MIP" (antes voltava o RI para "Em Andamento").
 
     FEAT-044/FEAT-046/RN-098 (a formalizar pelo Orquestrador em
     business_rules.md; 2026-09-14): "Aguardando Encerramento LOTE" e "Em
@@ -1237,36 +1268,22 @@ def mip_status_update_view(request, inep):
         return redirect("mip_detail", inep=inep)
     if novo_status == escola.status_mip:
         return redirect("mip_detail", inep=inep)
+    if escola.status_mip == Escola.FATURAMENTO_CONCLUIDO and not request.user.is_administrador:
+        # Pedido do usuário (2026-09-25): com "Processo Concluído", só o
+        # Administrador volta a mexer no INEP/RI.
+        messages.error(request, 'Só o Administrador pode alterar o status a partir de "Processo Concluído".')
+        return redirect("mip_detail", inep=inep)
 
-    if novo_status == Escola.EM_ANDAMENTO:
-        ri = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
-        if not ri:
-            messages.error(request, "Este INEP ainda não tem RI.")
-            return redirect("mip_detail", inep=inep)
-        erro = _validar_transicao_status_ri(ri, Ri.ANDAMENTO, request.user)
-        if erro:
-            messages.error(request, erro)
-            return redirect("mip_detail", inep=inep)
-        trocar_status_com_log(ri, Ri.ANDAMENTO, request.user)
-        # `Ri.save()` (RN-092) só sincroniza `status_mip` para "Aguardando
-        # Validação EACE"/"Faturamento Concluído" — "Em Andamento" é
-        # gravado aqui, de propósito.
-        escola.status_mip = Escola.EM_ANDAMENTO
-        escola.save(update_fields=["status_mip"])
-        messages.success(
-            request,
-            'Status (MIP) atualizado para "Em Andamento" — campos liberados para atualização em Projeto > Equipamentos.',
+    status_anterior = escola.get_status_mip_display()
+    escola.status_mip = novo_status
+    escola.save(update_fields=["status_mip"])
+    ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+    if ri_atual:
+        _registrar_log_campo_mip(
+            ri_atual, request.user, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
         )
-    else:
-        status_anterior = escola.get_status_mip_display()
-        escola.status_mip = novo_status
-        escola.save(update_fields=["status_mip"])
-        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
-        if ri_atual:
-            _registrar_log_campo_mip(
-                ri_atual, request.user, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
-            )
-        messages.success(request, "Status (MIP) atualizado.")
+        _refletir_status_mip_no_ri(escola, ri_atual, request.user)
+    messages.success(request, "Status (MIP) atualizado.")
     return redirect("mip_detail", inep=inep)
 
 
@@ -1317,12 +1334,20 @@ def mip_item_ixc_somente_servico_salvar_view(request, inep):
 
 
 @login_required
-def mip_item_ixc_somente_servico_delete_view(request, item_pk):
-    """RN-092 (ampliação, 2026-09-10): exclusão de um item "só valor de
-    serviço" (RN-089) lançado via MIP — só Administrador (RN-004), só com
-    `Escola.status_mip == "Aguardando Validação EACE"`, e só quando o
-    item de fato pertence a esse catálogo restrito (nunca o KIT nem um
-    Produto normal, mesmo que alguém monte a URL à mão)."""
+def mip_item_ixc_delete_view(request, item_pk):
+    """RN-092 (ampliação, 2026-09-10) ampliada (RN a formalizar pelo
+    Orquestrador em business_rules.md; pedido do usuário, 2026-09-24):
+    exclusão de item do Lado IXC (2º) direto pelo MIP — antes restrita ao
+    catálogo "só valor de serviço" (RN-089), agora vale para qualquer
+    Produto avulso lançado no Lado IXC (Nobreak, Access Point adicional,
+    Switch etc.), nunca o KIT (`item.eh_kit`) — ele sustenta outras regras
+    (RN-015 "só 1 KIT por INEP", divergência, sincronização do RI) e
+    precisaria de um fluxo próprio para ser removido com segurança. Só
+    Administrador (RN-004), só com `Escola.status_mip == "Aguardando
+    Validação EACE"` (mesmos critérios de sempre desta tela). Toda
+    exclusão grava no histórico do RI (`_registrar_log_campo_mip`, RN-008)
+    — pedido explícito do usuário: "sempre colocando a alteração no
+    histórico"."""
     item = get_object_or_404(RiItemIxc, pk=item_pk)
     ri = item.ri
     escola = ri.escola
@@ -1330,19 +1355,19 @@ def mip_item_ixc_somente_servico_delete_view(request, item_pk):
     if escola.status_mip != Escola.AGUARDANDO_VALIDACAO_EACE:
         messages.error(
             request,
-            'Só é possível excluir equipamento (valor de serviço) com o Status (MIP) em '
+            'Só é possível excluir item do Lado IXC com o Status (MIP) em '
             '"Aguardando Validação EACE".',
         )
         return redirect("mip_detail", inep=inep)
-    if item.eh_kit or item.descricao_item not in _descricoes_somente_servico(escola):
-        return HttpResponseForbidden("Este item não pode ser excluído por aqui.")
+    if item.eh_kit:
+        return HttpResponseForbidden("O KIT não pode ser excluído por aqui.")
     if not request.user.is_administrador:
         return HttpResponseForbidden("Somente Administrador pode excluir itens.")
     if request.method == "POST":
         resumo = f"{item.descricao_item} — {item.quantidade} un."
         item.delete()
         _registrar_log_campo_mip(
-            ri, request.user, "Equipamento (valor de serviço, via MIP) excluído", resumo, "Excluído",
+            ri, request.user, "Equipamento (Lado IXC, via MIP) excluído", resumo, "Excluído",
         )
         sincronizar_divergencia_kit_relatorio(ri)
         messages.success(request, "Item excluído.")

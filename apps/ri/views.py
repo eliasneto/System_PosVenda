@@ -22,7 +22,8 @@ from django.views.decorators.cache import never_cache
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
 from apps.core.email_tracking import montar_assunto_com_codigo, montar_codigo_rastreio
-from apps.escolas.models import Escola
+from apps.escolas.models import Escola, LogRpaEaceMip
+from apps.escolas.rpa_mip_lote import logs_mip_para_fila
 
 from .forms import (
     PlanilhaEaceUploadForm,
@@ -53,9 +54,12 @@ from .services import (
     RI_SEM_LINHA_NA_PLANILHA,
     PlanilhaEaceSincronizacaoError,
     PlanilhaFaturamentoError,
+    avancar_implantacao_com_lado3,
     comparar_kit_e_produtos_ixc_relatorio,
     comparar_status_escola_relatorio,
     consultar_pendencias_portal_eace,
+    cancelar_log_rpa_eace,
+    criar_log_rpa_eace_manual,
     marcar_log_rpa_eace_concluido_manualmente,
     gerar_planilha_faturamento,
     # FEAT-037: relatório "Administrador > Relatório > Faturamento EACE
@@ -110,8 +114,10 @@ COPIA_FINANCEIRO = [
 STATUS_RI_MANUAIS = [
     Ri.ANDAMENTO,
     Ri.ENVIO_EMAIL_FATURAMENTO,
-    Ri.AGUARDANDO_VALIDACAO_EACE,
-    Ri.FATURAMENTO_CONCLUIDO,
+    # Pedido do usuário (2026-09-26): "Aguardando validação EACE" saiu do
+    # RI — a marcação manual do anexo feito no EACE leva direto para
+    # "Faturamento RI Concluído" (mesmas regras de origem e RN-099).
+    Ri.FATURAMENTO_RI_CONCLUIDO,
     Ri.CORRECAO_MEGA,
 ]
 
@@ -122,6 +128,18 @@ STATUS_RI_EDITAVEIS = [
     (valor, rotulo) for valor, rotulo in Ri.STATUS_CHOICES if valor in STATUS_RI_MANUAIS
 ]
 
+# Pedido do usuário (2026-09-25): filtro "Status do RI" do grid de
+# Equipamentos também oferece os status do MIP refletidos no RI (INEP em
+# LOTE ou em "Processo Concluído", `Escola.status_mip_refletido_no_ri`) —
+# valor com prefixo para não colidir com os valores do `Ri.status`
+# ("faturamento_concluido" existe nos dois).
+PREFIXO_FILTRO_STATUS_MIP = "mip:"
+STATUS_RI_OPCOES_FILTRO_GRID = list(Ri.STATUS_CHOICES) + [
+    (f"{PREFIXO_FILTRO_STATUS_MIP}{valor}", f"MIP: {rotulo}")
+    for valor, rotulo in Escola.STATUS_MIP_CHOICES
+    if valor != Escola.AGUARDANDO_VALIDACAO_EACE
+]
+
 # RN-008 (2026-08-26): tamanho da página da linha do tempo do RI — pedido
 # do usuário para não carregar o histórico inteiro de uma vez.
 HISTORICO_ITENS_POR_PAGINA = 10
@@ -130,14 +148,15 @@ HISTORICO_ITENS_POR_PAGINA = 10
 # Lado IXC e do Lado Relatório EACE ficam bloqueados para os dois perfis —
 # mensagem única reaproveitada por toda view que mexe nesses dois lados.
 MENSAGEM_BLOQUEIO_FATURAMENTO_CONCLUIDO = (
-    'RI em "Faturamento Concluído" — os campos do Lado Relatório EACE '
+    'INEP em "Processo Concluído" (MIP) — os campos do Lado Relatório EACE '
     "ficam bloqueados até o Administrador trocar o status (RN-020)."
 )
 
-# RN-052 (2026-09-02): Lado IXC só é editável com o RI em "Em Andamento" —
-# mensagem única reaproveitada por toda view que mexe nesse lado.
+# RN-052 (revista 2026-09-25): Lado IXC editável em qualquer status, só por
+# Administrador e Analista — mensagem única reaproveitada por toda view
+# que mexe nesse lado.
 MENSAGEM_LADO_IXC_SOMENTE_LEITURA = (
-    'Os campos do Lado IXC só são editáveis com o RI em "Em Andamento" (RN-052).'
+    "Os campos do Lado IXC só podem ser editados por Administrador ou Analista (RN-052)."
 )
 
 
@@ -198,10 +217,9 @@ def _status_ri_opcoes_disponiveis(ri):
             or _pronto_para_envio_email_financeiro(ri)
         )
         and (
-            valor != Ri.AGUARDANDO_VALIDACAO_EACE
-            or ri.status in (Ri.AGUARDANDO_ANEXO_PORTAL_EACE, Ri.FATURAMENTO_CONCLUIDO, Ri.AGUARDANDO_VALIDACAO_EACE)
+            valor != Ri.FATURAMENTO_RI_CONCLUIDO
+            or ri.status in (Ri.AGUARDANDO_ANEXO_PORTAL_EACE, Ri.FATURAMENTO_RI_CONCLUIDO)
         )
-        and (valor != Ri.FATURAMENTO_CONCLUIDO or ri.status in (Ri.AGUARDANDO_VALIDACAO_EACE, Ri.FATURAMENTO_CONCLUIDO))
         and (valor != Ri.CORRECAO_MEGA or ri.status in (Ri.ANDAMENTO, Ri.CORRECAO_MEGA))
     ]
 
@@ -214,21 +232,57 @@ def _bloqueado_faturamento_concluido(ri):
     ver `_validar_transicao_status_ri`). O Lado IXC não usa mais esta
     função — tem regra própria e mais restritiva (RN-052,
     `_lado_ixc_editavel`), que já cobre este status como um dos "qualquer
-    outro status" bloqueados."""
-    return ri.status == Ri.FATURAMENTO_CONCLUIDO
+    outro status" bloqueados.
+
+    Pedido do usuário (2026-09-26): também com o MIP em "Processo
+    Concluído" (RI em "Faturamento RI Concluído"), `Ri.faturamento_encerrado`."""
+    return ri.faturamento_encerrado
 
 
-def _lado_ixc_editavel(ri):
-    """RN-052 (2026-09-02): True só quando `ri.status == Ri.ANDAMENTO`
-    ("Em Andamento") — os campos do Lado IXC (2º lado: RN-011 KIT
-    Instalado + Produtos, RN-014 Município/Estado, RN-048 CNPJ/CNPJ
-    Fictício) só são lançados/editados nesse status, para os dois perfis
-    (Administrador e Analista); em qualquer outro status (inclusive
-    "Faturamento Concluído", que antes tinha bloqueio próprio na RN-020)
-    ficam somente leitura — os itens já lançados continuam visíveis, só
-    não editáveis/excluíveis. Não afeta o Lado Relatório EACE (RN-020,
-    `_bloqueado_faturamento_concluido`, segue valendo sem alteração)."""
-    return ri.status == Ri.ANDAMENTO
+# Pedido do usuário (2026-09-25; a formalizar pelo Orquestrador em
+# business_rules.md): com o faturamento encerrado — MIP em "Processo
+# Concluído" ou RI legado em "Faturamento Concluído" (`Ri.
+# faturamento_encerrado`, revisto em 2026-09-26) — só o Administrador volta a mexer no RI:
+# status (RN-020), Lado IXC, Data de Ativação, responsável e
+# processamentos RPA. Mensagem no histórico continua liberada.
+MENSAGEM_RI_SOMENTE_ADMINISTRADOR = (
+    'INEP em "Processo Concluído" (MIP) — só o Administrador pode alterar.'
+)
+
+
+MENSAGEM_STATUS_RI_CONTROLADO_PELO_MIP = (
+    'INEP no MIP: o RI fica em "Faturamento RI Concluído" — altere o Status (MIP) na tela do MIP.'
+)
+
+
+def _ri_somente_administrador(ri, user):
+    return ri.faturamento_encerrado and not user.is_administrador
+
+
+def _mensagem_lado_ixc_bloqueado(user, ri):
+    if _ri_somente_administrador(ri, user):
+        return MENSAGEM_RI_SOMENTE_ADMINISTRADOR
+    return MENSAGEM_LADO_IXC_SOMENTE_LEITURA
+
+
+def _lado_ixc_editavel(user, ri=None):
+    """RN-052 (revista 2026-09-25, pedido do usuário; a formalizar pelo
+    Orquestrador em business_rules.md): os campos do Lado IXC (2º lado:
+    RN-011 KIT Instalado + Produtos, RN-014 Município/Estado, RN-048
+    CNPJ/CNPJ Fictício) são editáveis em QUALQUER status do RI, só para
+    Administrador e Analista — antes só em "Em Andamento", o que obrigava
+    a voltar o status (ex.: de "Aguardando E-mail Financeiro") só para
+    corrigir um dado. Toda alteração continua registrada no histórico do
+    RI (`_registrar_log_campo`, RN-008). Visualizador segue somente
+    leitura (também barrado em POST pelo `VisualizadorAccessMiddleware`).
+    Não afeta o Lado Relatório EACE (RN-020, `_bloqueado_faturamento_
+    concluido`, segue valendo sem alteração).
+
+    Com `ri` em "Faturamento Concluído", só Administrador
+    (`_ri_somente_administrador`, pedido do usuário 2026-09-25)."""
+    if ri is not None and _ri_somente_administrador(ri, user):
+        return False
+    return user.is_administrador or user.perfil == user.PERFIL_ANALISTA
 
 
 def _total_itens_ri(itens, lote=None):
@@ -285,12 +339,10 @@ def _validar_transicao_status_ri(ri, novo_status, usuario):
     """RN-001/RN-003: regras já fechadas do ciclo de vida do RI (FEAT-006
     iniciada fora de ordem, ver `checklist.md`). Retorna None se a
     transição for permitida, ou uma mensagem explicando o bloqueio."""
-    if ri.status == Ri.FATURAMENTO_CONCLUIDO and not getattr(usuario, "is_administrador", False):
-        # RN-020: com o RI em "Faturamento Concluído", só o Administrador
-        # troca o status — Analista perde, só nesse status, a opção manual
-        # que tem nos demais status editáveis (RN-001). Sai antes de
-        # qualquer outra regra, inclusive quando o destino seria permitido.
-        return 'Só o Administrador pode alterar o status a partir de "Faturamento Concluído" (RN-020).'
+    if ri.escola.status_mip:
+        # Pedido do usuário (2026-09-26): INEP no MIP fica no RI como
+        # "Faturamento RI Concluído" — quem controla é o Status (MIP).
+        return MENSAGEM_STATUS_RI_CONTROLADO_PELO_MIP
     # RN-066 (2026-09-05): pedido do usuário — a partir de "Implantação
     # EACE", a única transição manual permitida é para "Em Andamento".
     # Antes desta regra, "Implantação EACE" não tinha guarda de destino
@@ -336,13 +388,8 @@ def _validar_transicao_status_ri(ri, novo_status, usuario):
     # `PlanilhaFaturamentoError` de `gerar_planilha_faturamento`.
     # FEAT-010/RF-10: marcação manual do anexo no portal EACE só a partir
     # de "Resposta Financeiro" — mesmo destino do gatilho automático
-    # (RF-19). `FATURAMENTO_CONCLUIDO` também é aceito como origem para
-    # não travar a correção do Administrador (RN-020: só ele chega aqui
-    # vindo desse status, o guard do início da função já garante isso).
-    if novo_status == Ri.AGUARDANDO_VALIDACAO_EACE and ri.status not in (
-        Ri.AGUARDANDO_ANEXO_PORTAL_EACE,
-        Ri.FATURAMENTO_CONCLUIDO,
-    ):
+    # (RF-19).
+    if novo_status == Ri.FATURAMENTO_RI_CONCLUIDO and ri.status != Ri.AGUARDANDO_ANEXO_PORTAL_EACE:
         return 'Só é possível marcar o anexo feito no EACE a partir de "Resposta Financeiro" (RN-001).'
     # RN-099 (2026-09-14): a troca manual acima (RN-001) é o mesmo destino
     # do avanço automático do RPA EACE (RN-056) — mas, sem esta checagem,
@@ -350,22 +397,15 @@ def _validar_transicao_status_ri(ri, novo_status, usuario):
     # (usuário reportou INEP 53005015 entrando no MIP com RPA sem terminar
     # de rodar). Mesmo critério do avanço automático
     # (`_avancar_status_se_todos_os_logs_sucesso`): só libera quando não
-    # sobra nenhum log fora de "Sucesso" — cobre também "Faturamento
-    # Concluído" como origem (RN-020, correção do Administrador).
+    # sobra nenhum log fora de "Sucesso".
     if (
-        novo_status == Ri.AGUARDANDO_VALIDACAO_EACE
-        and ri.logs_rpa_eace.exclude(resultado=LogRpaEace.SUCESSO).exists()
+        novo_status == Ri.FATURAMENTO_RI_CONCLUIDO
+        and ri.logs_rpa_eace.exclude(resultado__in=LogRpaEace.RESULTADOS_IGNORADOS_NO_AVANCO).exists()
     ):
         return (
             'Bloqueado: há log de RPA EACE ainda pendente ou com erro para este RI '
             '(RN-056/RN-099) — resolva ou reprocesse antes de marcar o anexo manualmente.'
         )
-    # FEAT-010/RF-11: conclusão manual só depois da marcação de anexo —
-    # "Botão de conclusão só habilitado depois da marcação de anexo"
-    # (checklist.md), aqui aplicado como bloqueio de origem, mesmo padrão
-    # das demais regras desta função.
-    if novo_status == Ri.FATURAMENTO_CONCLUIDO and ri.status != Ri.AGUARDANDO_VALIDACAO_EACE:
-        return 'Só é possível concluir o faturamento a partir de "Aguardando validação EACE" (RN-001).'
     return None
 
 
@@ -533,6 +573,10 @@ def grid_inep_view(request):
     # resposta do financeiro (RECEBIDO mais recente, `to_attr` evita nova
     # consulta por linha ao ler `respostas_financeiro_recebidas[0]`).
     escolas = escolas.prefetch_related(
+        # Selo "MIP: <status>" da coluna de status (pedido do usuário,
+        # 2026-09-25, `Escola.status_mip_refletido_no_ri`) — evita 1
+        # consulta de LOTE por linha.
+        "lotes",
         Prefetch(
             "ris",
             queryset=Ri.objects.order_by("-criado_em").prefetch_related(
@@ -572,7 +616,16 @@ def grid_inep_view(request):
         if ri_atual and ri_atual.status == Ri.AGUARDANDO_ANEXO_PORTAL_EACE:
             total_resposta_financeiro += 1
 
-        if status_ri_filtro and (not ri_atual or ri_atual.status != status_ri_filtro):
+        if status_ri_filtro.startswith(PREFIXO_FILTRO_STATUS_MIP):
+            # Opção "MIP: <status>" do filtro (pedido do usuário,
+            # 2026-09-25) — mesmo critério do selo da coluna de status
+            # (`Escola.status_mip_refletido_no_ri`).
+            if not (
+                escola.status_mip == status_ri_filtro[len(PREFIXO_FILTRO_STATUS_MIP):]
+                and escola.status_mip_refletido_no_ri
+            ):
+                continue
+        elif status_ri_filtro and (not ri_atual or ri_atual.status != status_ri_filtro):
             continue
         # Card "Com divergência" vira filtro (mesmo padrão do card
         # "Resposta Financeiro", RN-016) — checado depois de contar
@@ -645,7 +698,7 @@ def grid_inep_view(request):
             "status_ri_filtro": status_ri_filtro,
             "divergencia_filtro": divergencia_filtro,
             "status_conexao_opcoes": Escola.STATUS_CONEXAO_CHOICES,
-            "status_ri_opcoes": Ri.STATUS_CHOICES,
+            "status_ri_opcoes": STATUS_RI_OPCOES_FILTRO_GRID,
             "status_ri_manuais": STATUS_RI_MANUAIS,
             # RN-012: usuários do sistema para o <select> de reatribuição do
             # responsável, dentro do drill-down.
@@ -845,7 +898,7 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
         # registrado no Histórico de Comunicação, fácil de passar batido -
         # aviso aqui avisa direto onde o usuário esperava ver a automação.
         aviso_resposta_fora_padrao = ri.status in (
-            Ri.AGUARDANDO_ANEXO_PORTAL_EACE, Ri.AGUARDANDO_VALIDACAO_EACE, Ri.FATURAMENTO_CONCLUIDO,
+            Ri.AGUARDANDO_ANEXO_PORTAL_EACE, Ri.FATURAMENTO_RI_CONCLUIDO,
         )
         return {
             "ri": ri, "logs_rpa_eace": [], "documentos_pdf": [], "documentos_xml": [],
@@ -877,7 +930,10 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
     # item com OSP preenchido == "Nota Fiscal #1" etc.) - serve de guia, não
     # de garantia.
     itens_com_osp = list(ri.itens_relatorio_eace.exclude(num_osp="").order_by("id"))
-    for log, item in zip(logs_rpa_eace, itens_com_osp):
+    # Log "Cancelado" (NF errada) fica fora da correspondência posicional —
+    # senão empurraria a referência das NFs seguintes.
+    logs_validos = [log for log in logs_rpa_eace if log.resultado != LogRpaEace.CANCELADO]
+    for log, item in zip(logs_validos, itens_com_osp):
         item.valor_total = item.valor_unitario * item.quantidade
         log.item_referencia = item
 
@@ -916,7 +972,9 @@ def ri_log_rpa_eace_disparar_view(request, pk):
     if not next_url.startswith("/"):
         next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
 
-    if request.method == "POST" and log.resultado == LogRpaEace.SUCESSO:
+    if request.method == "POST" and _ri_somente_administrador(ri, request.user):
+        messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
+    elif request.method == "POST" and log.resultado == LogRpaEace.SUCESSO:
         # Pedido do usuário (2026-09-03): depois de "Sucesso" os dados não
         # podem mais ser editados/reenviados - o template já esconde o
         # formulário nesse caso (`_logs_rpa_eace_detail.html`), isso aqui é
@@ -1005,7 +1063,9 @@ def ri_log_rpa_eace_marcar_manual_view(request, pk):
     if not next_url.startswith("/"):
         next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
 
-    if request.method == "POST":
+    if request.method == "POST" and _ri_somente_administrador(ri, request.user):
+        messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
+    elif request.method == "POST":
         if log.resultado in (LogRpaEace.SUCESSO, LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO):
             messages.error(
                 request,
@@ -1015,6 +1075,96 @@ def ri_log_rpa_eace_marcar_manual_view(request, pk):
         else:
             marcar_log_rpa_eace_concluido_manualmente(log, usuario=request.user)
             messages.success(request, "Nota Fiscal marcada como concluída manualmente.")
+
+    if _requisicao_htmx(request):
+        return _fragmento_logs_rpa_eace_htmx(request, ri, next_url)
+    return redirect(next_url)
+
+
+# Processamento RPA manual (pedido do usuário, 2026-09-25): limite do
+# upload de PDF/XML da NF corrigida recebida por fora do e-mail.
+TAMANHO_MAXIMO_ARQUIVO_NF_MANUAL = 10 * 1024 * 1024
+
+
+def _erro_arquivo_nf_manual(arquivo, extensao, rotulo):
+    if not arquivo:
+        return f"Selecione o arquivo {rotulo}."
+    if not arquivo.name.lower().endswith(extensao):
+        return f"O arquivo {rotulo} precisa ter a extensão {extensao}."
+    if arquivo.size > TAMANHO_MAXIMO_ARQUIVO_NF_MANUAL:
+        return f"O arquivo {rotulo} passa do limite de 10 MB."
+    return None
+
+
+@login_required
+def ri_log_rpa_eace_criar_manual_view(request, pk):
+    """Pedido do usuário (2026-09-25; a formalizar pelo Orquestrador em
+    business_rules.md): cria um processamento RPA EACE novo a partir de
+    PDF+XML enviados pelo usuário (NF corrigida que o financeiro mandou
+    por fora do e-mail) e já coloca na fila (`criar_log_rpa_eace_manual`).
+    Qualquer status do RI; Administrador e Analista."""
+    ri = get_object_or_404(Ri.objects.select_related("escola"), pk=pk)
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
+    if request.user.is_visualizador:
+        return HttpResponseForbidden("Somente Administrador ou Analista pode criar processamento manual.")
+
+    if request.method == "POST" and _ri_somente_administrador(ri, request.user):
+        messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
+    elif request.method == "POST":
+        arquivo_pdf = request.FILES.get("arquivo_pdf")
+        arquivo_xml = request.FILES.get("arquivo_xml")
+        erro = (
+            _erro_arquivo_nf_manual(arquivo_pdf, ".pdf", "PDF da Nota Fiscal")
+            or _erro_arquivo_nf_manual(arquivo_xml, ".xml", "XML")
+        )
+        if not erro and not ri.itens_relatorio_eace.exclude(num_osp="").exists():
+            # Mesmo pré-requisito de "Processar" (`ri_log_rpa_eace_disparar_view`).
+            erro = (
+                'RI sem "Num OSP" (Sincronizador da Planilha EACE, FEAT-024) - '
+                "não é possível disparar a RPA sem saber a OSP no portal."
+            )
+        if erro:
+            messages.error(request, erro)
+        else:
+            criar_log_rpa_eace_manual(ri, arquivo_pdf, arquivo_xml, usuario=request.user)
+            messages.success(request, "Processamento manual criado e enviado para a fila do RPA EACE.")
+
+    if _requisicao_htmx(request):
+        return _fragmento_logs_rpa_eace_htmx(request, ri, next_url)
+    return redirect(next_url)
+
+
+@login_required
+def ri_log_rpa_eace_cancelar_view(request, pk):
+    """Pedido do usuário (2026-09-25; a formalizar pelo Orquestrador em
+    business_rules.md): cancela 1 processamento com NF errada — só
+    "Pendente"/"Erro", motivo obrigatório. Cancelado não conta mais para o
+    INEP (RN-056/RN-099). Qualquer status do RI; Administrador e Analista."""
+    log = get_object_or_404(LogRpaEace.objects.select_related("ri", "ri__escola"), pk=pk)
+    ri = log.ri
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
+    if request.user.is_visualizador:
+        return HttpResponseForbidden("Somente Administrador ou Analista pode cancelar processamento.")
+
+    if request.method == "POST" and _ri_somente_administrador(ri, request.user):
+        messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
+    elif request.method == "POST":
+        motivo = (request.POST.get("motivo_cancelamento") or "").strip()
+        if log.resultado not in (LogRpaEace.PENDENTE, LogRpaEace.ERRO):
+            messages.error(
+                request,
+                "Só é possível cancelar processamento Pendente ou com Erro "
+                f"(atual: {log.get_resultado_display()}).",
+            )
+        elif not motivo:
+            messages.error(request, "Informe o motivo do cancelamento.")
+        else:
+            cancelar_log_rpa_eace(log, motivo[:200], usuario=request.user)
+            messages.success(request, "Processamento cancelado — não conta mais para este INEP.")
 
     if _requisicao_htmx(request):
         return _fragmento_logs_rpa_eace_htmx(request, ri, next_url)
@@ -1035,7 +1185,9 @@ def ri_consultar_pendencias_eace_view(request, pk):
     if not next_url.startswith("/"):
         next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
 
-    if request.method == "POST":
+    if request.method == "POST" and _ri_somente_administrador(ri, request.user):
+        messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
+    elif request.method == "POST":
         if ri.logs_rpa_eace.filter(resultado=LogRpaEace.PROCESSANDO).exists():
             messages.error(
                 request,
@@ -1085,7 +1237,9 @@ def ri_validar_notas_fiscais_view(request, pk):
     if not next_url.startswith("/"):
         next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
 
-    if request.method == "POST":
+    if request.method == "POST" and _ri_somente_administrador(ri, request.user):
+        messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
+    elif request.method == "POST":
         resultados = validar_notas_fiscais_financeiro(ri, request.user)
         if not resultados:
             messages.error(
@@ -1309,6 +1463,10 @@ def fila_rpa_eace_view(request):
         if log.resultado == LogRpaEace.NA_FILA:
             log.posicao_na_fila = posicoes.get(log.pk)
 
+    page_mip = Paginator(
+        logs_mip_para_fila(status_filtro, inep_filtro, data_processamento_filtro), 10
+    ).get_page(request.GET.get("page_mip"))
+
     return render(
         request,
         "ri/fila_rpa_eace.html",
@@ -1318,8 +1476,15 @@ def fila_rpa_eace_view(request):
             "status_opcoes": STATUS_FILTRO_FILA_RPA_EACE_CHOICES,
             "inep_filtro": inep_filtro,
             "data_processamento_filtro": data_processamento_filtro,
-            "total_na_fila": LogRpaEace.objects.filter(resultado=LogRpaEace.NA_FILA).count(),
-            "total_processando": LogRpaEace.objects.filter(resultado=LogRpaEace.PROCESSANDO).count(),
+            # Pedido do usuário (2026-09-29): a mesma fila leva também o
+            # envio da NF dos LOTEs do MIP (`apps.escolas.rpa_mip_lote`,
+            # log próprio) - seção "MIP" abaixo da tabela do RI, mesmos
+            # filtros, paginação própria (`?page_mip=`); totais somam os 2.
+            "page_mip": page_mip,
+            "total_na_fila": LogRpaEace.objects.filter(resultado=LogRpaEace.NA_FILA).count()
+            + LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count(),
+            "total_processando": LogRpaEace.objects.filter(resultado=LogRpaEace.PROCESSANDO).count()
+            + LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.PROCESSANDO).count(),
         },
     )
 
@@ -1343,7 +1508,9 @@ def ri_responsavel_update_view(request, pk):
         next_url = reverse("grid_inep")
     origem = request.POST.get("origem") or "grid"
 
-    if request.method == "POST":
+    if request.method == "POST" and _ri_somente_administrador(ri, request.user):
+        messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
+    elif request.method == "POST":
         novo_responsavel_id = request.POST.get("responsavel")
         if not novo_responsavel_id:
             messages.error(request, "Selecione um responsável.")
@@ -1612,10 +1779,10 @@ def ri_detail_view(request, inep):
 
     if ri and request.method == "POST":
         acao = request.POST.get("acao")
-        if acao == "salvar_ixc" and not _lado_ixc_editavel(ri):
-            # RN-052: Lado IXC só aceita lançamento/edição com o RI em "Em
-            # Andamento" — checado antes de instanciar/validar o formulário.
-            messages.error(request, MENSAGEM_LADO_IXC_SOMENTE_LEITURA)
+        if acao == "salvar_ixc" and not _lado_ixc_editavel(request.user, ri):
+            # RN-052: Lado IXC só aceita lançamento/edição de Administrador
+            # ou Analista — checado antes de instanciar/validar o formulário.
+            messages.error(request, _mensagem_lado_ixc_bloqueado(request.user, ri))
             return redirect("ri_detail", inep=inep)
         if acao in (
             "salvar_relatorio_eace", "sincronizar_planilha_eace",
@@ -1837,6 +2004,7 @@ def ri_detail_view(request, inep):
                     # RN-003: recalcula o confronto formal contra o Lado
                     # IXC a cada mudança do Lado Relatório EACE.
                     sincronizar_divergencia_kit_relatorio(ri)
+                    avancar_implantacao_com_lado3(ri, usuario=request.user)
                     messages.success(request, "Relatório EACE atualizado.")
                     return redirect("ri_detail", inep=inep)
                 # Nada preenchido nesta submissão. Se já existe item lançado
@@ -1989,12 +2157,11 @@ def ri_detail_view(request, inep):
     # atualizam via HTMX ao trocar o status, sem precisar de F5.
     status_ri_opcoes_disponiveis = _status_ri_opcoes_disponiveis(ri) if ri else []
 
-    # RN-052: fora de "Em Andamento", os campos do Lado IXC continuam
-    # visíveis (usuário precisa ver Data Ativação/CNPJ/Município/Estado já
-    # lançados) mas ganham o atributo `disabled` — protege também no
-    # back-end, já que um campo `disabled` do Django ignora valor
-    # submetido e sempre usa o inicial.
-    lado_ixc_editavel = bool(ri) and _lado_ixc_editavel(ri)
+    # RN-052 (revista 2026-09-25): sem permissão de edição, os campos do
+    # Lado IXC ganham o atributo `disabled` — protege também no back-end,
+    # já que um campo `disabled` do Django ignora valor submetido e sempre
+    # usa o inicial.
+    lado_ixc_editavel = bool(ri) and _lado_ixc_editavel(request.user, ri)
     if ri and not lado_ixc_editavel:
         for campo in kit_form.fields.values():
             campo.disabled = True
@@ -2332,8 +2499,8 @@ def ri_item_ixc_update_view(request, item_pk):
     """Edição do item do lado IXC — Administrador e Analista (RN-004)."""
     item = get_object_or_404(RiItemIxc, pk=item_pk)
     inep = item.ri.escola.inep
-    if not _lado_ixc_editavel(item.ri):
-        messages.error(request, MENSAGEM_LADO_IXC_SOMENTE_LEITURA)
+    if not _lado_ixc_editavel(request.user, item.ri):
+        messages.error(request, _mensagem_lado_ixc_bloqueado(request.user, item.ri))
         return redirect("ri_detail", inep=inep)
     if request.method == "POST":
         valor_anterior = _resumo_item_ixc(item.descricao_item, item.quantidade, item.valor_unitario)
@@ -2360,8 +2527,8 @@ def ri_item_ixc_delete_view(request, item_pk):
     """Exclusão do item do lado IXC — só Administrador (RN-004)."""
     item = get_object_or_404(RiItemIxc, pk=item_pk)
     inep = item.ri.escola.inep
-    if not _lado_ixc_editavel(item.ri):
-        messages.error(request, MENSAGEM_LADO_IXC_SOMENTE_LEITURA)
+    if not _lado_ixc_editavel(request.user, item.ri):
+        messages.error(request, _mensagem_lado_ixc_bloqueado(request.user, item.ri))
         return redirect("ri_detail", inep=inep)
     if not request.user.is_administrador:
         return HttpResponseForbidden("Somente Administrador pode excluir itens.")

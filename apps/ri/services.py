@@ -24,7 +24,7 @@ import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Count, DecimalField, F, Max, Prefetch, Sum
+from django.db.models import Count, DecimalField, F, Max, OuterRef, Prefetch, Subquery, Sum
 from django.utils import timezone
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -481,7 +481,7 @@ def trocar_status_com_log(ri, novo_status, usuario):
     status_anterior = ri.get_status_display()
     ri.status = novo_status
     campos_alterados = ["status", "atualizado_em"]
-    if novo_status == Ri.FATURAMENTO_CONCLUIDO:
+    if novo_status == Ri.FATURAMENTO_RI_CONCLUIDO:
         ri.concluido_em = timezone.now()
         campos_alterados.append("concluido_em")
     ri.save(update_fields=campos_alterados)
@@ -874,6 +874,32 @@ def _documentos_nf_do_ultimo_email_financeiro(ri):
     return list(ultimo_email.documentos.filter(tipo=Documento.NOTA_FISCAL_PDF).order_by("id"))
 
 
+def _ids_documentos_so_de_logs_cancelados(ri):
+    """Pedido do usuário (2026-09-25): PDF/XML de processamento RPA
+    cancelado (NF errada) não conta para o INEP — nem nos relatórios. Só
+    sai o documento que não está ligado a nenhum log ainda válido (o mesmo
+    `Documento` pode ter sido escolhido em mais de 1 log)."""
+    cancelados, validos = set(), set()
+    for log in ri.logs_rpa_eace.all():
+        destino = cancelados if log.resultado == LogRpaEace.CANCELADO else validos
+        destino.update(pk for pk in (log.documento_pdf_id, log.documento_xml_id) if pk)
+    return cancelados - validos
+
+
+def _documentos_nf_vigentes(ri):
+    """PDFs de Nota Fiscal que valem para o INEP nos relatórios: os do
+    último e-mail do financeiro (`_documentos_nf_do_ultimo_email_
+    financeiro`) + os de processamento RPA manual (NF corrigida recebida
+    por fora do e-mail, pedido do usuário 2026-09-25), sem os de
+    processamento cancelado."""
+    documentos = {doc.pk: doc for doc in _documentos_nf_do_ultimo_email_financeiro(ri)}
+    for log in ri.logs_rpa_eace.all():
+        if log.criado_manualmente and log.resultado != LogRpaEace.CANCELADO and log.documento_pdf:
+            documentos.setdefault(log.documento_pdf.pk, log.documento_pdf)
+    excluidos = _ids_documentos_so_de_logs_cancelados(ri)
+    return [doc for pk, doc in sorted(documentos.items()) if pk not in excluidos]
+
+
 def validar_notas_fiscais_financeiro(ri, usuario):
     """Botão "Validar Notas Fiscais" (tela do RI, a formalizar pelo
     Orquestrador em business_rules.md): confere se o financeiro faturou a
@@ -891,7 +917,10 @@ def validar_notas_fiscais_financeiro(ri, usuario):
 
     Roda 1 vez por clique, para os PDF de Nota Fiscal do ÚLTIMO e-mail de
     resposta do financeiro (`_documentos_nf_do_ultimo_email_financeiro`) —
-    nunca de uma resposta anterior já corrigida/substituída. Só lê arquivo
+    nunca de uma resposta anterior já corrigida/substituída — mais os de
+    processamento RPA manual e sem os de processamento cancelado
+    (`_documentos_nf_vigentes`, pedido do usuário 2026-09-25, mesma fonte
+    dos relatórios "Faturamento EACE Materiais"). Só lê arquivo
     já salvo localmente, sem abrir portal nem gastar rede. Resultado (por
     PDF: OK/divergente + motivos) fica gravado no histórico do RI, nunca
     bloqueia o fluxo — `RiDivergencia.TIPO_NF_FINANCEIRO` (catálogo
@@ -899,7 +928,7 @@ def validar_notas_fiscais_financeiro(ri, usuario):
     reversível e conservadora (CLAUDE.md §9)."""
     from apps.integracoes.eace.extrair_dados_pdf import extrair_dados_validacao_nf
 
-    documentos_nf = _documentos_nf_do_ultimo_email_financeiro(ri)
+    documentos_nf = _documentos_nf_vigentes(ri)
     catalogo = list(KitPadrao.objects.all())
     resultados = []
     for documento in documentos_nf:
@@ -1381,8 +1410,26 @@ def sincronizar_relatorio_eace_da_planilha(ri, planilha=None, linhas_por_inep=No
 
     if resultado["criados"] or resultado["atualizados"] or resultado["removidos"]:
         sincronizar_divergencia_kit_relatorio(ri)
+    # Itens já carregados acima — evita 1 consulta por RI no "Sincronizar
+    # todas as RI" (mesmo cuidado de N+1 do RN-062).
+    tem_lado3 = len(itens_existentes_lista) - len(resultado["removidos"]) + len(resultado["criados"]) > 0
+    avancar_implantacao_com_lado3(ri, tem_lado3=tem_lado3)
 
     return resultado
+
+
+def avancar_implantacao_com_lado3(ri, usuario=None, tem_lado3=None):
+    """Pedido do usuário (2026-09-26; a formalizar pelo Orquestrador em
+    business_rules.md): RI em "Implantação EACE" com o Lado Relatório EACE
+    (3º lado) preenchido vai para "Em Andamento" — pelo Sincronizador
+    (`usuario=None`, rotina automática) ou por lançamento manual. Única
+    exceção à RN-024 retirada (sincronizar não mexia no status do RI)."""
+    if ri.status != Ri.IMPLANTACAO_EACE:
+        return
+    if tem_lado3 is None:
+        tem_lado3 = ri.itens_relatorio_eace.exists()
+    if tem_lado3:
+        trocar_status_com_log(ri, Ri.ANDAMENTO, usuario=usuario)
 
 
 # RI "bloqueado pelo status" no resumo do lote (RN-023) — mesmo texto usado
@@ -1445,7 +1492,7 @@ def sincronizar_relatorio_eace_de_todas_as_ri():
             ri = Ri.objects.create(escola=escola, status=Ri.IMPLANTACAO_EACE)
         else:
             ri = ris_da_escola[0]
-        if ri.status == Ri.FATURAMENTO_CONCLUIDO:
+        if ri.faturamento_encerrado:
             processados.append((ri, RI_BLOQUEADO_FATURAMENTO_CONCLUIDO))
             continue
         try:
@@ -1500,7 +1547,7 @@ def identificar_ris_lado3_com_nf_sem_lado2():
       IXC — nunca sobrescrito por esta correção.
     """
     ris = (
-        Ri.objects.filter(status=Ri.FATURAMENTO_CONCLUIDO)
+        Ri.objects.filter(Ri.q_faturamento_encerrado())
         .prefetch_related("itens_relatorio_eace", "itens_ixc")
     )
 
@@ -1870,46 +1917,20 @@ def _processar_mensagem(bruto, mensagem_id_externo):
         logger.warning("E-mail do financeiro sem código de rastreio no assunto: %r", assunto)
         return "sem_codigo"
 
-    ri = (
-        Ri.objects.filter(escola__inep=inep, status=Ri.AGUARDANDO_FINANCEIRO)
-        .order_by("-criado_em")
-        .first()
-    )
+    # Correção (pedido do usuário, 2026-09-25; a formalizar pelo
+    # Orquestrador em business_rules.md — revisão da RN-016): a resposta do
+    # financeiro é processada no RI mais recente do INEP em QUALQUER
+    # status — antes só "Aguardando financeiro" era buscado, e com o RI em
+    # outro status (ex.: usuário voltou para "Em Andamento" para corrigir
+    # dados) os PDF/XML se perdiam, ficava só um aviso "NÃO processada" na
+    # linha do tempo. O status só avança quando o RI está em "Aguardando
+    # financeiro" (decisão do usuário: nos demais status, mantém o atual).
+    ri = Ri.objects.filter(escola__inep=inep).order_by("-criado_em").first()
     if not ri:
         logger.warning(
-            "E-mail do financeiro com INEP %s identificado, mas nenhum RI está "
-            "aguardando financeiro para esse INEP.",
+            "E-mail do financeiro com INEP %s identificado, mas não existe RI para esse INEP.",
             inep,
         )
-        # Correção 2026-09-08 (bug real, INEP 35455477: usuário reportou
-        # "a resposta do e-mail não entrou no sistema"): o RI tinha
-        # avançado o status na hora certa e o e-mail foi enviado, mas o
-        # usuário mudou o status do RI de volta manualmente ("Aguardando
-        # financeiro" -> "Em Andamento") antes de a resposta do
-        # financeiro chegar/ser processada - quando o e-mail veio, a
-        # busca acima (só olha "Aguardando financeiro") não achou mais
-        # nenhum RI, e a resposta sumia sem deixar rastro nenhum (só um
-        # `logger.warning`, que ninguém vê). Nunca reabre o status
-        # sozinho (continua sendo decisão do usuário) - só garante que
-        # a resposta fica visível na linha do tempo do RI mais recente
-        # desse INEP, pra não desaparecer de vez. Só registra quando o
-        # remetente é mesmo do financeiro (RN-016) - sem isso, qualquer
-        # e-mail com um código parecido (spam, encaminhamento) também
-        # criaria ruído aqui.
-        if _remetente_e_do_financeiro(remetente):
-            ri_mais_recente = Ri.objects.filter(escola__inep=inep).order_by("-criado_em").first()
-            if ri_mais_recente:
-                RiHistorico.objects.create(
-                    ri=ri_mais_recente,
-                    tipo=RiHistorico.EMAIL,
-                    autor=None,
-                    mensagem=(
-                        "E-mail do financeiro recebido com o código de rastreio deste RI, mas "
-                        f'o RI não estava mais "Aguardando financeiro" (status atual: '
-                        f'"{ri_mais_recente.get_status_display()}") - resposta NÃO processada '
-                        f"automaticamente, revise manualmente. Assunto: {assunto}"
-                    ),
-                )
         return "sem_ri_aguardando"
 
     if not _remetente_e_do_financeiro(remetente):
@@ -1982,6 +2003,12 @@ def _processar_mensagem(bruto, mensagem_id_externo):
             f"diferente da de XML; recebido {len(pdfs)} PDF e {len(xmls)} XML). "
             f"Assunto: {assunto}"
         )
+    avanca_status = ri.status == Ri.AGUARDANDO_FINANCEIRO
+    if not avanca_status:
+        resumo = (
+            f'{resumo} (RI em "{ri.get_status_display()}" — status mantido, '
+            'não avançou para "Resposta Financeiro").'
+        )
     entrada_email = RiHistorico.objects.create(ri=ri, tipo=RiHistorico.EMAIL, autor=None, mensagem=resumo)
     if documentos_recebidos:
         # RN-008 (correção 2026-08-27): referencia os `Documento` já
@@ -1993,8 +2020,10 @@ def _processar_mensagem(bruto, mensagem_id_externo):
     # RN-016: qualquer resposta do financeiro avança o RI para "Resposta
     # Financeiro" — válida ou fora do padrão. Antes, só a resposta no
     # padrão fazia essa transição; a fora do padrão ficava parada em
-    # "Aguardando financeiro", visível só pelo alerta no log.
-    trocar_status_com_log(ri, Ri.AGUARDANDO_ANEXO_PORTAL_EACE, usuario=None)
+    # "Aguardando financeiro", visível só pelo alerta no log. Revisão
+    # 2026-09-25: só a partir de "Aguardando financeiro" (ver acima).
+    if avanca_status:
+        trocar_status_com_log(ri, Ri.AGUARDANDO_ANEXO_PORTAL_EACE, usuario=None)
 
     if not padrao_ok:
         logger.warning("RI %s: %s", ri.pk, resumo)
@@ -2040,6 +2069,14 @@ def sincronizar_respostas_financeiro():
         params = None if estado.delta_link else _parametros_iniciais()
         delta_link_final = None
         paginas = 0
+        # Correção 2026-09-28 (produção, INEPs 35010328 e 17052556): falha
+        # ao baixar/processar uma mensagem (rede instável, erro de banco)
+        # era só registrada e o delta link avançava mesmo assim — a
+        # mensagem nunca mais voltava no delta e a resposta do financeiro
+        # se perdia. Com alguma falha, o cursor anterior é mantido e a
+        # próxima passada relê as mesmas mensagens (as já processadas caem
+        # em "duplicados" pelo `mensagem_id_externo`).
+        falhas = 0
 
         while url:
             paginas += 1
@@ -2064,9 +2101,13 @@ def sincronizar_respostas_financeiro():
                 mensagem_id_externo = (item.get("internetMessageId") or "").strip() or id_mensagem
                 try:
                     bruto = _buscar_mime(caixa, id_mensagem, token)
-                    chave = _processar_mensagem(bruto, mensagem_id_externo)
+                    # Atômico: uma falha no meio não deixa Documento/log
+                    # parcial que a nova tentativa duplicaria.
+                    with transaction.atomic():
+                        chave = _processar_mensagem(bruto, mensagem_id_externo)
                     resultado[chave] += 1
                 except Exception as erro:
+                    falhas += 1
                     logger.exception("Erro ao processar mensagem do Graph %s.", id_mensagem)
                     auditar(
                         None,
@@ -2080,10 +2121,17 @@ def sincronizar_respostas_financeiro():
             delta_link_final = dados.get("@odata.deltaLink") or delta_link_final
             url = proxima
 
-        if delta_link_final:
-            estado.delta_link = delta_link_final
         estado.ultima_sincronizacao_em = timezone.now()
-        estado.ultimo_erro = ""
+        if falhas:
+            estado.ultimo_erro = (
+                f"{falhas} mensagem(ns) com erro nesta passada — cursor do delta "
+                "mantido para nova tentativa na próxima passada."
+            )
+            logger.warning("Sincronização do financeiro: %s", estado.ultimo_erro)
+        else:
+            if delta_link_final:
+                estado.delta_link = delta_link_final
+            estado.ultimo_erro = ""
         estado.save()
     except EmailFinanceiroSyncError as erro:
         estado.ultimo_erro = str(erro)
@@ -2580,16 +2628,27 @@ def processar_proximo_da_fila_rpa_eace():
     return {"log_id": log.pk, "resultado": log.resultado, "motivo": log.motivo_erro}
 
 
+def rpa_eace_concluida(ri):
+    """RN-056: todas as Notas Fiscais da RPA EACE do RI terminaram — ao
+    menos 1 "Sucesso" e nenhum log fora de "Sucesso"/"Cancelado"."""
+    return (
+        ri.logs_rpa_eace.filter(resultado=LogRpaEace.SUCESSO).exists()
+        and not ri.logs_rpa_eace.exclude(resultado__in=LogRpaEace.RESULTADOS_IGNORADOS_NO_AVANCO).exists()
+    )
+
+
 def _avancar_status_se_todos_os_logs_sucesso(ri, usuario=None):
     """RN-056: avança o status do RI de "Resposta Financeiro" para
-    "Aguardando validação EACE" quando TODOS os logs derem "Sucesso" -
+    "Faturamento RI Concluído" (pedido do usuário, 2026-09-26; antes
+    "Aguardando validação EACE") quando TODOS os logs derem "Sucesso" -
     automático (RPA de verdade) ou manual (RN-065). Extraído à parte pra
-    ser reaproveitado pelos dois caminhos sem duplicar a condição."""
-    if (
-        ri.status == Ri.AGUARDANDO_ANEXO_PORTAL_EACE
-        and not ri.logs_rpa_eace.exclude(resultado=LogRpaEace.SUCESSO).exists()
-    ):
-        trocar_status_com_log(ri, Ri.AGUARDANDO_VALIDACAO_EACE, usuario=usuario)
+    ser reaproveitado pelos dois caminhos sem duplicar a condição.
+
+    Log "Cancelado" (NF errada, pedido do usuário 2026-09-25) não conta —
+    mas precisa sobrar ao menos 1 "Sucesso", senão cancelar todos avançaria
+    o RI sem nenhuma NF anexada."""
+    if ri.status == Ri.AGUARDANDO_ANEXO_PORTAL_EACE and rpa_eace_concluida(ri):
+        trocar_status_com_log(ri, Ri.FATURAMENTO_RI_CONCLUIDO, usuario=usuario)
 
 
 def marcar_log_rpa_eace_concluido_manualmente(log, usuario):
@@ -2624,6 +2683,80 @@ def marcar_log_rpa_eace_concluido_manualmente(log, usuario):
         entidade_id=log.pk,
         campo="resultado",
         valor_novo="concluido_manualmente",
+    )
+    _avancar_status_se_todos_os_logs_sucesso(log.ri, usuario=usuario)
+
+
+@transaction.atomic
+def criar_log_rpa_eace_manual(ri, arquivo_pdf, arquivo_xml, usuario):
+    """Pedido do usuário (2026-09-25; a formalizar pelo Orquestrador em
+    business_rules.md): o financeiro às vezes manda a NF corrigida por
+    fora, sem responder o e-mail (RN-016 não cria log nenhum nesse caso).
+    O usuário sobe o PDF+XML na tela; os dois viram `Documento` do RI
+    (mesma gravação da resposta do financeiro, `_salvar_documento`) e o
+    log novo já entra na fila do RPA (RN-058), igual a "Processar"."""
+    documento_pdf = _salvar_documento(ri, Documento.NOTA_FISCAL_PDF, arquivo_pdf.name, arquivo_pdf.read())
+    documento_xml = _salvar_documento(ri, Documento.XML, arquivo_xml.name, arquivo_xml.read())
+    log = LogRpaEace.objects.create(
+        ri=ri,
+        documento_pdf=documento_pdf,
+        documento_xml=documento_xml,
+        resultado=LogRpaEace.NA_FILA,
+        enfileirado_em=timezone.now(),
+        criado_manualmente=True,
+    )
+    entrada = RiHistorico.objects.create(
+        ri=ri,
+        tipo=RiHistorico.LOG_CAMPO,
+        autor=usuario,
+        campo=f"RPA EACE (Nota Fiscal #{log.pk})",
+        valor_novo=(
+            f"Processamento manual criado com NF recebida por fora do e-mail "
+            f"({arquivo_pdf.name} + {arquivo_xml.name}) e enviado para a fila do RPA EACE."
+        )[:255],
+    )
+    entrada.documentos.add(documento_pdf, documento_xml)
+    auditar(
+        usuario,
+        Auditoria.EXECUCAO_RPA_EACE,
+        entidade="LogRpaEace",
+        entidade_id=log.pk,
+        campo="resultado",
+        valor_novo="criado_manualmente",
+    )
+    return log
+
+
+def cancelar_log_rpa_eace(log, motivo, usuario):
+    """Pedido do usuário (2026-09-25; a formalizar pelo Orquestrador em
+    business_rules.md): NF errada — o log "Pendente"/"Erro" é cancelado
+    com motivo obrigatório e deixa de contar para o INEP (RN-056/RN-099);
+    só o processamento novo e os já processados seguem valendo. Os
+    `Documento` do log não são apagados (podem estar ligados a outro log
+    e ficam para auditoria)."""
+    valor_anterior = log.get_resultado_display()
+    log.resultado = LogRpaEace.CANCELADO
+    log.motivo_cancelamento = motivo
+    log.cancelado_por = usuario
+    log.cancelado_em = timezone.now()
+    log.save(update_fields=["resultado", "motivo_cancelamento", "cancelado_por", "cancelado_em"])
+
+    RiHistorico.objects.create(
+        ri=log.ri,
+        tipo=RiHistorico.LOG_CAMPO,
+        autor=usuario,
+        campo=f"RPA EACE (Nota Fiscal #{log.pk})",
+        valor_anterior=valor_anterior,
+        valor_novo=f"Cancelado — motivo: {motivo}"[:255],
+    )
+    auditar(
+        usuario,
+        Auditoria.EXECUCAO_RPA_EACE,
+        entidade="LogRpaEace",
+        entidade_id=log.pk,
+        campo="resultado",
+        valor_anterior=valor_anterior,
+        valor_novo=LogRpaEace.CANCELADO,
     )
     _avancar_status_se_todos_os_logs_sucesso(log.ri, usuario=usuario)
 
@@ -2690,6 +2823,16 @@ def consultar_pendencias_portal_eace(ri):
     )
 
 
+def _itens_relatorio_eace_faturados():
+    """Pedido do usuário (2026-09-26): "Valor já Faturado" = mesmo valor do
+    card "Faturamento RI Concluído" (`montar_faturamento_por_status_ri`) —
+    Lado Relatório EACE do RI mais recente de cada INEP, com esse RI em
+    "Faturamento RI Concluído"."""
+    ri_atual = Ri.objects.filter(escola=OuterRef("escola")).order_by("-criado_em").values("pk")[:1]
+    ris_faturados = Ri.objects.filter(status=Ri.FATURAMENTO_RI_CONCLUIDO, pk=Subquery(ri_atual))
+    return RiItemRelatorioEace.objects.filter(ri__in=ris_faturados)
+
+
 def montar_dashboard_financeiro(estado=None, municipio=None, kit=None, produto=None):
     """FEAT-026 (RN-025/RN-026): valores dos 2 primeiros cards do
     dashboard financeiro (`core/home.html`).
@@ -2744,6 +2887,10 @@ def montar_dashboard_financeiro(estado=None, municipio=None, kit=None, produto=N
         if municipio:
             escolas_qs = escolas_qs.filter(municipio=municipio)
 
+    # Pedido do usuário (2026-09-26): meta = só o equipamento inicial do
+    # projeto (Kit + Nobreak declarados, `valor_faturavel`), sem o serviço
+    # — mesmo critério dos lados do RI. Vale também para a meta por
+    # Estado/Município (`montar_faturamento_por_estado`/`_por_municipio`).
     valor_total_projeto = Decimal("0")
     if tem_meta:
         for escola in escolas_qs:
@@ -2753,7 +2900,7 @@ def montar_dashboard_financeiro(estado=None, municipio=None, kit=None, produto=N
             if kit_resolvido:
                 descricao = kit_resolvido.descricao_curta or kit_resolvido.descricao
                 if not kit or descricao == kit:
-                    valor_total_projeto += kit_resolvido.valor_total
+                    valor_total_projeto += kit_resolvido.valor_faturavel
             if not kit:
                 # Nobreak só entra na meta geral (sem filtro de Kit) — ao
                 # filtrar 1 tipo de Kit específico, a meta é só dele.
@@ -2761,12 +2908,10 @@ def montar_dashboard_financeiro(estado=None, municipio=None, kit=None, produto=N
                     escola.nobreak_inicial, lote=escola.lote, catalogo=catalogo
                 )
                 if nobreak:
-                    valor_total_projeto += nobreak.valor_total
+                    valor_total_projeto += nobreak.valor_faturavel
     valor_total_projeto = valor_total_projeto.quantize(duas_casas)
 
-    itens_relatorio_eace_qs = RiItemRelatorioEace.objects.filter(
-        ri__status=Ri.FATURAMENTO_CONCLUIDO
-    )
+    itens_relatorio_eace_qs = _itens_relatorio_eace_faturados()
     if estado:
         itens_relatorio_eace_qs = itens_relatorio_eace_qs.filter(ri__escola__estado=estado)
         if municipio:
@@ -2826,6 +2971,145 @@ def montar_dashboard_financeiro(estado=None, municipio=None, kit=None, produto=N
     }
 
 
+def _valor_lado1(ri, catalogo, kit=None, produto=None):
+    """Pedido do usuário (2026-09-26): card "Implantação EACE" do dashboard
+    Faturamento soma o Lado 1 (1º status, ainda sem Lado 3) — mesma conta
+    do total do Lado 1 na tela do RI (RN-097): itens lançados (`RiItemEace`)
+    ou, sem item, o Kit declarado resolvido pelo catálogo (valor de
+    equipamento) — mais o Nobreak declarado (equipamento), igual à meta
+    de `montar_dashboard_financeiro` (só sem filtro de Kit). Lado 1 não
+    tem produto — filtro de `produto` zera."""
+    if produto:
+        return Decimal("0")
+    escola = ri.escola
+    itens = list(ri.itens_eace.all())
+    total = Decimal("0")
+    if itens:
+        for item in itens:
+            if kit and item.descricao_item != kit:
+                continue
+            valor_unitario = item.valor_unitario
+            if valor_unitario == 0:
+                catalogo_item = KitPadrao.resolver_por_item(
+                    item.descricao_item, eh_kit=True, lote=escola.lote, catalogo=catalogo
+                )
+                if catalogo_item:
+                    valor_unitario = catalogo_item.valor_faturavel
+            total += Decimal(item.quantidade) * valor_unitario
+    else:
+        resolvido = KitPadrao.resolver_kit_declarado(escola.kit_inicial, lote=escola.lote, catalogo=catalogo)
+        if resolvido and (not kit or (resolvido.descricao_curta or resolvido.descricao) == kit):
+            total += resolvido.valor_faturavel
+    if not kit:
+        nobreak = KitPadrao.resolver_nobreak_declarado(escola.nobreak_inicial, lote=escola.lote, catalogo=catalogo)
+        if nobreak:
+            total += nobreak.valor_faturavel
+    return total
+
+
+def montar_faturamento_por_status_ri(
+    estado=None, municipio=None, kit=None, produto=None, status_selecionado=None, uf_selecionada=None
+):
+    """Pedido do usuário (2026-09-25; a formalizar pelo Orquestrador em
+    business_rules.md): 1 card por status do RI no dashboard Faturamento,
+    com a soma do Lado Relatório EACE (3º lado) do RI mais recente de cada
+    INEP — `quantidade × valor_unitario` dos itens, mesma conta do card
+    "Valor já Faturado" (RN-026; revisto no mesmo dia, pedido do usuário:
+    antes somava o Lado IXC pelo catálogo). Mesmos filtros dos cards do
+    dashboard (`estado`/`municipio`/`kit`/`produto`, ver
+    `montar_dashboard_financeiro`).
+
+    Devolve `{"cards": [...], "por_estado": [...]}` — `cards`: 1 dict por
+    status, na ordem de `Ri.STATUS_CHOICES`, inclusive os zerados;
+    `por_estado` (pedido do usuário, 2026-09-25: clicar no card abre o
+    status por Estado): só com `status_selecionado`, 1 linha por UF com
+    valor e quantidade de INEPs, maior valor primeiro. Com `uf_selecionada`
+    (pedido do usuário, mesmo dia: clicar no estado mostra os INEPs dele,
+    não os municípios), a linha daquela UF traz `ineps` — 1 dict por INEP
+    (inep, nome, valor), maior valor primeiro."""
+    duas_casas = Decimal("0.01")
+
+    ris_qs = Ri.objects.select_related("escola").prefetch_related("itens_relatorio_eace", "itens_eace").order_by(
+        "escola_id", "-criado_em"
+    )
+    catalogo = list(KitPadrao.objects.all())
+    if estado:
+        ris_qs = ris_qs.filter(escola__estado=estado)
+        if municipio:
+            ris_qs = ris_qs.filter(escola__municipio=municipio)
+
+    por_status = {valor: {"valor": Decimal("0"), "quantidade_ineps": 0, "sem_valor": 0} for valor, _ in Ri.STATUS_CHOICES}
+    por_estado = {}
+    escola_vista = None
+    for ri in ris_qs:
+        if ri.escola_id == escola_vista:
+            continue  # só o RI mais recente de cada INEP
+        escola_vista = ri.escola_id
+        if ri.status not in por_status:
+            continue
+        if ri.status == Ri.IMPLANTACAO_EACE:
+            valor_ri = _valor_lado1(ri, catalogo, kit=kit, produto=produto)
+        else:
+            valor_ri = Decimal("0")
+            for item in ri.itens_relatorio_eace.all():
+                # Mesmo filtro de Kit/Equipamento do card "Valor já Faturado".
+                if kit and not (item.eh_kit and item.descricao_item == kit):
+                    continue
+                if produto and not (not item.eh_kit and item.descricao_item == produto):
+                    continue
+                valor_ri += Decimal(item.quantidade) * item.valor_unitario
+        por_status[ri.status]["valor"] += valor_ri
+        por_status[ri.status]["quantidade_ineps"] += 1
+        # Pedido do usuário (2026-09-26): INEP ainda sem valor (Lado 3; Lado
+        # 1 em "Implantação EACE") — contado à parte.
+        sem_valor = valor_ri == 0
+        por_status[ri.status]["sem_valor"] += sem_valor
+        if ri.status == status_selecionado:
+            uf = (ri.escola.estado or "").upper() or "Sem UF"
+            linha_uf = por_estado.setdefault(
+                uf, {"valor": Decimal("0"), "quantidade_ineps": 0, "sem_valor": 0, "ineps": []}
+            )
+            linha_uf["valor"] += valor_ri
+            linha_uf["quantidade_ineps"] += 1
+            linha_uf["sem_valor"] += sem_valor
+            if uf == uf_selecionada:
+                linha_uf["ineps"].append(
+                    {"inep": ri.escola.inep, "nome": ri.escola.nome, "valor": valor_ri.quantize(duas_casas)}
+                )
+
+    linhas_estado = sorted(
+        (
+            {
+                "estado": uf,
+                "valor": dados["valor"].quantize(duas_casas),
+                "quantidade_ineps": dados["quantidade_ineps"],
+                "sem_valor": dados["sem_valor"],
+                "ineps": sorted(dados["ineps"], key=lambda item: (-item["valor"], item["inep"])),
+            }
+            for uf, dados in por_estado.items()
+        ),
+        key=lambda linha: (-linha["valor"], linha["estado"]),
+    )
+    maior = max((linha["valor"] for linha in linhas_estado), default=Decimal("0"))
+    for linha in linhas_estado:
+        # Barra proporcional ao maior valor da lista (não há meta por status).
+        linha["percentual_css"] = f"{(linha['valor'] / maior * 100) if maior > 0 else 0:.1f}"
+
+    return {
+        "cards": [
+            {
+                "status": valor,
+                "rotulo": rotulo,
+                "valor": por_status[valor]["valor"].quantize(duas_casas),
+                "quantidade_ineps": por_status[valor]["quantidade_ineps"],
+                "sem_valor": por_status[valor]["sem_valor"],
+            }
+            for valor, rotulo in Ri.STATUS_CHOICES
+        ],
+        "por_estado": linhas_estado,
+    }
+
+
 def montar_faturamento_por_estado():
     """FEAT-026 (ampliação, 2026-08-27): dados do gráfico "Faturado por
     Estado" — 1 linha por UF de `Escola.estado` (não vazio), com o valor
@@ -2860,13 +3144,13 @@ def montar_faturamento_por_estado():
         )
         valor = Decimal("0")
         if kit:
-            valor += kit.valor_total
+            valor += kit.valor_faturavel
         if nobreak:
-            valor += nobreak.valor_total
+            valor += nobreak.valor_faturavel
         meta_por_uf[escola.estado] = meta_por_uf.get(escola.estado, Decimal("0")) + valor
 
     faturado_por_uf = dict(
-        RiItemRelatorioEace.objects.filter(ri__status=Ri.FATURAMENTO_CONCLUIDO)
+        _itens_relatorio_eace_faturados()
         .values("ri__escola__estado")
         .annotate(
             total=Sum(
@@ -2933,17 +3217,16 @@ def montar_faturamento_por_municipio(estado):
         )
         valor = Decimal("0")
         if kit:
-            valor += kit.valor_total
+            valor += kit.valor_faturavel
         if nobreak:
-            valor += nobreak.valor_total
+            valor += nobreak.valor_faturavel
         meta_por_municipio[escola.municipio] = (
             meta_por_municipio.get(escola.municipio, Decimal("0")) + valor
         )
 
     faturado_por_municipio = dict(
-        RiItemRelatorioEace.objects.filter(
-            ri__status=Ri.FATURAMENTO_CONCLUIDO, ri__escola__estado=estado
-        )
+        _itens_relatorio_eace_faturados()
+        .filter(ri__escola__estado=estado)
         .values("ri__escola__municipio")
         .annotate(
             total=Sum(
@@ -3102,7 +3385,7 @@ def montar_dashboard_equipamentos(estado=None, kit=None, produto=None):
             total_nobreaks += 1
 
     kits_instalados_qs = RiItemRelatorioEace.objects.filter(
-        eh_kit=True, ri__status=Ri.FATURAMENTO_CONCLUIDO
+        Ri.q_faturamento_encerrado("ri__"), eh_kit=True
     )
     if estado:
         kits_instalados_qs = kits_instalados_qs.filter(ri__escola__estado=estado)
@@ -3146,7 +3429,7 @@ def montar_dashboard_equipamentos(estado=None, kit=None, produto=None):
     # projeto (usuário) — só aparece depois que alguém lança/confirma a
     # instalação, por isso não tem par "Programado" como o Kit.
     produtos_complementares_qs = RiItemRelatorioEace.objects.filter(
-        eh_kit=False, ri__status=Ri.FATURAMENTO_CONCLUIDO
+        Ri.q_faturamento_encerrado("ri__"), eh_kit=False
     ).exclude(descricao_item="Nobreak")
     if estado:
         produtos_complementares_qs = produtos_complementares_qs.filter(ri__escola__estado=estado)
@@ -3230,7 +3513,7 @@ def montar_kits_instalados_por_estado(kit=None):
             programados_por_uf[escola.estado] = programados_por_uf.get(escola.estado, 0) + 1
 
     instalados_qs = RiItemRelatorioEace.objects.filter(
-        eh_kit=True, ri__status=Ri.FATURAMENTO_CONCLUIDO
+        Ri.q_faturamento_encerrado("ri__"), eh_kit=True
     ).exclude(ri__escola__estado="")
     if kit:
         instalados_qs = instalados_qs.filter(descricao_item=kit)
@@ -3289,7 +3572,7 @@ def montar_produtos_complementares_por_estado(produto):
 
     linhas = list(
         RiItemRelatorioEace.objects.filter(
-            eh_kit=False, ri__status=Ri.FATURAMENTO_CONCLUIDO, descricao_item=produto,
+            Ri.q_faturamento_encerrado("ri__"), eh_kit=False, descricao_item=produto,
         )
         .exclude(ri__escola__estado="")
         .values("ri__escola__estado")
@@ -3332,7 +3615,12 @@ def montar_produtos_complementares_por_estado(produto):
 # usuário, 2026-09-09: 17 escolas enviadas de verdade, relatório
 # mostrando 44). Usa a transição mais recente dentro do período quando o
 # RI passou por esse status mais de uma vez no mesmo período.
-_LABEL_AGUARDANDO_VALIDACAO_EACE = dict(Ri.STATUS_CHOICES)[Ri.AGUARDANDO_VALIDACAO_EACE]
+# Rótulo fixo: o status saiu de `Ri.STATUS_CHOICES` (2026-09-26), mas
+# continua no histórico dos RIs antigos.
+_LABEL_AGUARDANDO_VALIDACAO_EACE = "Aguardando validação EACE"
+# Pedido do usuário (2026-09-26): o avanço automático da RPA passou a
+# gravar "Faturamento RI Concluído" — mesmo envio ao portal EACE.
+_LABEL_FATURAMENTO_RI_CONCLUIDO = dict(Ri.STATUS_CHOICES)[Ri.FATURAMENTO_RI_CONCLUIDO]
 _LABEL_RESPOSTA_FINANCEIRO = dict(Ri.STATUS_CHOICES)[Ri.AGUARDANDO_ANEXO_PORTAL_EACE]
 
 # RN-083 (nova, a formalizar pelo Orquestrador): classificação dos itens
@@ -3406,7 +3694,9 @@ def _resolver_notas_fiscais_por_item_lpu(ri, catalogo):
     if not itens_sem_nf:
         return {}
 
-    documentos_nf = _documentos_nf_do_ultimo_email_financeiro(ri)
+    # Pedido do usuário (2026-09-25): inclui NF de processamento RPA manual
+    # e tira NF de processamento cancelado (`_documentos_nf_vigentes`).
+    documentos_nf = _documentos_nf_vigentes(ri)
     if not documentos_nf:
         return {}
 
@@ -3442,7 +3732,7 @@ def _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
         RiHistorico.objects.filter(
             tipo=RiHistorico.LOG_STATUS,
             campo="Status do RI",
-            valor_novo=_LABEL_AGUARDANDO_VALIDACAO_EACE,
+            valor_novo__in=(_LABEL_AGUARDANDO_VALIDACAO_EACE, _LABEL_FATURAMENTO_RI_CONCLUIDO),
             # RN-082 (revista): só a transição vinda de "Resposta
             # Financeiro" é um envio de verdade ao portal EACE — exclui
             # reabertura de RI já concluído ("Faturamento Concluído" →
@@ -3463,7 +3753,10 @@ def _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
     ris = list(
         Ri.objects.filter(pk__in=data_transicao_por_ri.keys())
         .select_related("escola")
-        .prefetch_related("itens_ixc", "itens_relatorio_eace")
+        .prefetch_related(
+            "itens_ixc", "itens_relatorio_eace",
+            Prefetch("logs_rpa_eace", queryset=LogRpaEace.objects.select_related("documento_pdf")),
+        )
     )
     return ris, data_transicao_por_ri
 
@@ -3858,8 +4151,15 @@ def gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas):
     período). 1 pasta por INEP dentro do `.zip` — um INEP pode ter mais de
     1 Nota Fiscal, cada uma com 1 PDF + 1 XML."""
     ri_ids = [linha["ri_id"] for linha in linhas]
+    # Pedido do usuário (2026-09-25): PDF/XML de processamento RPA
+    # cancelado (NF errada) fica fora do .zip; os do processamento manual
+    # já entram por serem `Documento` do RI.
+    excluidos = set()
+    for ri in Ri.objects.filter(pk__in=ri_ids).prefetch_related("logs_rpa_eace"):
+        excluidos |= _ids_documentos_so_de_logs_cancelados(ri)
     documentos = (
         Documento.objects.filter(ri_id__in=ri_ids)
+        .exclude(pk__in=excluidos)
         .select_related("ri__escola")
         .order_by("ri_id", "criado_em")
     )

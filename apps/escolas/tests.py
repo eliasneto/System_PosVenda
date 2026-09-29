@@ -30,11 +30,14 @@ from apps.escolas.services import (
     criar_lote_mip,
     desfazer_lote_mip,
     # enviar_email_lote, montar_assunto_email_lote — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver apps.escolas.services).
+    escola_rateada_relatorio_eace_mip,
     escolas_elegiveis_lote_mip,
     extrair_ineps_nota_fiscal_mip,
     gerar_planilha_faturamento_implantacao,
     gerar_planilha_faturamento_implantacao_lote,
     nome_arquivo_planilha_faturamento_implantacao,
+    planilhas_faturamento_implantacao_lote,
+    rateio_relatorio_eace_mip_da_escola,
     sincronizar_notas_fiscais_mip_lote_em_andamento,
 )
 from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemEace, RiItemIxc, RiItemRelatorioEace
@@ -445,24 +448,19 @@ class StatusMipHandoffTests(TestCase):
         escola.refresh_from_db()
         self.assertEqual(escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
 
-    def test_status_mip_e_ressincronizado_quando_o_ri_chega_de_novo_no_status(self):
-        """Revisão da RN-092 (2026-09-10, mesmo dia): "Em Andamento" no
-        MIP volta a ser o `Ri.status="andamento"` de verdade — o RI pode
-        progredir sozinho de novo (fluxo normal de e-mail/financeiro,
-        RN-001) e chegar outra vez em "Aguardando validação EACE"/
-        "Faturamento Concluído". `Ri.save()` precisa sincronizar de novo
-        nesse caso, não só na 1ª vez — senão o MIP ficaria preso
-        mostrando "Em Andamento" para sempre."""
+    def test_ri_salvo_de_novo_nao_mexe_no_status_mip_de_inep_ja_no_mip(self):
+        """Revisão da RN-092 (pedido do usuário, 2026-09-26): "Em Andamento
+        MIP" não reabre mais o RI — `Ri.save()` só coloca no MIP quem ainda
+        não está nele; um INEP já no MIP mantém o Status (MIP) dele."""
         escola = Escola.objects.create(
             inep="10000004", nome="Escola Teste", status_mip=Escola.EM_ANDAMENTO
         )
-        ri = Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
+        ri = Ri.objects.create(escola=escola, status=Ri.FATURAMENTO_RI_CONCLUIDO)
 
-        ri.status = Ri.AGUARDANDO_VALIDACAO_EACE
         ri.save()
 
         escola.refresh_from_db()
-        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(escola.status_mip, Escola.EM_ANDAMENTO)
 
     def test_outros_status_do_ri_nao_disparam_handoff(self):
         escola = Escola.objects.create(inep="10000005", nome="Escola Teste")
@@ -1640,14 +1638,11 @@ class VisualizadorMipTests(TestCase):
 
 
 class MipStatusUpdateViewTests(TestCase):
-    """RN-092 (revista em 2026-09-10): troca do Status (MIP). "Aguardando
-    Validação EACE"/"Faturamento Concluído" só mexem em `Escola.
-    status_mip` (label do MIP). "Em Andamento" é diferente — é o mesmo
-    `Ri.status="andamento"` de sempre: libera todo o acesso de edição que
-    "Em Andamento" já tem hoje no grid de Equipamentos (RN-011/RN-052).
-    RN-104 (2026-09-17): essa troca tira o INEP do grid principal do MIP
-    (só lista "Aguardando Validação EACE"), mas ele nunca sai do Grid de
-    Equipamentos, que continua mostrando toda Escola sempre."""
+    """RN-092 (revista em 2026-09-26, pedido do usuário): troca do Status
+    (MIP). Nenhum status reabre mais o RI — com o INEP no MIP o RI fica em
+    "Faturamento RI Concluído", inclusive com "Em Andamento MIP" (antes
+    voltava o RI para "Em Andamento"). RN-104 (2026-09-17): o INEP nunca
+    sai do Grid de Equipamentos, que continua mostrando toda Escola."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -1661,6 +1656,42 @@ class MipStatusUpdateViewTests(TestCase):
         )
         self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
 
+    def test_processo_concluido_mantem_ri_em_faturamento_ri_concluido(self):
+        """Pedido do usuário (2026-09-26): "Processo Concluído" no MIP não
+        muda mais o RI — continua "Faturamento RI Concluído"."""
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.FATURAMENTO_CONCLUIDO},
+        )
+        self.ri.refresh_from_db()
+        self.escola.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+        self.assertEqual(self.escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+
+    def test_analista_nao_sai_de_processo_concluido(self):
+        Ri.objects.filter(pk=self.ri.pk).update(status=Ri.FATURAMENTO_CONCLUIDO)
+        Escola.objects.filter(pk=self.escola.pk).update(status_mip=Escola.FATURAMENTO_CONCLUIDO)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.AGUARDANDO_VALIDACAO_EACE},
+        )
+        self.escola.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+
+    def test_admin_reabre_processo_concluido_e_ri_continua_faturamento_ri_concluido(self):
+        Escola.objects.filter(pk=self.escola.pk).update(status_mip=Escola.FATURAMENTO_CONCLUIDO)
+        self.client.force_login(self.admin)
+        self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
+            {"status_mip": Escola.AGUARDANDO_VALIDACAO_EACE},
+        )
+        self.ri.refresh_from_db()
+        self.escola.refresh_from_db()
+        self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+
     def test_exige_login(self):
         resp = self.client.post(
             reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
@@ -1669,7 +1700,7 @@ class MipStatusUpdateViewTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertIn(reverse("login"), resp.url)
 
-    def test_em_andamento_muda_o_ri_de_verdade_e_continua_aparecendo_no_grid_de_equipamentos(self):
+    def test_em_andamento_nao_reabre_o_ri_e_continua_aparecendo_no_grid_de_equipamentos(self):
         self.client.force_login(self.user)
         self.client.post(
             reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
@@ -1678,25 +1709,18 @@ class MipStatusUpdateViewTests(TestCase):
         self.escola.refresh_from_db()
         self.ri.refresh_from_db()
         self.assertEqual(self.escola.status_mip, Escola.EM_ANDAMENTO)
-        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
-        # Mesmo log automático de troca de status do RI (RN-008), não um
-        # log separado do MIP — é o mesmo `trocar_status_com_log`.
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
         self.assertTrue(
-            self.ri.historico.filter(tipo=RiHistorico.LOG_STATUS, campo="Status do RI").exists()
+            self.ri.historico.filter(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)").exists()
         )
-        # RN-103/ADR-006: o INEP já aparecia aqui antes da troca também —
-        # esta chamada só confirma que continua aparecendo, não que "voltou".
+        # RN-103/ADR-006: o INEP continua aparecendo no Grid de Equipamentos.
         resp = self.client.get(reverse("grid_inep"))
         self.assertContains(resp, self.escola.inep)
 
-    def test_em_andamento_bloqueado_pela_mesma_regra_do_ri_rn020(self):
-        """RN-020: com o RI em "Faturamento Concluído", só Administrador
-        muda o status — vale também pra tentativa de "Em Andamento" vinda
-        do MIP, porque reaproveita a mesma validação do RI."""
-        self.escola.status_mip = Escola.FATURAMENTO_CONCLUIDO
-        self.escola.save()
-        self.ri.status = Ri.FATURAMENTO_CONCLUIDO
-        self.ri.save()
+    def test_analista_nao_vai_para_em_andamento_a_partir_de_processo_concluido(self):
+        """Pedido do usuário (2026-09-25): com "Processo Concluído", só o
+        Administrador volta a mexer no INEP."""
+        Escola.objects.filter(pk=self.escola.pk).update(status_mip=Escola.FATURAMENTO_CONCLUIDO)
         self.client.force_login(self.user)
         self.client.post(
             reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
@@ -1705,13 +1729,10 @@ class MipStatusUpdateViewTests(TestCase):
         self.escola.refresh_from_db()
         self.ri.refresh_from_db()
         self.assertEqual(self.escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
-        self.assertEqual(self.ri.status, Ri.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
 
-    def test_administrador_consegue_em_andamento_a_partir_de_faturamento_concluido(self):
-        self.escola.status_mip = Escola.FATURAMENTO_CONCLUIDO
-        self.escola.save()
-        self.ri.status = Ri.FATURAMENTO_CONCLUIDO
-        self.ri.save()
+    def test_administrador_consegue_em_andamento_a_partir_de_processo_concluido(self):
+        Escola.objects.filter(pk=self.escola.pk).update(status_mip=Escola.FATURAMENTO_CONCLUIDO)
         self.client.force_login(self.admin)
         self.client.post(
             reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
@@ -1720,15 +1741,13 @@ class MipStatusUpdateViewTests(TestCase):
         self.escola.refresh_from_db()
         self.ri.refresh_from_db()
         self.assertEqual(self.escola.status_mip, Escola.EM_ANDAMENTO)
-        self.assertEqual(self.ri.status, Ri.ANDAMENTO)
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
 
-    def test_aguardando_validacao_eace_so_mexe_no_status_mip(self):
-        """Ida/volta pra "Aguardando Validação EACE" direto do MIP não
-        mexe no `Ri.status` — só quem faz isso é "Em Andamento"."""
-        self.escola.status_mip = Escola.EM_ANDAMENTO
-        self.escola.save()
-        self.ri.status = Ri.ANDAMENTO
-        self.ri.save()
+    def test_troca_do_status_mip_deixa_ri_em_faturamento_ri_concluido(self):
+        """Pedido do usuário (2026-09-26): RI de INEP no MIP fora de
+        "Faturamento RI Concluído" (dado antigo) é acertado na troca."""
+        Escola.objects.filter(pk=self.escola.pk).update(status_mip=Escola.EM_ANDAMENTO)
+        Ri.objects.filter(pk=self.ri.pk).update(status=Ri.ANDAMENTO)
         self.client.force_login(self.user)
         self.client.post(
             reverse("mip_status_update", kwargs={"inep": self.escola.inep}),
@@ -1737,7 +1756,7 @@ class MipStatusUpdateViewTests(TestCase):
         self.escola.refresh_from_db()
         self.ri.refresh_from_db()
         self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
-        self.assertEqual(self.ri.status, Ri.ANDAMENTO)  # Ri.status nao mudou
+        self.assertEqual(self.ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
         self.assertTrue(
             self.ri.historico.filter(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)").exists()
         )
@@ -1751,7 +1770,7 @@ class MipStatusUpdateViewTests(TestCase):
         self.escola.refresh_from_db()
         self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
 
-    def test_sem_ri_nao_consegue_ir_para_em_andamento(self):
+    def test_sem_ri_so_troca_o_status_mip(self):
         escola_sem_ri = Escola.objects.create(
             inep="10000002", nome="Escola Sem RI", status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
         )
@@ -1761,15 +1780,21 @@ class MipStatusUpdateViewTests(TestCase):
             {"status_mip": Escola.EM_ANDAMENTO},
         )
         escola_sem_ri.refresh_from_db()
-        self.assertEqual(escola_sem_ri.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
-
+        self.assertEqual(escola_sem_ri.status_mip, Escola.EM_ANDAMENTO)
 
 class MipItemIxcSomenteServicoTests(TestCase):
     """RN-089/RN-092 (ampliação, 2026-09-10): equipamento só valor de
-    serviço (LPU sem "Equipamentos R$") pode ser lançado/excluído direto
-    no MIP quando `Escola.status_mip == "Aguardando Validação EACE"` —
-    exceção pontual, nunca o KIT nem um Produto normal, e sem precisar
-    mandar o INEP de volta pra "Em Andamento"."""
+    serviço (LPU sem "Equipamentos R$") pode ser lançado direto no MIP
+    quando `Escola.status_mip == "Aguardando Validação EACE"` — exceção
+    pontual, nunca o KIT nem um Produto normal, e sem precisar mandar o
+    INEP de volta pra "Em Andamento".
+
+    RN ampliada (a formalizar pelo Orquestrador em business_rules.md;
+    pedido do usuário, 2026-09-24): a EXCLUSÃO deixou de ser restrita a
+    esse catálogo — Administrador pode excluir qualquer Produto avulso do
+    Lado IXC, nunca o KIT (ver `MipItemIxcDeleteTests`, abaixo). O
+    LANÇAMENTO continua restrito ao catálogo "só valor de serviço", sem
+    mudança — testado nesta classe."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -1832,61 +1857,6 @@ class MipItemIxcSomenteServicoTests(TestCase):
         )
         self.assertFalse(self.ri.itens_ixc.exists())
 
-    def test_excluir_item_administrador(self):
-        item = RiItemIxc.objects.create(
-            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
-        )
-        self.client.force_login(self.admin)
-        self.client.post(
-            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item.pk})
-        )
-        self.assertFalse(RiItemIxc.objects.filter(pk=item.pk).exists())
-
-    def test_excluir_item_analista_e_negado(self):
-        item = RiItemIxc.objects.create(
-            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
-        )
-        self.client.force_login(self.user)
-        resp = self.client.post(
-            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item.pk})
-        )
-        self.assertEqual(resp.status_code, 403)
-        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
-
-    def test_nao_exclui_kit_nem_produto_normal_por_esta_rota(self):
-        """Mesmo o Administrador não consegue excluir o KIT ou um Produto
-        normal por esta rota restrita — só itens do catálogo RN-089."""
-        item_kit = RiItemIxc.objects.create(
-            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
-            quantidade=1, valor_unitario="0", eh_kit=True,
-        )
-        item_produto = RiItemIxc.objects.create(
-            ri=self.ri, descricao_item="Produto Qualquer", quantidade=1, valor_unitario="0",
-        )
-        self.client.force_login(self.admin)
-        resp_kit = self.client.post(
-            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item_kit.pk})
-        )
-        resp_produto = self.client.post(
-            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item_produto.pk})
-        )
-        self.assertEqual(resp_kit.status_code, 403)
-        self.assertEqual(resp_produto.status_code, 403)
-        self.assertTrue(RiItemIxc.objects.filter(pk=item_kit.pk).exists())
-        self.assertTrue(RiItemIxc.objects.filter(pk=item_produto.pk).exists())
-
-    def test_exclusao_bloqueada_fora_de_aguardando_validacao_eace(self):
-        item = RiItemIxc.objects.create(
-            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
-        )
-        self.escola.status_mip = Escola.EM_ANDAMENTO
-        self.escola.save()
-        self.client.force_login(self.admin)
-        self.client.post(
-            reverse("mip_item_ixc_somente_servico_delete", kwargs={"item_pk": item.pk})
-        )
-        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
-
     def test_tela_do_mip_mostra_formulario_so_com_status_correto(self):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
@@ -1896,6 +1866,108 @@ class MipItemIxcSomenteServicoTests(TestCase):
         self.escola.save()
         resp2 = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
         self.assertNotContains(resp2, "Equipamento (só valor de serviço)")
+
+
+class MipItemIxcDeleteTests(TestCase):
+    """`mip_item_ixc_delete_view` (RN a formalizar pelo Orquestrador em
+    business_rules.md; pedido do usuário, 2026-09-24) — Administrador
+    pode excluir qualquer Produto avulso do Lado IXC (2º) direto pelo
+    MIP, não só os do catálogo "só valor de serviço" (RN-089, mantido
+    intacto para o LANÇAMENTO, `MipItemIxcSomenteServicoTests`), nunca o
+    KIT, e sempre gravando a exclusão no histórico do RI."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="analista-mip-delete", password="senha-teste-123", perfil=User.PERFIL_ANALISTA,
+        )
+        self.admin = User.objects.create_user(
+            username="admin-mip-delete", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.escola = Escola.objects.create(
+            inep="10000099", nome="Escola Teste Excluir IXC", lote=9,
+            status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+        )
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+
+    def test_excluir_produto_so_valor_de_servico_administrador(self):
+        item = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
+        )
+        self.client.force_login(self.admin)
+        self.client.post(reverse("mip_item_ixc_delete", kwargs={"item_pk": item.pk}))
+        self.assertFalse(RiItemIxc.objects.filter(pk=item.pk).exists())
+
+    def test_excluir_produto_normal_administrador(self):
+        """Diferença chave em relação à regra antiga: um Produto normal
+        (fora do catálogo "só valor de serviço") também pode ser excluído
+        agora — pedido do usuário 2026-09-24 ("excluir qualquer produto
+        do lado 2")."""
+        item_produto = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Produto Qualquer", quantidade=1, valor_unitario="0",
+        )
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse("mip_item_ixc_delete", kwargs={"item_pk": item_produto.pk}))
+        self.assertRedirects(resp, reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertFalse(RiItemIxc.objects.filter(pk=item_produto.pk).exists())
+
+    def test_excluir_item_analista_e_negado(self):
+        item = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
+        )
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("mip_item_ixc_delete", kwargs={"item_pk": item.pk}))
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
+
+    def test_nao_exclui_o_kit_mesmo_sendo_administrador(self):
+        item_kit = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+            quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse("mip_item_ixc_delete", kwargs={"item_pk": item_kit.pk}))
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(RiItemIxc.objects.filter(pk=item_kit.pk).exists())
+
+    def test_exclusao_bloqueada_fora_de_aguardando_validacao_eace(self):
+        item = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Injetor PoE", quantidade=1, valor_unitario="0",
+        )
+        self.escola.status_mip = Escola.EM_ANDAMENTO
+        self.escola.save()
+        self.client.force_login(self.admin)
+        self.client.post(reverse("mip_item_ixc_delete", kwargs={"item_pk": item.pk}))
+        self.assertTrue(RiItemIxc.objects.filter(pk=item.pk).exists())
+
+    def test_exclusao_grava_no_historico(self):
+        """Pedido explícito do usuário (2026-09-24): "sempre colocando a
+        alteração no histórico"."""
+        item = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Produto Qualquer", quantidade=3, valor_unitario="0",
+        )
+        self.client.force_login(self.admin)
+        self.client.post(reverse("mip_item_ixc_delete", kwargs={"item_pk": item.pk}))
+        entrada = RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.LOG_CAMPO)
+        self.assertEqual(entrada.campo, "Equipamento (Lado IXC, via MIP) excluído")
+        self.assertIn("Produto Qualquer — 3 un.", entrada.valor_anterior)
+        self.assertEqual(entrada.valor_novo, "Excluído")
+        self.assertEqual(entrada.autor, self.admin)
+
+    def test_botao_de_excluir_aparece_pra_qualquer_produto_nao_so_valor_de_servico(self):
+        """Tela `mip_detail` mostra a lixeira em qualquer Produto avulso
+        (não só os do catálogo "só valor de serviço"), nunca no KIT."""
+        RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+            quantidade=1, valor_unitario="0", eh_kit=True,
+        )
+        item_produto = RiItemIxc.objects.create(
+            ri=self.ri, descricao_item="Produto Qualquer", quantidade=1, valor_unitario="0",
+        )
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola.inep}))
+        self.assertContains(
+            resp, reverse("mip_item_ixc_delete", kwargs={"item_pk": item_produto.pk})
+        )
 
 
 _MEDIA_ROOT_TESTE_MIP_NF_FINANCEIRO = tempfile.mkdtemp()
@@ -2333,40 +2405,73 @@ class SincronizarNotasFiscaisMipLoteEmAndamentoTests(TestCase):
     def test_sincroniza_so_os_ineps_em_andamento_com_nf_correspondente(self):
         resultado = sincronizar_notas_fiscais_mip_lote_em_andamento()
 
-        self.escola_a.refresh_from_db()
-        self.escola_b.refresh_from_db()
-        self.escola_c.refresh_from_db()
-        self.escola_d.refresh_from_db()
-        self.escola_e.refresh_from_db()
+        nf_a = self.escola_a.notas_fiscais_mip.get()
+        nf_b = self.escola_b.notas_fiscais_mip.get()
+        nf_c = self.escola_c.notas_fiscais_mip.get()
 
-        self.assertTrue(self.escola_a.nota_fiscal_mip.name)
-        self.assertTrue(self.escola_b.nota_fiscal_mip.name)
-        self.assertTrue(self.escola_c.nota_fiscal_mip.name)
-        self.assertIsNotNone(self.escola_a.nota_fiscal_mip_sincronizada_em)
+        self.assertTrue(nf_a.arquivo.name)
+        self.assertIsNotNone(nf_a.sincronizada_em)
 
         # INEPs B e C vieram da MESMA Nota (multi-INEP) — mesmo conteúdo.
-        self.assertEqual(self.escola_b.nota_fiscal_mip.read(), self.escola_c.nota_fiscal_mip.read())
+        self.assertEqual(nf_b.arquivo.read(), nf_c.arquivo.read())
         # A e B/C são notas diferentes.
-        self.assertNotEqual(self.escola_a.nota_fiscal_mip.read(), self.escola_b.nota_fiscal_mip.read())
+        self.assertNotEqual(nf_a.arquivo.read(), nf_b.arquivo.read())
 
         # D está em LOTE mas não "Em Andamento" — não deve ser tocado,
         # mesmo tendo NF correspondente ("nota_d.pdf") no arquivo.
-        self.assertFalse(self.escola_d.nota_fiscal_mip.name)
+        self.assertFalse(self.escola_d.notas_fiscais_mip.exists())
         # E está "Em Andamento" mas sem NF no arquivo.
-        self.assertFalse(self.escola_e.nota_fiscal_mip.name)
+        self.assertFalse(self.escola_e.notas_fiscais_mip.exists())
 
         self.assertEqual(resultado["total_escolas_em_andamento"], 4)  # A, B, C, E
         self.assertEqual(resultado["total_sincronizadas"], 3)  # A, B, C
         self.assertEqual(resultado["total_pdfs_lidos"], 4)
         self.assertEqual(resultado["total_pdfs_sem_inep_reconhecido"], 1)  # sem_inep.pdf
 
+    def test_inep_rateado_recebe_mais_de_1_nota_fiscal(self):
+        """Bug real reportado pelo usuário (2026-09-24): "hoje cada INEP
+        dentro de MIP (LOTE) recebe 1 NF, porém, vai ter INEPS que vai
+        receber mais de uma, conforme esse caso de rateio" — 2 PDFs
+        diferentes referenciando o MESMO INEP (A) no "CÓDIGO INEPS"
+        precisam gravar 2 `NotaFiscalMip`, nunca a 2ª sobrescrevendo a
+        1ª."""
+        conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([
+            ("nota_a_brasilia.pdf", self.escola_a.inep + "/19001"),
+            ("nota_a_brasilia2.pdf", self.escola_a.inep + "/19001"),
+        ])
+        NotasFiscaisMip.substituir(
+            SimpleUploadedFile("notas-rateio.zip", conteudo_zip), quantidade_notas_fiscais=2, usuario=self.usuario,
+        )
+        resultado = sincronizar_notas_fiscais_mip_lote_em_andamento()
+
+        notas_a = list(self.escola_a.notas_fiscais_mip.order_by("nome_original"))
+        self.assertEqual(len(notas_a), 2)
+        self.assertEqual([n.nome_original for n in notas_a], ["nota_a_brasilia.pdf", "nota_a_brasilia2.pdf"])
+        self.assertNotEqual(notas_a[0].arquivo.read(), notas_a[1].arquivo.read())
+        self.assertEqual(resultado["total_sincronizadas"], 1)  # só a Escola A tinha NF no arquivo
+
+    def test_resincronizar_o_mesmo_pdf_substitui_em_vez_de_duplicar(self):
+        """Mesmo nome de PDF já sincronizado antes (mesma Nota, rodada
+        nova) SUBSTITUI o conteúdo, nunca duplica a linha — só um PDF com
+        nome novo vira uma `NotaFiscalMip` a mais."""
+        sincronizar_notas_fiscais_mip_lote_em_andamento()
+        self.assertEqual(self.escola_a.notas_fiscais_mip.count(), 1)
+
+        conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([
+            ("nota_a.pdf", self.escola_a.inep + "/19001"),  # mesmo nome — substitui
+        ])
+        NotasFiscaisMip.substituir(
+            SimpleUploadedFile("notas-v2.zip", conteudo_zip), quantidade_notas_fiscais=1, usuario=self.usuario,
+        )
+        sincronizar_notas_fiscais_mip_lote_em_andamento()
+        self.assertEqual(self.escola_a.notas_fiscais_mip.count(), 1)
+
     def test_nao_apaga_nota_ja_gravada_quando_nao_encontra_de_novo(self):
         """Pedido do usuário: a NF "pode ser visualizada em qualquer
         status desse INEP" — uma rodada nova que não traz mais aquele
         INEP no arquivo não pode apagar o que já foi sincronizado antes."""
         sincronizar_notas_fiscais_mip_lote_em_andamento()
-        self.escola_a.refresh_from_db()
-        self.assertTrue(self.escola_a.nota_fiscal_mip.name)
+        self.assertTrue(self.escola_a.notas_fiscais_mip.exists())
 
         # Novo arquivo ativo, sem nenhuma nota do INEP A.
         conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([
@@ -2376,8 +2481,7 @@ class SincronizarNotasFiscaisMipLoteEmAndamentoTests(TestCase):
             SimpleUploadedFile("notas-v2.zip", conteudo_zip), quantidade_notas_fiscais=1, usuario=self.usuario,
         )
         sincronizar_notas_fiscais_mip_lote_em_andamento()
-        self.escola_a.refresh_from_db()
-        self.assertTrue(self.escola_a.nota_fiscal_mip.name)
+        self.assertTrue(self.escola_a.notas_fiscais_mip.exists())
 
     def test_sincroniza_a_partir_de_um_rar_de_verdade(self):
         """Pedido do usuário: "o sistema precisa aceitar arquivo .rar
@@ -2398,12 +2502,9 @@ class SincronizarNotasFiscaisMipLoteEmAndamentoTests(TestCase):
         )
         resultado = sincronizar_notas_fiscais_mip_lote_em_andamento()
 
-        self.escola_a.refresh_from_db()
-        self.escola_b.refresh_from_db()
-        self.escola_c.refresh_from_db()
-        self.assertTrue(self.escola_a.nota_fiscal_mip.name)
-        self.assertTrue(self.escola_b.nota_fiscal_mip.name)
-        self.assertTrue(self.escola_c.nota_fiscal_mip.name)
+        self.assertTrue(self.escola_a.notas_fiscais_mip.exists())
+        self.assertTrue(self.escola_b.notas_fiscais_mip.exists())
+        self.assertTrue(self.escola_c.notas_fiscais_mip.exists())
         self.assertEqual(resultado["total_sincronizadas"], 3)  # A, B, C
 
     def test_rar_sem_ferramenta_unar_levanta_erro_claro(self):
@@ -2467,8 +2568,8 @@ _MEDIA_ROOT_TESTE_ICONE_NOTA_FISCAL_MIP = tempfile.mkdtemp()
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_ICONE_NOTA_FISCAL_MIP)
 class IconeNotaFiscalMipTests(TestCase):
     """Ícone de download da Nota Fiscal (MIP) — habilitado quando o INEP
-    já foi sincronizado (`Escola.nota_fiscal_mip`), desabilitado quando
-    não (pedido do usuário, 2026-09-24: "os que não tiver NF, o icone de
+    já foi sincronizado (`NotaFiscalMip`), desabilitado quando não
+    (pedido do usuário, 2026-09-24: "os que não tiver NF, o icone de
     nota fiscal fica desabilitado"). Testado nas 2 telas onde aparece:
     detalhe do INEP (`mip_detail`, disponível "em qualquer status" —
     pedido explícito do usuário) e drill-down do LOTE (`mip_lote_inep`)."""
@@ -2494,21 +2595,33 @@ class IconeNotaFiscalMipTests(TestCase):
 
     def test_mip_detail_com_nota_fiscal_mostra_icone_de_download(self):
         escola = Escola.objects.create(inep="10000302", nome="Escola Com NF", estado="GO", municipio="Abadiânia")
-        escola.substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000302.pdf")
+        nota = escola.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000302.pdf")
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_detail", kwargs={"inep": escola.inep}))
         self.assertContains(resp, "Baixar Nota Fiscal (MIP)")
-        self.assertContains(resp, escola.nota_fiscal_mip.url)
+        self.assertContains(resp, nota.arquivo.url)
+
+    def test_mip_detail_com_2_notas_fiscais_mostra_2_icones(self):
+        """Bug real reportado pelo usuário (2026-09-24): INEP rateado
+        pode ter mais de 1 Nota Fiscal — os 2 ícones de download
+        aparecem, não só o último sincronizado."""
+        escola = Escola.objects.create(inep="10000305", nome="Escola 2 NFs", estado="GO", municipio="Abadiânia")
+        nota1 = escola.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf 1", "10000305_brasilia.pdf")
+        nota2 = escola.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf 2", "10000305_brasilia2.pdf")
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": escola.inep}))
+        self.assertContains(resp, nota1.arquivo.url)
+        self.assertContains(resp, nota2.arquivo.url)
 
     def test_mip_lote_inep_mostra_icone_habilitado_e_desabilitado(self):
         escola_com_nf, _ri1 = _criar_escola_elegivel_lote("10000303")
         escola_sem_nf, _ri2 = _criar_escola_elegivel_lote("10000304")
-        escola_com_nf.substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000303.pdf")
+        nota = escola_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000303.pdf")
         criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
 
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
-        self.assertContains(resp, escola_com_nf.nota_fiscal_mip.url)
+        self.assertContains(resp, nota.arquivo.url)
         self.assertContains(resp, "Nenhuma Nota Fiscal sincronizada para este INEP")
 
 
@@ -2531,7 +2644,7 @@ class MipLoteInepFiltroNfTests(TestCase):
         )
         self.escola_com_nf, _ri1 = _criar_escola_elegivel_lote("10000401")
         self.escola_sem_nf, _ri2 = _criar_escola_elegivel_lote("10000402")
-        self.escola_com_nf.substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000401.pdf")
+        self.escola_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000401.pdf")
         self.lote = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
 
     def test_filtro_com_nf_mostra_so_quem_tem(self):
@@ -2559,7 +2672,7 @@ class MipLoteInepFiltroNfTests(TestCase):
         fazer esse 2º LOTE sumir da lista inteira, não só esvaziar seu
         drill-down."""
         escola_so_com_nf, _ri3 = _criar_escola_elegivel_lote("10000403", municipio="Anápolis")
-        escola_so_com_nf.substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000403.pdf")
+        escola_so_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000403.pdf")
         lote2 = criar_lote_mip("GO", "Anápolis", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
 
         self.client.force_login(self.usuario)
@@ -3319,6 +3432,38 @@ def _criar_escola_elegivel_lote(inep, *, estado="GO", municipio="Abadiânia", da
     return escola, ri
 
 
+def _criar_escola_rateada_lote(inep, *, estado="GO", municipio="Abadiânia", cidade_extra=None, data_ativacao=None):
+    """Fixture de INEP rateado (pedido do usuário, 2026-09-24): mesmo
+    padrão de `_criar_escola_elegivel_lote` (Valor Total IXC == Valor
+    Total EACE, RN-076/RN-077), mas o Lado 3 (EACE) vem de 2 Cidades
+    diferentes — a do Município do filtro/LOTE e uma "extra" (por
+    padrão "<Município>2", mesmo padrão da planilha real da EACE) — cada
+    uma com R$ 300,00, batendo com o Valor Total (IXC) de 2 x R$ 300,00 =
+    R$ 600,00."""
+    cidade_extra = cidade_extra or f"{municipio}2"
+    escola = Escola.objects.create(
+        inep=inep, nome=f"Escola {inep}", estado=estado, municipio=municipio, lote=9,
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, cod_fornecedor="52598",
+    )
+    ri = Ri.objects.create(
+        escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE,
+        data_ativacao=data_ativacao or datetime.date(2026, 9, 5),
+    )
+    RiItemIxc.objects.create(
+        ri=ri, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+        quantidade=2, valor_unitario="0.00", eh_kit=True,
+    )
+    EscolaItemRelatorioEaceMip.objects.create(
+        escola=escola, descricao_item="Kit Cobertura Wi-Fi - 2 Access Points",
+        quantidade=1, valor_servico="300.00", eh_kit=True, cidade=municipio,
+    )
+    EscolaItemRelatorioEaceMip.objects.create(
+        escola=escola, descricao_item="Access Point adicional",
+        quantidade=1, valor_servico="300.00", eh_kit=False, cidade=cidade_extra,
+    )
+    return escola, ri
+
+
 class LoteMipElegibilidadeTests(TestCase):
     """RN-098 (a criar): base elegível para um LOTE — Estado/Município/Data
     de Ativação do filtro (RN-079/RN-075), restrita a "Aguardando
@@ -3394,6 +3539,56 @@ class LoteMipElegibilidadeTests(TestCase):
         self.assertNotIn(escola_fora, elegiveis)
 
 
+class RateioRelatorioEaceMipTests(TestCase):
+    """RN a formalizar pelo Orquestrador em business_rules.md (pedido do
+    usuário, 2026-09-24): detecção de INEP rateado — mesmo INEP com Lado 3
+    (EACE) vindo de mais de 1 Cidade na planilha de origem (coluna
+    "Cidade") — e o detalhe (Cidade + valor) usado pela seta do modal
+    "Revisar INEPs do LOTE"."""
+
+    def setUp(self):
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+
+    def test_escola_com_1_cidade_nao_e_rateada(self):
+        escola, _ri = _criar_escola_elegivel_lote("10000080")
+        self.assertFalse(escola_rateada_relatorio_eace_mip(escola))
+        self.assertEqual(rateio_relatorio_eace_mip_da_escola(escola), [])
+
+    def test_escola_com_2_cidades_e_rateada(self):
+        escola, _ri = _criar_escola_rateada_lote("10000081")
+        self.assertTrue(escola_rateada_relatorio_eace_mip(escola))
+
+    def test_cidade_nao_preenchida_nao_conta_como_rateio(self):
+        """Item sem Cidade preenchida (`cidade=""`) nunca conta como uma
+        2ª Cidade — só 2 Cidades diferentes E preenchidas é rateio de
+        verdade."""
+        escola, _ri = _criar_escola_elegivel_lote("10000082")
+        EscolaItemRelatorioEaceMip.objects.create(
+            escola=escola, descricao_item="Access Point adicional",
+            quantidade=1, valor_servico="50.00", eh_kit=False, cidade="",
+        )
+        self.assertFalse(escola_rateada_relatorio_eace_mip(escola))
+
+    def test_detalhe_do_rateio_tem_1_linha_por_cidade_com_o_valor_certo(self):
+        escola, _ri = _criar_escola_rateada_lote("10000083")
+        detalhe = rateio_relatorio_eace_mip_da_escola(escola)
+        self.assertEqual(
+            {(linha["cidade"], linha["valor"]) for linha in detalhe},
+            {("Abadiânia", Decimal("300.00")), ("Abadiânia2", Decimal("300.00"))},
+        )
+
+    def test_item_sem_valor_de_servico_marca_grupo_incompleto(self):
+        escola, _ri = _criar_escola_rateada_lote("10000084")
+        EscolaItemRelatorioEaceMip.objects.filter(escola=escola, cidade="Abadiânia2").update(valor_servico=None)
+        detalhe = rateio_relatorio_eace_mip_da_escola(escola)
+        linha_extra = next(linha for linha in detalhe if linha["cidade"] == "Abadiânia2")
+        self.assertTrue(linha_extra["incompleto"])
+        self.assertEqual(linha_extra["valor"], Decimal("0.00"))
+
+
 class CriarLoteMipTests(TestCase):
     """RN-098 (a criar): `criar_lote_mip` — cria o `Lote`, muda o Status
     (MIP) de cada INEP elegível para "Aguardando Encerramento LOTE" e
@@ -3453,11 +3648,11 @@ class CriarLoteMipTests(TestCase):
         lote = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
 
         escola.refresh_from_db()
-        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
+        self.assertEqual(escola.status_mip, Escola.EM_ANDAMENTO)
 
         entrada_status = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)")
         self.assertEqual(entrada_status.valor_anterior, "Aguardando Validação EACE")
-        self.assertEqual(entrada_status.valor_novo, "Aguardando Encerramento LOTE")
+        self.assertEqual(entrada_status.valor_novo, "Em Andamento MIP")
 
         entrada_lote = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="LOTE")
         self.assertEqual(entrada_lote.valor_novo, str(lote))
@@ -3716,8 +3911,9 @@ class MipLoteInepViewTests(TestCase):
         lote_em_andamento = criar_lote_mip(
             "GO", "Anápolis", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario
         )
-        lote_em_andamento.status = Lote.EM_ANDAMENTO
-        lote_em_andamento.save()
+        # Pedido do usuário (2026-09-26): LOTE nasce "Em Andamento MIP".
+        lote_aguardando.status = Lote.EM_FATURAMENTO
+        lote_aguardando.save()
 
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"), {"status": Lote.EM_ANDAMENTO})
@@ -3735,7 +3931,7 @@ class MipLoteInepViewTests(TestCase):
 
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
-        self.assertContains(resp, "Aguardando Encerramento LOTE (2)")
+        self.assertContains(resp, "Em Andamento MIP (2)")
         self.assertContains(resp, "R$ 600,00")
 
     def test_valor_total_geral_soma_todos_os_lotes_nao_so_a_pagina_atual(self):
@@ -3859,6 +4055,45 @@ class MipLoteBotaoGridTests(TestCase):
         self.assertContains(resp, f'value="{self.escola.pk}" checked')
         self.assertContains(resp, self.escola.inep)
 
+    def test_modal_de_revisao_mostra_busca_por_inep_e_valor_total_de_cada_inep(self):
+        """Pedido do usuário (2026-09-25): campo de busca pelo número do
+        INEP e o Valor Total (IXC) de cada INEP no modal."""
+        from django.contrib.humanize.templatetags.humanize import intcomma
+
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_inep"), {"estado": "GO", "municipio": "Abadiânia"})
+        self.assertContains(resp, "Buscar pelo número do INEP")
+        self.assertContains(resp, f'data-inep="{self.escola.inep}"')
+        item = resp.context["escolas_elegiveis_lote_detalhe"][0]
+        self.assertIsNotNone(item["valor_total"])
+        self.assertContains(resp, f"R$ {intcomma(item['valor_total'])}")
+
+    def test_inep_nao_rateado_nao_mostra_seta_de_rateio(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(
+            reverse("mip_inep"),
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+        )
+        # A string "data-toggle-rateio" também aparece no `<script>` da
+        # página (seletor JS), mesmo sem nenhum INEP rateado — o texto
+        # "Rateado entre" só existe dentro do bloco `{% if item.rateio %}`.
+        self.assertNotContains(resp, "Rateado entre")
+
+    def test_inep_rateado_mostra_seta_com_o_detalhe_do_rateio(self):
+        """RN a formalizar (pedido do usuário, 2026-09-24): INEP com Lado
+        3 (EACE) vindo de mais de 1 Cidade na planilha ganha uma seta no
+        modal de revisão, mostrando Cidade e valor de cada grupo."""
+        escola_rateada, _ri = _criar_escola_rateada_lote("10000041")
+        self.client.force_login(self.usuario)
+        resp = self.client.get(
+            reverse("mip_inep"),
+            {"estado": "GO", "municipio": "Abadiânia", "data_inicial": "01/09/2026", "data_final": "30/09/2026"},
+        )
+        self.assertContains(resp, escola_rateada.inep)
+        self.assertContains(resp, "data-toggle-rateio")
+        self.assertContains(resp, "Rateado entre 2 cidades")
+        self.assertContains(resp, "Abadiânia2")
+
     def test_visualizador_nao_ve_botao(self):
         self.client.force_login(self.visualizador)
         resp = self.client.get(
@@ -3978,6 +4213,107 @@ class GerarPlanilhaFaturamentoImplantacaoLoteTests(TestCase):
         self.lote.escolas.clear()
         with self.assertRaisesMessage(PlanilhaFaturamentoImplantacaoError, f"{self.lote} não tem nenhum INEP."):
             gerar_planilha_faturamento_implantacao_lote(self.lote, self.data_envio)
+
+
+class PlanilhasFaturamentoImplantacaoLoteRateioTests(TestCase):
+    """`planilhas_faturamento_implantacao_lote` (RN a formalizar pelo
+    Orquestrador em business_rules.md; pedido do usuário, 2026-09-24) —
+    mesma planilha de `gerar_planilha_faturamento_implantacao_lote`, mas
+    dividida em 1 arquivo por Cidade quando o LOTE tem algum INEP
+    rateado."""
+
+    def setUp(self):
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        self.data_envio = datetime.date(2026, 9, 8)
+
+    def test_sem_ineps_rateados_devolve_1_unico_arquivo_igual_a_antes(self):
+        escola_a, _ri = _criar_escola_elegivel_lote("10000090")
+        escola_b, _ri2 = _criar_escola_elegivel_lote("10000091")
+        lote = Lote.objects.create(estado="GO", municipio="Abadiânia")
+        lote.escolas.set([escola_a, escola_b])
+
+        planilhas = planilhas_faturamento_implantacao_lote(lote, self.data_envio)
+
+        self.assertEqual(len(planilhas), 1)
+        nome, workbook = planilhas[0]
+        self.assertEqual(nome, nome_arquivo_planilha_faturamento_implantacao(lote))
+        self.assertEqual(workbook.worksheets[0]["H10"].value, 600.00)
+
+    def test_inep_rateado_gera_1_arquivo_extra_por_cidade(self):
+        escola_normal, _ri = _criar_escola_elegivel_lote("10000092")
+        escola_rateada, _ri2 = _criar_escola_rateada_lote("10000093")
+        lote = Lote.objects.create(estado="GO", municipio="Abadiânia")
+        lote.escolas.set([escola_normal, escola_rateada])
+
+        planilhas = planilhas_faturamento_implantacao_lote(lote, self.data_envio)
+
+        self.assertEqual(len(planilhas), 2)
+        nomes = [nome for nome, _wb in planilhas]
+        self.assertEqual(nomes[0], nome_arquivo_planilha_faturamento_implantacao(lote))
+        self.assertIn("(RATEIO)", nomes[1])
+        self.assertIn("Abadiânia2", nomes[1])
+
+    def test_arquivo_do_municipio_do_lote_so_soma_a_fracao_do_inep_rateado(self):
+        """R$ 300,00 (Escola normal) + R$ 300,00 (só a fração "Abadiânia"
+        da Escola rateada, nunca os R$ 600,00 cheios dela)."""
+        escola_normal, _ri = _criar_escola_elegivel_lote("10000094")
+        escola_rateada, _ri2 = _criar_escola_rateada_lote("10000095")
+        lote = Lote.objects.create(estado="GO", municipio="Abadiânia")
+        lote.escolas.set([escola_normal, escola_rateada])
+
+        planilhas = planilhas_faturamento_implantacao_lote(lote, self.data_envio)
+
+        _nome_principal, workbook_principal = planilhas[0]
+        aba_principal = workbook_principal.worksheets[0]
+        self.assertEqual(aba_principal["H10"].value, 600.00)
+        self.assertEqual(aba_principal.title, "Abadiânia")
+        self.assertIn(f"{escola_normal.inep}/{escola_normal.cod_fornecedor}", aba_principal["F10"].value)
+        self.assertIn(f"{escola_rateada.inep}/{escola_rateada.cod_fornecedor}", aba_principal["F10"].value)
+
+    def test_arquivo_extra_so_tem_a_fracao_da_cidade_extra(self):
+        escola_rateada, _ri = _criar_escola_rateada_lote("10000096")
+        lote = Lote.objects.create(estado="GO", municipio="Abadiânia")
+        lote.escolas.set([escola_rateada])
+
+        planilhas = planilhas_faturamento_implantacao_lote(lote, self.data_envio)
+
+        self.assertEqual(len(planilhas), 2)
+        _nome_extra, workbook_extra = planilhas[1]
+        aba_extra = workbook_extra.worksheets[0]
+        self.assertEqual(aba_extra["H10"].value, 300.00)
+        self.assertEqual(aba_extra.title, "Abadiânia2")
+        self.assertIn("MUNICIPIO/UF: ABADIÂNIA2/GO", aba_extra["F10"].value)
+        self.assertIn(f"{escola_rateada.inep}/{escola_rateada.cod_fornecedor}", aba_extra["F10"].value)
+
+    def test_erro_claro_sem_nenhum_inep_no_lote(self):
+        lote = Lote.objects.create(estado="GO", municipio="Abadiânia")
+        with self.assertRaisesMessage(PlanilhaFaturamentoImplantacaoError, f"{lote} não tem nenhum INEP."):
+            planilhas_faturamento_implantacao_lote(lote, self.data_envio)
+
+    def test_item_do_inep_rateado_sem_cidade_preenchida_nao_perde_valor(self):
+        """Item sem Cidade preenchida não aparece em `rateio_relatorio_
+        eace_mip_da_escola` (só lista Cidade preenchida) — precisa entrar
+        na fração do Município do LOTE mesmo assim, nunca sumir da soma
+        (CLAUDE.md §9: nunca perde valor lançado)."""
+        escola_rateada, _ri = _criar_escola_rateada_lote("10000098")
+        EscolaItemRelatorioEaceMip.objects.create(
+            escola=escola_rateada, descricao_item="Rack adicional",
+            quantidade=1, valor_servico="300.00", eh_kit=False, cidade="",
+        )
+        lote = Lote.objects.create(estado="GO", municipio="Abadiânia")
+        lote.escolas.set([escola_rateada])
+
+        planilhas = planilhas_faturamento_implantacao_lote(lote, self.data_envio)
+
+        nome_principal, workbook_principal = planilhas[0]
+        # R$ 300,00 (Abadiânia) + R$ 300,00 (sem Cidade) = R$ 600,00 —
+        # sem essa fração, o total ficaria em R$ 300,00 (valor perdido).
+        self.assertEqual(workbook_principal.worksheets[0]["H10"].value, 600.00)
+        _nome_extra, workbook_extra = planilhas[1]
+        self.assertEqual(workbook_extra.worksheets[0]["H10"].value, 300.00)
 
 
 # Pedido do usuario (2026-09-15): envio de e-mail do LOTE comentado (nao
@@ -4336,6 +4672,27 @@ class MipLoteBaixarPlanilhaViewTests(TestCase):
         resp = self.client.get(reverse("mip_lote_baixar_planilha", kwargs={"pk": self.lote.pk}))
         self.assertRedirects(resp, reverse("mip_lote_inep"))
 
+    def test_inep_rateado_baixa_zip_com_1_arquivo_por_cidade(self):
+        """RN a formalizar (pedido do usuário, 2026-09-24): LOTE com algum
+        INEP rateado baixa um .zip (1 arquivo por Cidade) em vez do único
+        .xlsx de sempre."""
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        escola_rateada, _ri = _criar_escola_rateada_lote("10000097", municipio="Abadiânia")
+        self.lote.escolas.add(escola_rateada)
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_baixar_planilha", kwargs={"pk": self.lote.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "application/zip")
+        self.assertIn("attachment;", resp["Content-Disposition"])
+
+        arquivo_zip = zipfile.ZipFile(io.BytesIO(resp.content))
+        self.assertEqual(len(arquivo_zip.namelist()), 2)
+        nomes_com_rateio = [nome for nome in arquivo_zip.namelist() if "RATEIO" in nome]
+        self.assertEqual(len(nomes_com_rateio), 1)
+
 
 _MEDIA_ROOT_TESTE_NOTAS_FISCAIS_LOTE = tempfile.mkdtemp()
 
@@ -4688,14 +5045,15 @@ class MipLoteStatusUpdateViewTests(TestCase):
         # atribuído DEPOIS de criar o RI, senão o save() do RI sobrescreve.
         self.ri1 = Ri.objects.create(escola=self.escola1, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.ri2 = Ri.objects.create(escola=self.escola2, status=Ri.AGUARDANDO_VALIDACAO_EACE)
-        self.escola1.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        # Pedido do usuário (2026-09-26): INEP entra no LOTE "Em Andamento MIP".
+        self.escola1.status_mip = Escola.EM_ANDAMENTO
         self.escola1.save(update_fields=["status_mip"])
-        self.escola2.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        self.escola2.status_mip = Escola.EM_ANDAMENTO
         self.escola2.save(update_fields=["status_mip"])
         self.lote = Lote.objects.create(
             estado="GO", municipio="Abadiânia",
             data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
-            status=Lote.AGUARDANDO_ENCERRAMENTO,
+            status=Lote.EM_ANDAMENTO,
         )
         self.lote.escolas.set([self.escola1, self.escola2])
 
@@ -4711,7 +5069,7 @@ class MipLoteStatusUpdateViewTests(TestCase):
         resp = self.client.get(reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}))
         self.assertRedirects(resp, reverse("mip_lote_inep"))
         self.lote.refresh_from_db()
-        self.assertEqual(self.lote.status, Lote.AGUARDANDO_ENCERRAMENTO)
+        self.assertEqual(self.lote.status, Lote.EM_ANDAMENTO)
 
     def test_status_invalido_nao_altera_nada(self):
         self.client.force_login(self.usuario)
@@ -4719,7 +5077,7 @@ class MipLoteStatusUpdateViewTests(TestCase):
             reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": "valor-invalido"},
         )
         self.lote.refresh_from_db()
-        self.assertEqual(self.lote.status, Lote.AGUARDANDO_ENCERRAMENTO)
+        self.assertEqual(self.lote.status, Lote.EM_ANDAMENTO)
 
     def test_bloqueado_quando_ja_processo_concluido(self):
         self.lote.status = Lote.FATURAMENTO_CONCLUIDO
@@ -4761,10 +5119,9 @@ class MipLoteStatusUpdateViewTests(TestCase):
         for ri in (self.ri1, self.ri2):
             entrada = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)")
             self.assertEqual(entrada.valor_novo, "Em Faturamento")
-        # "Em Faturamento" nunca mexe no Ri.status (mesmo critério do
-        # Status (MIP) individual, RN-092).
+        # RI de INEP no MIP fica em "Faturamento RI Concluído" (2026-09-26).
         self.ri1.refresh_from_db()
-        self.assertEqual(self.ri1.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(self.ri1.status, Ri.FATURAMENTO_RI_CONCLUIDO)
 
     def test_processo_concluido_muda_lote_e_todos_os_ineps_com_historico(self):
         self.client.force_login(self.usuario)
@@ -4782,12 +5139,18 @@ class MipLoteStatusUpdateViewTests(TestCase):
         for ri in (self.ri1, self.ri2):
             entrada = ri.historico.get(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)")
             self.assertEqual(entrada.valor_novo, "Processo Concluído")
-        # "Processo Concluído" nunca mexe no Ri.status (mesmo critério do
-        # Status (MIP) individual, RN-092).
-        self.ri1.refresh_from_db()
-        self.assertEqual(self.ri1.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        # Pedido do usuário (2026-09-26): o RI continua "Faturamento RI
+        # Concluído" — o encerramento é o "Processo Concluído" do MIP.
+        for ri in (self.ri1, self.ri2):
+            ri.refresh_from_db()
+            self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+            self.assertTrue(ri.faturamento_encerrado)
 
-    def test_em_andamento_reabre_o_ri_de_cada_inep(self):
+    def test_em_andamento_nao_reabre_o_ri(self):
+        """Pedido do usuário (2026-09-26): "Em Andamento MIP" não reabre
+        mais o RI — só troca o Status (MIP) de cada INEP."""
+        Lote.objects.filter(pk=self.lote.pk).update(status=Lote.EM_FATURAMENTO)
+        Escola.objects.filter(pk__in=[self.escola1.pk, self.escola2.pk]).update(status_mip=Escola.EM_FATURAMENTO_LOTE)
         self.client.force_login(self.usuario)
         resp = self.client.post(
             reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": Lote.EM_ANDAMENTO},
@@ -4795,40 +5158,11 @@ class MipLoteStatusUpdateViewTests(TestCase):
         self.assertRedirects(resp, reverse("mip_lote_inep"))
         self.lote.refresh_from_db()
         self.escola1.refresh_from_db()
-        self.escola2.refresh_from_db()
         self.ri1.refresh_from_db()
-        self.ri2.refresh_from_db()
         self.assertEqual(self.lote.status, Lote.EM_ANDAMENTO)
         self.assertEqual(self.escola1.status_mip, Escola.EM_ANDAMENTO)
-        self.assertEqual(self.escola2.status_mip, Escola.EM_ANDAMENTO)
-        self.assertEqual(self.ri1.status, Ri.ANDAMENTO)
-        self.assertEqual(self.ri2.status, Ri.ANDAMENTO)
-        # Mesmo log automático de troca de status do RI (RN-008) — igual
-        # ao Status (MIP) individual, `trocar_status_com_log` já grava.
-        self.assertTrue(self.ri1.historico.filter(tipo=RiHistorico.LOG_STATUS, campo="Status do RI").exists())
-
-    def test_em_andamento_tudo_ou_nada_quando_um_ri_bloqueia(self):
-        """RN-020: RI em "Faturamento Concluído" só muda com Administrador
-        — se 1 INEP do LOTE estiver bloqueado, NENHUM dos dois é alterado
-        (mesmo critério de `criar_lote_mip`)."""
-        self.ri2.status = Ri.FATURAMENTO_CONCLUIDO
-        # `Ri.save()` já sincroniza `escola2.status_mip` pra
-        # "faturamento_concluido" aqui mesmo, de propósito (RN-092,
-        # comportamento existente, não é o que este teste está checando)
-        # — só pra montar o cenário de bloqueio do RN-020.
-        self.ri2.save()
-        self.client.force_login(self.usuario)
-        self.client.post(
-            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": Lote.EM_ANDAMENTO},
-        )
-        self.lote.refresh_from_db()
-        self.escola1.refresh_from_db()
-        self.ri1.refresh_from_db()
-        # O que este teste confere de verdade: nada avançou por causa do
-        # bloqueio — nem o LOTE, nem o INEP que NÃO estava bloqueado.
-        self.assertEqual(self.lote.status, Lote.AGUARDANDO_ENCERRAMENTO)
-        self.assertEqual(self.escola1.status_mip, Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
-        self.assertEqual(self.ri1.status, Ri.AGUARDANDO_VALIDACAO_EACE)
+        self.assertEqual(self.ri1.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+        self.assertTrue(self.ri1.historico.filter(tipo=RiHistorico.LOG_CAMPO, campo="Status (MIP)").exists())
 
     def test_em_andamento_administrador_consegue_com_ri_faturamento_concluido(self):
         self.ri2.status = Ri.FATURAMENTO_CONCLUIDO
@@ -4847,7 +5181,7 @@ class MipLoteStatusUpdateViewTests(TestCase):
             {"status": Lote.FATURAMENTO_CONCLUIDO},
         )
         self.lote.refresh_from_db()
-        self.assertEqual(self.lote.status, Lote.AGUARDANDO_ENCERRAMENTO)
+        self.assertEqual(self.lote.status, Lote.EM_ANDAMENTO)
 
 
 # ---------------------------------------------------------------------------
@@ -4868,9 +5202,9 @@ class DesfazerLoteMipServiceTests(TestCase):
         # (RN-092), então o valor de "dentro do LOTE" só é atribuído DEPOIS.
         self.ri1 = Ri.objects.create(escola=self.escola1, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.ri2 = Ri.objects.create(escola=self.escola2, status=Ri.AGUARDANDO_VALIDACAO_EACE)
-        self.escola1.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        self.escola1.status_mip = Escola.EM_ANDAMENTO
         self.escola1.save(update_fields=["status_mip"])
-        self.escola2.status_mip = Escola.AGUARDANDO_ENCERRAMENTO_LOTE
+        self.escola2.status_mip = Escola.EM_ANDAMENTO
         self.escola2.save(update_fields=["status_mip"])
         self.lote = Lote.objects.create(
             estado="GO", municipio="Abadiânia",
@@ -4904,13 +5238,15 @@ class DesfazerLoteMipServiceTests(TestCase):
             self.assertEqual(entrada_lote.valor_novo, "Desfeito")
             self.assertEqual(entrada_lote.autor, self.usuario)
 
-    def test_bloqueado_a_partir_de_em_andamento(self):
-        self.lote.status = Lote.EM_ANDAMENTO
-        self.lote.save()
+    def test_bloqueado_com_inep_em_processo_concluido(self):
+        """Pedido do usuário (2026-09-26): o LOTE nasce "Em Andamento MIP"
+        e pode ser desfeito — menos quando algum INEP já recebeu a Nota
+        Fiscal ("Processo Concluído")."""
+        Escola.objects.filter(pk=self.escola1.pk).update(status_mip=Escola.FATURAMENTO_CONCLUIDO)
         with self.assertRaises(LoteMipError):
             desfazer_lote_mip(self.lote, self.usuario)
-        self.escola1.refresh_from_db()
-        self.assertEqual(self.escola1.status_mip, Escola.AGUARDANDO_ENCERRAMENTO_LOTE)
+        self.escola2.refresh_from_db()
+        self.assertEqual(self.escola2.status_mip, Escola.EM_ANDAMENTO)
         self.assertTrue(Lote.objects.filter(pk=self.lote.pk).exists())
 
     def test_bloqueado_a_partir_de_faturamento_concluido(self):
@@ -4975,8 +5311,8 @@ class MipLoteDesfazerViewTests(TestCase):
         self.escola.refresh_from_db()
         self.assertEqual(self.escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
 
-    def test_bloqueado_a_partir_de_em_andamento_mostra_mensagem(self):
-        self.lote.status = Lote.EM_ANDAMENTO
+    def test_bloqueado_a_partir_de_em_faturamento_mostra_mensagem(self):
+        self.lote.status = Lote.EM_FATURAMENTO
         self.lote.save()
         self.client.force_login(self.usuario)
         resp = self.client.post(
@@ -5034,7 +5370,7 @@ class MipLoteStatusColunaListaTests(TestCase):
         parte em `position: fixed`, posicionado via JS."""
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
-        self.assertContains(resp, "Aguardando Encerramento LOTE")
+        self.assertContains(resp, "Em Andamento MIP")
         self.assertContains(resp, "data-status-menu")
         self.assertContains(resp, 'title="Mudar status"')
         self.assertContains(resp, reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}))
@@ -5070,3 +5406,71 @@ class MipLoteStatusColunaListaTests(TestCase):
         resp = self.client.get(reverse("mip_lote_inep"))
         self.assertContains(resp, "Processo Concluído")
         self.assertNotContains(resp, 'title="Mudar status"')
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_SINCRONIZAR_NOTAS_FISCAIS_MIP)
+class LoteNasceEmAndamentoMipTests(TestCase):
+    """Pedido do usuário (2026-09-26): LOTE e INEPs nascem "Em Andamento
+    MIP"; INEP que recebe a Nota Fiscal (PDF) vai para "Processo
+    Concluído"; "Aguardando Encerramento LOTE" deixou de existir."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_SINCRONIZAR_NOTAS_FISCAIS_MIP, ignore_errors=True)
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-lote-andamento", password="senha-teste-123")
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+
+    def test_criar_lote_deixa_lote_e_ineps_em_andamento_mip(self):
+        escola, ri = _criar_escola_elegivel_lote("10000901")
+
+        lote = criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
+
+        escola.refresh_from_db()
+        ri.refresh_from_db()
+        self.assertEqual(lote.status, Lote.EM_ANDAMENTO)
+        self.assertEqual(escola.status_mip, Escola.EM_ANDAMENTO)
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)
+        self.assertNotIn(Escola.AGUARDANDO_ENCERRAMENTO_LOTE, dict(Escola.STATUS_MIP_CHOICES))
+        self.assertNotIn(Lote.AGUARDANDO_ENCERRAMENTO, dict(Lote.STATUS_CHOICES))
+
+    def test_inep_que_recebe_nota_fiscal_vai_para_processo_concluido(self):
+        escola, ri = _criar_escola_elegivel_lote("10000902")
+        criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
+        conteudo_zip = _gerar_zip_notas_fiscais_mip_teste([("nota.pdf", escola.inep + "/19001")])
+        NotasFiscaisMip.substituir(
+            SimpleUploadedFile("notas.zip", conteudo_zip), quantidade_notas_fiscais=1, usuario=self.usuario,
+        )
+
+        sincronizar_notas_fiscais_mip_lote_em_andamento()
+
+        escola.refresh_from_db()
+        self.assertEqual(escola.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+        self.assertTrue(
+            RiHistorico.objects.filter(
+                ri=ri, campo="Status (MIP)", valor_anterior="Em Andamento MIP", valor_novo="Processo Concluído",
+            ).exists()
+        )
+
+    def test_desfazer_lote_em_andamento(self):
+        escola, _ri = _criar_escola_elegivel_lote("10000903")
+        lote = criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
+
+        desfazer_lote_mip(lote, self.usuario)
+
+        escola.refresh_from_db()
+        self.assertEqual(escola.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertFalse(Lote.objects.exists())
+
+    def test_nao_desfaz_lote_com_inep_concluido(self):
+        escola, _ri = _criar_escola_elegivel_lote("10000904")
+        lote = criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
+        Escola.objects.filter(pk=escola.pk).update(status_mip=Escola.FATURAMENTO_CONCLUIDO)
+
+        with self.assertRaises(LoteMipError):
+            desfazer_lote_mip(lote, self.usuario)

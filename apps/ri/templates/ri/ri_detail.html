@@ -106,7 +106,7 @@
         <div class="flex items-center justify-between mb-4">
             <h2 class="text-sm font-black uppercase text-gray-800 dark:text-gray-200">IXC <span class="text-gray-400 dark:text-gray-500">(2º lado)</span></h2>
             {% if not lado_ixc_editavel %}
-            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-052">Somente visualização (fora de "Em Andamento")</span>
+            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-052">Somente visualização</span>
             {% endif %}
         </div>
 
@@ -196,14 +196,13 @@
         <!-- RN-093/FEAT-040: Visualizador não vê nem o formulário em modo
              leitura — só os itens já lançados, no bloco acima. -->
         {% if not request.user.is_visualizador %}
-        <!-- RN-052 (2026-09-02): fora de "Em Andamento", o formulário
-             continua visível (usuário precisa ver Data Ativação/CNPJ/
-             Município/Estado já lançados) mas os campos ficam com
-             `disabled` (view) e "+"/"Salvar" somem — não tem o que
-             adicionar/enviar em modo visualização. -->
+        <!-- RN-052 (revista 2026-09-25): editável em qualquer status por
+             Administrador e Analista; sem permissão, o formulário
+             continua visível mas com campos `disabled` (view) e
+             "+"/"Salvar" somem. Toda alteração vai para o histórico. -->
         {% if not lado_ixc_editavel %}
         <p class="text-[11px] font-bold text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-800 pt-4">
-            RI fora de "Em Andamento" — campos do Lado IXC em modo visualização (RN-052).
+            Campos do Lado IXC em modo visualização (RN-052).
         </p>
         {% endif %}
         <!-- RN-011 (formulário único, 2026-08-24): KIT Instalado (Unidade
@@ -446,7 +445,7 @@
         <div class="flex items-center justify-between mb-1">
             <h2 class="text-sm font-black uppercase text-gray-800 dark:text-gray-200">Relatório EACE <span class="text-gray-400 dark:text-gray-500">(3º lado)</span></h2>
             {% if ri_bloqueado_faturamento_concluido %}
-            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-020">Bloqueado (Faturamento Concluído)</span>
+            <span class="text-[10px] font-bold uppercase text-gray-400 dark:text-gray-500" title="RN-020">Bloqueado (Processo Concluído)</span>
             {% endif %}
         </div>
         <!-- RN-018 (2026-08-26): mesmo mecanismo do Lado IXC (RN-011) —
@@ -572,7 +571,7 @@
              "Faturamento Concluído", o formulário some para os dois perfis. -->
         {% if ri_bloqueado_faturamento_concluido %}
         <p class="text-[11px] font-bold text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-800 pt-4">
-            RI em "Faturamento Concluído" — lançamento bloqueado até o Administrador trocar o status (RN-020).
+            INEP em "Processo Concluído" (MIP) — lançamento bloqueado (RN-020).
         </p>
         {% else %}
         {% if not kit_ja_lancado_eace and not kit_form_eace.tem_catalogo %}

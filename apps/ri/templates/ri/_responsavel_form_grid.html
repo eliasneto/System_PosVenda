@@ -12,7 +12,7 @@ reload, id + hx-swap-oob repõem este bloco com o valor real salvo.
     <input type="hidden" name="next" value="{{ next_url }}">
     <input type="hidden" name="origem" value="grid">
     <label class="text-[10px] font-black uppercase text-amber-800 dark:text-amber-300">Responsável</label>
-    <select name="responsavel" class="flex-1 px-3 py-2 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
+    <select name="responsavel" {% if ri.faturamento_encerrado and not request.user.is_administrador %}disabled title="INEP em &quot;Processo Concluído&quot; (MIP): só o Administrador pode alterar"{% endif %} class="disabled:cursor-not-allowed disabled:opacity-60 flex-1 px-3 py-2 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100">
         {% if not ri.responsavel %}
         <option value="" selected>Não atribuído</option>
         {% endif %}

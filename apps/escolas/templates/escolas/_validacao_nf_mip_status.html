@@ -1,0 +1,79 @@
+{% comment %}
+Card "Última rotina" da Validação MIP (NF) (`views_validacao_nf_mip`).
+Enquanto houver execução "Na fila"/"Processando", se reatualiza a cada 3 s
+(HTMX); quando ela termina, a view responde `HX-Refresh` e a página inteira
+recarrega com os cards novos no grid.
+{% endcomment %}
+<div id="validacao-nf-mip-status"
+     class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-8 flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-6 justify-between"
+     {% if em_andamento %}hx-get="{% url 'validacao_nf_mip_status' %}?acompanhando=1" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+    <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-4 sm:gap-x-8">
+        <div>
+            <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider mb-1.5 whitespace-nowrap">Última rotina</p>
+            {% if not ultima %}
+            <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400 whitespace-nowrap">Nunca executada</span>
+            {% elif ultima.status == 'processando' %}
+            <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-purple-600 text-purple-700 dark:text-purple-400 dark:border-purple-500 animate-pulse whitespace-nowrap">⚙ Processando</span>
+            {% elif ultima.status == 'na_fila' %}
+            <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-blue-600 text-blue-700 dark:text-blue-400 dark:border-blue-500 whitespace-nowrap">⏳ Na fila</span>
+            {% elif ultima.status == 'sucesso' %}
+            <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-green-600 text-green-700 dark:text-green-400 dark:border-green-500 whitespace-nowrap">✓ Sucesso</span>
+            {% else %}
+            <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-red-600 text-red-700 dark:text-red-400 dark:border-red-500 whitespace-nowrap">✗ Erro</span>
+            {% endif %}
+        </div>
+
+        {% if ultima %}
+        <div>
+            <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider mb-1">Data e hora</p>
+            <p class="text-sm font-black text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                {% if ultima.finalizado_em %}{{ ultima.finalizado_em|date:"d/m/Y H:i" }}{% elif ultima.iniciado_em %}{{ ultima.iniciado_em|date:"d/m/Y H:i" }}{% else %}{{ ultima.criado_em|date:"d/m/Y H:i" }}{% endif %}
+            </p>
+        </div>
+        <div>
+            <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider mb-1">Origem</p>
+            <p class="text-sm font-bold text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                {{ ultima.get_origem_display }}{% if ultima.solicitado_por %} — {{ ultima.solicitado_por.get_full_name|default:ultima.solicitado_por.username }}{% endif %}
+            </p>
+        </div>
+        <div class="min-w-0 sm:min-w-[13rem]">
+            <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider mb-1">Detalhe</p>
+            {% if ultima.status == 'processando' %}
+            <div class="flex flex-col gap-1">
+                <div class="w-40 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                    <div class="h-full bg-purple-600 dark:bg-purple-500" style="width: {{ ultima.progresso_pct }}%"></div>
+                </div>
+                <span class="text-[11px] font-bold text-gray-600 dark:text-gray-400">{{ ultima.progresso_pct }}%{% if ultima.etapa_atual %} — {{ ultima.etapa_atual }}{% endif %}{% if ultima.pedido_solicitado %} (pedido {{ ultima.pedido_solicitado }}){% endif %}</span>
+            </div>
+            {% elif ultima.status == 'na_fila' %}
+            <p class="text-[11px] font-bold text-gray-600 dark:text-gray-400">Aguardando o worker do MIP começar{% if ultima.pedido_solicitado %} — pedido {{ ultima.pedido_solicitado }}{% endif %}.</p>
+            {% elif ultima.status == 'erro' %}
+            <p class="text-[11px] font-bold text-red-600 dark:text-red-400">{{ ultima.motivo_legivel }}</p>
+            {% else %}
+            <p class="text-[11px] font-bold text-gray-600 dark:text-gray-400">Pedido {{ ultima.pedido|default:"—" }} lido no portal EACE.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="flex flex-col items-stretch lg:items-end gap-2 lg:ml-auto">
+        <form method="POST" action="{% url 'validacao_nf_mip_rodar' %}" class="flex flex-col sm:flex-row gap-2 w-full lg:w-auto">
+            {% csrf_token %}
+            <div class="flex flex-col gap-1">
+                <label for="validacao-pedido" class="sr-only">Nº do pedido</label>
+                <input id="validacao-pedido" type="text" name="pedido" inputmode="numeric" pattern="[0-9]*" maxlength="20"
+                       placeholder="Nº do pedido (opcional)" {% if em_andamento %}disabled{% endif %}
+                       title="Em branco: lê o pedido mais recente (maior número). Preenchido: lê só esse pedido."
+                       class="w-full sm:w-52 px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:opacity-50">
+            </div>
+            <button type="submit" {% if em_andamento %}disabled{% endif %}
+                    class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                <i data-lucide="{% if em_andamento %}loader{% else %}refresh-cw{% endif %}" class="w-4 h-4 {% if em_andamento %}animate-spin{% endif %}"></i>
+                {% if em_andamento %}Em andamento{% else %}Rodar agora{% endif %}
+            </button>
+        </form>
+        <p class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider text-center lg:text-right">
+            {% if agendamento_ativo %}Automática: todo dia, das {{ hora_inicio|stringformat:"02d" }}:00 às {{ hora_fim|stringformat:"02d" }}:00, de hora em hora, no pedido mais recente{% else %}Automática: desativada — só manual{% endif %}
+        </p>
+    </div>
+</div>

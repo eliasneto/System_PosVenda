@@ -125,6 +125,102 @@
     </div>
 </div>
 
+<!-- Pedido do usuário (2026-09-25): 1 card por status do RI — soma do Lado
+     Relatório EACE (3º lado) do RI mais recente de cada INEP, com os
+     mesmos filtros dos cards acima (`montar_faturamento_por_status_ri`).
+     2026-09-26: "Implantação EACE" soma o Lado 1 (1º status). -->
+<div class="mt-6">
+    <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+        <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Faturamento por status do RI</p>
+        <p class="text-[11px] text-gray-400 dark:text-gray-500">
+            Lado (EACE){% if kit_filtrado %} · Kit "{{ kit_filtrado }}"{% elif produto_filtrado %} · "{{ produto_filtrado }}"{% endif %}{% if recorte_label %} · {{ recorte_label }}{% endif %}
+        </p>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {% for card in faturamento_por_status_ri %}
+        <a href="{{ card.href }}"
+           {% if card.selecionado %}aria-current="true"{% endif %}
+           title="{% if card.selecionado %}Fechar valores por Estado{% else %}Ver {{ card.rotulo }} por Estado{% endif %}"
+           class="bg-white dark:bg-gray-900 border-2 rounded-3xl p-4 sm:p-5 shadow-sm flex flex-col gap-2 min-w-0 transition hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 {% if card.selecionado %}border-amber-400{% else %}border-gray-100 dark:border-gray-800 hover:border-pv-yellow/60{% endif %}">
+            <p class="text-[10px] font-black uppercase tracking-widest {% if card.selecionado %}text-pv-yellow{% else %}text-gray-400 dark:text-gray-500{% endif %}">{{ card.rotulo }}</p>
+            <p class="text-sm sm:text-xl font-black text-gray-900 dark:text-gray-100 tracking-tight tabular-nums whitespace-nowrap">
+                <span class="mr-1">R$</span>{{ card.valor|intcomma }}
+            </p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500">{{ card.quantidade_ineps }} INEP{{ card.quantidade_ineps|pluralize }}</p>
+            {% if card.sem_valor %}
+            {# Pedido do usuário (2026-09-26): INEPs ainda sem valor no lado (EACE). #}
+            <p class="text-[11px] font-bold text-amber-600 dark:text-amber-400">{{ card.sem_valor }} Sem valor do lado (EACE)</p>
+            {% endif %}
+        </a>
+        {% endfor %}
+    </div>
+
+    {% if status_ri_selecionado %}
+    <!-- Pedido do usuário (2026-09-25): clicar no card abre o status por
+         Estado; clicar numa UF abre os INEPs dela com o valor de cada um
+         (não filtra o dashboard nem mostra municípios). -->
+    <div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-6 sm:p-8 shadow-sm mt-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+            <div>
+                <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">{{ status_ri_selecionado_rotulo }} por Estado</p>
+                <p class="text-[11px] text-gray-400 dark:text-gray-500">Clique num estado para ver os INEPs e o valor de cada um.</p>
+            </div>
+            {% for card in faturamento_por_status_ri %}{% if card.selecionado %}
+            <a href="{{ card.href }}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2">Fechar</a>
+            {% endif %}{% endfor %}
+        </div>
+        <div class="space-y-4">
+            {% for linha in faturamento_status_ri_por_estado %}
+            <div id="status-uf-{{ linha.estado|slugify }}" class="scroll-mt-24">
+            <a href="{{ linha.href }}#status-uf-{{ linha.estado|slugify }}" class="block group" {% if linha.selecionado %}aria-expanded="true"{% else %}aria-expanded="false"{% endif %}>
+                <div class="flex items-center justify-between gap-3 text-xs font-bold mb-1.5">
+                    <span class="inline-flex items-center gap-1.5 shrink-0 {% if linha.selecionado %}text-pv-yellow{% else %}text-gray-600 dark:text-gray-300{% endif %}">
+                        <i data-lucide="chevron-right" class="w-3.5 h-3.5 transition-transform {% if linha.selecionado %}rotate-90{% endif %}"></i>
+                        {{ linha.estado }}
+                    </span>
+                    <span class="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-right min-w-0">
+                        <span class="text-gray-500 dark:text-gray-400 tabular-nums whitespace-nowrap">R$ {{ linha.valor|intcomma }}</span>
+                        <span class="text-gray-300 dark:text-gray-600">·</span>
+                        <span class="text-gray-400 dark:text-gray-500 whitespace-nowrap">{{ linha.quantidade_ineps }} INEP{{ linha.quantidade_ineps|pluralize }}</span>
+                        {% if linha.sem_valor %}
+                        <span class="text-gray-300 dark:text-gray-600">·</span>
+                        <span class="text-amber-600 dark:text-amber-400 whitespace-nowrap">{{ linha.sem_valor }} Sem valor do lado (EACE)</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="h-2.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                    <div class="h-full rounded-full transition-all {% if linha.selecionado %}bg-pv-yellow{% else %}bg-gray-400 dark:bg-gray-600 group-hover:bg-pv-yellow/70{% endif %}"
+                         style="width: {{ linha.percentual_css }}%"></div>
+                </div>
+            </a>
+            {% if linha.selecionado %}
+            <div class="mt-3 ml-5 border border-gray-100 dark:border-gray-800 rounded-2xl overflow-hidden">
+                <div class="max-h-96 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                    {% for item in linha.ineps %}
+                    <a href="{% url 'ri_detail' inep=item.inep %}" class="flex items-center justify-between gap-3 px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-gray-800/60 transition">
+                        <span class="flex items-center gap-3 min-w-0">
+                            <span class="font-bold text-gray-800 dark:text-gray-100 shrink-0 tabular-nums">{{ item.inep }}</span>
+                            <span class="text-gray-500 dark:text-gray-400 truncate">{{ item.nome }}</span>
+                        </span>
+                        {% if item.valor %}
+                        <span class="font-black text-gray-900 dark:text-gray-100 shrink-0 tabular-nums">R$ {{ item.valor|intcomma }}</span>
+                        {% else %}
+                        <span class="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 shrink-0 whitespace-nowrap">Sem valor do lado (EACE)</span>
+                        {% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            </div>
+            {% empty %}
+            <p class="text-xs text-gray-400 dark:text-gray-500">Nenhum INEP em "{{ status_ri_selecionado_rotulo }}"{% if recorte_label %} em {{ recorte_label }}{% endif %}.</p>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
 {% if not kit_filtrado and not produto_filtrado %}
 <!-- Gráfico "Faturado por Estado" (RN-027): clicar numa linha filtra os 2 cards
      acima. Expande, dentro do mesmo card, mostrando "Faturado por Município"
