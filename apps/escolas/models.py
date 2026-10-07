@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import models
@@ -555,6 +557,13 @@ class Lote(models.Model):
     # pelo botão "Criar LOTE" — sinalizado na tela "Projeto > MIP (LOTE)".
     importado_em_massa = models.BooleanField("Criado por importação em massa", default=False)
     arquivo_importacao = models.CharField("Arquivo da importação em massa", max_length=255, blank=True)
+    # Pedido do usuário (2026-10-07): no LOTE importado em massa, o valor de
+    # cada INEP é o valor faturado na planilha ("Valor Liberado ACS"), não o
+    # Valor Total (IXC) — o total de "Processo Concluído" tem que bater com
+    # a planilha mesmo quando o IXC lançado diverge. {INEP: "valor"}.
+    valores_faturados_planilha = models.JSONField(
+        "Valor faturado por INEP (planilha da importação em massa)", default=dict, blank=True
+    )
 
     class Meta:
         verbose_name = "Lote"
@@ -563,6 +572,13 @@ class Lote(models.Model):
 
     def __str__(self):
         return f"LOTE-{self.pk:04d}"
+
+    def valor_faturado_planilha(self, escola):
+        """Valor faturado do INEP na planilha da importação em massa
+        (`Decimal`), ou `None` quando o LOTE não é importado em massa ou o
+        INEP não tem valor guardado — aí vale o Valor Total (IXC)."""
+        valor = self.valores_faturados_planilha.get(escola.inep) if self.importado_em_massa else None
+        return Decimal(valor) if valor is not None else None
 
     def substituir_notas_fiscais_zip(self, arquivo, usuario):
         """Substitui o .zip de Notas Fiscais deste LOTE (pedido do usuário,

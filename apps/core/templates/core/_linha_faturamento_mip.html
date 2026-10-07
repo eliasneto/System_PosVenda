@@ -1,0 +1,28 @@
+{% load humanize %}
+{% comment %}
+Aba "Faturamento MIP" (pedido do usuário, 2026-10-07): 1 linha do gráfico por
+Estado/Município — "Processo Concluído" x Valor Total do Projeto (meta), barra
+proporcional à meta; a conferência da planilha só com `conferencia_planilha` (mesmo desenho de core/_linha_faturamento.html).
+{% endcomment %}
+<a href="{{ linha.href }}" class="block group">
+    <div class="flex items-center justify-between gap-3 text-xs font-bold mb-1.5">
+        <span class="truncate {% if linha.selecionado %}text-pv-yellow{% else %}text-gray-600 dark:text-gray-300{% endif %}">{{ linha.rotulo }}</span>
+        <span class="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-right min-w-0">
+            <span class="text-gray-500 dark:text-gray-400 tabular-nums whitespace-nowrap">R$ {{ linha.valor|intcomma }} concluído</span>
+            <span class="text-gray-300 dark:text-gray-600">·</span>
+            <span class="text-gray-400 dark:text-gray-500 tabular-nums whitespace-nowrap">Meta: R$ {{ linha.meta|intcomma }}</span>
+            {% if conferencia_planilha %}
+            <span class="text-gray-300 dark:text-gray-600">·</span>
+            {% if linha.diferenca_planilha == 0 %}
+            <span class="text-emerald-600 dark:text-emerald-400 whitespace-nowrap" title="Concluído bate com a planilha (R$ {{ linha.valor_planilha|intcomma }})">Planilha ✓</span>
+            {% else %}
+            <span class="text-amber-600 dark:text-amber-400 tabular-nums whitespace-nowrap" title="Concluído - planilha">Planilha: R$ {{ linha.valor_planilha|intcomma }}</span>
+            {% endif %}
+            {% endif %}
+        </span>
+    </div>
+    <div class="h-2.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+        <div class="h-full rounded-full transition-all {% if linha.selecionado %}bg-pv-yellow{% elif conferencia_planilha and linha.diferenca_planilha == 0 %}bg-emerald-500{% else %}bg-gray-400 dark:bg-gray-600 group-hover:bg-pv-yellow/70{% endif %}"
+             style="width: {{ linha.percentual_css }}%"></div>
+    </div>
+</a>

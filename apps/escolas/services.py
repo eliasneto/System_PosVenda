@@ -1040,7 +1040,14 @@ def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_
         estado=estado, municipio=municipio, data_inicio=data_inicio, data_fim=data_fim, criado_por=usuario,
         status=Lote.EM_ANDAMENTO,
     )
-    lote.escolas.set(escolas)
+    _colocar_escolas_no_lote(lote, escolas, usuario)
+    return lote
+
+
+def _colocar_escolas_no_lote(lote, escolas, usuario):
+    """Junta os INEPs ao LOTE: "Em Andamento MIP" + 2 entradas no histórico
+    do RI atual (Status (MIP) e número do LOTE) — ver `criar_lote_mip`."""
+    lote.escolas.add(*escolas)
     for escola in escolas:
         status_anterior = escola.get_status_mip_display()
         escola.status_mip = Escola.EM_ANDAMENTO
@@ -1052,7 +1059,6 @@ def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_
                 ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
             )
             _registrar_log_campo_lote(ri_atual, usuario, "LOTE", "", str(lote))
-    return lote
 
 
 @transaction.atomic
@@ -1206,6 +1212,11 @@ MOTIVO_IMPORTACAO_JA_EM_LOTE = "ja_em_lote"
 MOTIVO_IMPORTACAO_NAO_CADASTRADO = "nao_cadastrado"
 MOTIVO_IMPORTACAO_STATUS = "status_mip_nao_elegivel"
 MOTIVO_IMPORTACAO_VALOR = "valor_divergente"
+# Pedido do usuário (2026-10-07): com `incluir_divergentes`, o INEP que
+# ficaria de fora (Status (MIP) não elegível ou valores não batendo) entra
+# no LOTE mesmo assim, valendo o valor faturado na planilha — o Lado IXC
+# não é alterado e a divergência continua visível no drill-down do LOTE.
+MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA = "incluido_valor_planilha"
 
 
 class _DesfazerPreenchimentoLado3(Exception):
@@ -1249,6 +1260,14 @@ def _registrar_historico_importacao_em_massa(escola, registro, lote, usuario, no
         linha_equipamentos = f"- Equipamentos (Relatório EACE MIP): incluídos pela planilha — {itens}"
     else:
         linha_equipamentos = "- Equipamentos: sem alteração"
+    if registro["motivo"] == MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA:
+        total_ixc = f"R$ {registro['total_ixc']}" if registro["total_ixc"] is not None else "incompleto/vazio"
+        linha_valor = (
+            f"- Valor no LOTE: R$ {registro['total_planilha']} faturado na planilha "
+            f"(Valor Total IXC: {total_ixc} — divergente, IXC não alterado)"
+        )
+    else:
+        linha_valor = f"- Valor no LOTE: R$ {registro['total_planilha']} faturado na planilha (igual ao IXC)"
     municipio_anterior = registro.get("municipio_anterior")
     nome_usuario = (usuario.get_full_name() or usuario.username) if usuario else "Sistema"
     linhas = [
@@ -1256,6 +1275,7 @@ def _registrar_historico_importacao_em_massa(escola, registro, lote, usuario, no
         f"por {nome_usuario} (arquivo {nome_arquivo}).",
         "Alterações:",
         f"- LOTE: {lote} ({lote.municipio}/{lote.estado})",
+        linha_valor,
         mudanca("Status (MIP)", registro["status_mip_antes"], escola.get_status_mip_display()),
         mudanca("Status do RI", registro["status_ri_antes"], ri_atual.get_status_display()),
         linha_equipamentos,
@@ -1266,13 +1286,20 @@ def _registrar_historico_importacao_em_massa(escola, registro, lote, usuario, no
     )
 
 
-def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo):
+def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo, incluir_divergentes=False):
     """`linhas_por_inep`: {INEP (8 dígitos): [linhas]} no formato de
     `_agrupar_linhas_relatorio_eace_mip_por_inep`, com a chave extra
     `valor_liberado` (Decimal, coluna "Valor Liberado ACS"). Grava tudo
     numa transação (quem chama decide se desfaz, ex.: simulação) e
     devolve `{"ineps": [...], "lotes": [...]}` — 1 entrada por INEP com o
-    motivo de inclusão/exclusão e os 3 totais (planilha, IXC, EACE)."""
+    motivo de inclusão/exclusão e os 3 totais (planilha, IXC, EACE).
+
+    Todo LOTE criado aqui guarda o valor faturado de cada INEP
+    (`Lote.valores_faturados_planilha`), que é o valor do INEP no LOTE.
+    `incluir_divergentes` (pedido do usuário, 2026-10-07): o INEP fora de
+    LOTE que não passa na regra (Status (MIP) ou valores) entra mesmo
+    assim (`MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA`), para o total de
+    "Processo Concluído" bater com a planilha."""
     catalogo_kits = list(KitPadrao.objects.all())
     escolas = {
         escola.inep: escola
@@ -1300,14 +1327,19 @@ def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo):
             continue
         total_ixc, total_eace = _totais_lote_mip(escola, catalogo_kits)
         registro["total_ixc"], registro["total_eace"] = total_ixc, total_eace
-        if escola.status_mip != Escola.AGUARDANDO_VALIDACAO_EACE:
-            registro["motivo"] = MOTIVO_IMPORTACAO_STATUS
-            registro["status_mip"] = escola.get_status_mip_display() or "(sem Status (MIP))"
-            continue
-
         ri_antes = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
         registro["status_mip_antes"] = escola.get_status_mip_display()
         registro["status_ri_antes"] = ri_antes.get_status_display() if ri_antes else ""
+        chave_cidade = (escola.estado, _normalizar_texto_cidade(escola.municipio))
+        if escola.status_mip != Escola.AGUARDANDO_VALIDACAO_EACE:
+            registro["status_mip"] = escola.get_status_mip_display() or "(sem Status (MIP))"
+            if incluir_divergentes:
+                registro["motivo"] = MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA
+                candidatos.setdefault(chave_cidade, []).append((escola, registro))
+            else:
+                registro["motivo"] = MOTIVO_IMPORTACAO_STATUS
+            continue
+
         lado3_vazio = not escola.itens_relatorio_eace_mip.exists()
         if lado3_vazio and total_ixc is not None and total_ixc == total_planilha:
             try:
@@ -1322,12 +1354,12 @@ def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo):
                 total_ixc, total_eace = _totais_lote_mip(escola, catalogo_kits)
 
         if total_ixc is None or total_ixc != total_eace or total_eace != total_planilha:
-            registro["motivo"] = MOTIVO_IMPORTACAO_VALOR
+            registro["motivo"] = MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA if incluir_divergentes else MOTIVO_IMPORTACAO_VALOR
+            if incluir_divergentes:
+                candidatos.setdefault(chave_cidade, []).append((escola, registro))
             continue
         registro["motivo"] = MOTIVO_IMPORTACAO_INCLUIDO
-        candidatos.setdefault((escola.estado, _normalizar_texto_cidade(escola.municipio)), []).append(
-            (escola, registro)
-        )
+        candidatos.setdefault(chave_cidade, []).append((escola, registro))
 
     lotes = []
     for (estado, _municipio_normalizado), itens in sorted(candidatos.items()):
@@ -1353,14 +1385,28 @@ def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo):
                 exigir_relatorio_eace_mip=False,
             )
         except LoteMipError:
-            for _, registro in itens:
-                registro["motivo"] = MOTIVO_IMPORTACAO_VALOR
-            continue
+            if not incluir_divergentes:
+                for _, registro in itens:
+                    registro["motivo"] = MOTIVO_IMPORTACAO_VALOR
+                continue
+            lote = Lote.objects.create(estado=estado, municipio=municipio, criado_por=usuario, status=Lote.EM_ANDAMENTO)
+        if incluir_divergentes:
+            # Quem a regra do LOTE (`criar_lote_mip`) não aceitou entra
+            # valendo o valor faturado na planilha.
+            ids_aceitos = set(lote.escolas.values_list("pk", flat=True))
+            fora_da_regra = [escola for escola, _ in itens if escola.pk not in ids_aceitos]
+            _colocar_escolas_no_lote(lote, fora_da_regra, usuario)
+            for escola, registro in itens:
+                if escola in fora_da_regra:
+                    registro["motivo"] = MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA
         lote.importado_em_massa = True
         lote.arquivo_importacao = nome_arquivo
-        lote.save(update_fields=["importado_em_massa", "arquivo_importacao"])
-        aplicar_status_lote_mip(lote, Lote.FATURAMENTO_CONCLUIDO, usuario)
         ids_no_lote = set(lote.escolas.values_list("pk", flat=True))
+        lote.valores_faturados_planilha = {
+            escola.inep: str(registro["total_planilha"]) for escola, registro in itens if escola.pk in ids_no_lote
+        }
+        lote.save(update_fields=["importado_em_massa", "arquivo_importacao", "valores_faturados_planilha"])
+        aplicar_status_lote_mip(lote, Lote.FATURAMENTO_CONCLUIDO, usuario)
         for escola, registro in itens:
             if escola.pk in ids_no_lote:
                 registro["lote"] = str(lote)
@@ -1369,6 +1415,25 @@ def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo):
                 registro["motivo"] = MOTIVO_IMPORTACAO_VALOR
         lotes.append(lote)
     return {"ineps": resultado_ineps, "lotes": lotes}
+
+
+def valor_total_lotes_mip_por_status():
+    """{status do LOTE: valor total} pela mesma regra da coluna "Valor
+    Total do LOTE" da tela "Projeto > MIP (LOTE)" (`mip_lote_inep_view`):
+    por INEP, o faturado na planilha (LOTE importado em massa) ou o Valor
+    Total (IXC). Usado na conferência da importação em massa."""
+    catalogo_kits = list(KitPadrao.objects.all())
+    totais = {status: Decimal("0.00") for status, _ in Lote.STATUS_CHOICES}
+    for lote in Lote.objects.prefetch_related("escolas__ris__itens_ixc"):
+        for escola in lote.escolas.all():
+            valor = lote.valor_faturado_planilha(escola)
+            if valor is None:
+                ris_da_escola = list(escola.ris.all())
+                valor, _incompleto = _valor_total_itens(
+                    _resolver_lado_ixc(ris_da_escola[0] if ris_da_escola else None, escola.lote, catalogo_kits)
+                )
+            totais[lote.status] += valor or Decimal("0.00")
+    return totais
 
 
 # Pedido do usuario (2026-09-15): envio de e-mail do LOTE comentado (nao
@@ -1908,3 +1973,230 @@ def _montar_planilha_faturamento_implantacao_de_contribuicoes(contribuicoes, *, 
     aba["H10"] = float(total_valor_ixc)
 
     return workbook
+
+
+# ---------------------------------------------------------------------------
+# Pedido do usuário (2026-10-07): aba "Faturamento MIP" do Dashboard — mesmo
+# formato da aba Faturamento (RI), comparando o valor do MIP no sistema, por
+# Status (MIP), com a planilha "BASE CONSOLIDADA MIP" (total faturado).
+# ---------------------------------------------------------------------------
+
+CAMINHO_BASE_CONSOLIDADA_MIP = settings.BASE_DIR / "doc" / "BASE CONSOLIDADA MIP 2026.xlsb"
+_cache_planilha_mip = {}
+
+
+def valores_planilha_base_consolidada_mip(caminho=None):
+    """{INEP: {"valor", "uf", "cidade"}} da planilha "BASE CONSOLIDADA MIP"
+    (soma do "Valor Liberado ACS" por INEP), ou `None` sem a planilha.
+    Guardado em memória enquanto o arquivo não muda (mesma data de
+    modificação) — a planilha só é lida de novo quando é trocada."""
+    from apps.escolas.management.commands.importar_lotes_mip_em_massa import _abas_da_planilha, _linhas_por_inep
+
+    caminho = caminho or CAMINHO_BASE_CONSOLIDADA_MIP
+    try:
+        chave = (str(caminho), os.path.getmtime(caminho))
+    except OSError:
+        return None
+    if chave not in _cache_planilha_mip:
+        try:
+            _aba, linhas_por_inep = _linhas_por_inep(_abas_da_planilha(caminho))
+        except Exception:
+            logger.exception("Não foi possível ler a planilha %s", caminho)
+            return None
+        _cache_planilha_mip.clear()
+        _cache_planilha_mip[chave] = {
+            inep: {
+                "valor": sum((linha["valor_liberado"] for linha in linhas), Decimal("0.00")),
+                "uf": str(linhas[0]["uf"] or "").strip().upper(),
+                "cidade": str(linhas[0]["cidade"] or "").strip(),
+            }
+            for inep, linhas in linhas_por_inep.items()
+        }
+    return _cache_planilha_mip[chave]
+
+
+def _valor_inep_mip(escola, catalogo_kits):
+    """Valor do INEP no MIP — mesma regra da coluna "Valor Total do LOTE"
+    (`mip_lote_inep_view`): no LOTE importado em massa, o faturado na
+    planilha; senão (ou sem LOTE), o Valor Total (IXC)."""
+    for lote in escola.lotes.all():
+        valor = lote.valor_faturado_planilha(escola)
+        if valor is not None:
+            return valor
+    ris_da_escola = list(escola.ris.all())
+    valor, _incompleto = _valor_total_itens(
+        _resolver_lado_ixc(ris_da_escola[0] if ris_da_escola else None, escola.lote, catalogo_kits)
+    )
+    return valor
+
+
+def _percentual_css(valor, total):
+    if not total:
+        return "0"
+    return str(min(Decimal("100"), valor / total * 100).quantize(Decimal("0.1")))
+
+
+def _meta_servico_por_escola(catalogo_kits):
+    """{INEP: (estado, município, valor)} — "Valor Total do Projeto" do
+    MIP, pedido do usuário (2026-10-07): Kit + Nobreak iniciais (1º lado)
+    de cada escola, pelo valor de SERVIÇO da LPU por Lote — mesma conta do
+    card da aba Faturamento (`montar_dashboard_financeiro`), que usa o
+    valor de equipamento. Sem correspondência no catálogo, conta zero."""
+    def servico(item):
+        return Decimal(str(item.valor_servico)) if item and item.valor_servico not in (None, "") else Decimal("0")
+
+    metas = {}
+    for escola in Escola.objects.only("inep", "estado", "municipio", "kit_inicial", "nobreak_inicial", "lote"):
+        kit = KitPadrao.resolver_kit_declarado(escola.kit_inicial, lote=escola.lote, catalogo=catalogo_kits)
+        nobreak = KitPadrao.resolver_nobreak_declarado(escola.nobreak_inicial, lote=escola.lote, catalogo=catalogo_kits)
+        metas[escola.inep] = (escola.estado, escola.municipio, servico(kit) + servico(nobreak))
+    return metas
+
+
+def montar_dashboard_faturamento_mip(
+    *, estado=None, municipio=None, status_selecionado=None, uf_selecionada=None, conferencia_planilha=False,
+):
+    """Dados da aba "Faturamento MIP". Cada INEP do MIP (com Status (MIP))
+    entra no seu status com o valor do sistema (`_valor_inep_mip`) e o
+    valor da planilha; INEP da planilha que não está no MIP entra só no
+    total da planilha. Estado/Município vêm do cadastro da Escola (da
+    planilha, para INEP não cadastrado); `municipio` só vale com `estado`.
+    A meta (Valor Total do Projeto) é `_meta_servico_por_escola`.
+
+    `conferencia_planilha` (`settings.MIP_CONFERENCIA_PLANILHA`, pedido do
+    usuário: só na validação local, nunca em produção): sem ela a planilha
+    nem é lida e todos os valores de planilha ficam vazios."""
+    planilha = (valores_planilha_base_consolidada_mip() or {}) if conferencia_planilha else {}
+    catalogo_kits = list(KitPadrao.objects.all())
+    escolas = (
+        (Escola.objects.exclude(status_mip="") | Escola.objects.filter(inep__in=list(planilha)))
+        .distinct()
+        .prefetch_related("lotes", Prefetch("ris", queryset=Ri.objects.prefetch_related("itens_ixc")))
+    )
+    zero = Decimal("0.00")
+
+    registros = []
+    for escola in escolas:
+        dado_planilha = planilha.get(escola.inep) or {}
+        registros.append({
+            "inep": escola.inep,
+            "nome": escola.nome,
+            "estado": escola.estado or dado_planilha.get("uf", ""),
+            "municipio": escola.municipio or dado_planilha.get("cidade", ""),
+            "status": escola.status_mip or "",
+            "valor": (_valor_inep_mip(escola, catalogo_kits) or zero) if escola.status_mip else zero,
+            "valor_planilha": dado_planilha.get("valor"),
+        })
+    cadastrados = {registro["inep"] for registro in registros}
+    for inep, dado in planilha.items():
+        if inep not in cadastrados:
+            registros.append({
+                "inep": inep, "nome": "(INEP não cadastrado)", "estado": dado["uf"], "municipio": dado["cidade"],
+                "status": "", "valor": zero, "valor_planilha": dado["valor"],
+            })
+
+    def soma(itens, chave="valor"):
+        return sum((registro[chave] for registro in itens if registro[chave] is not None), zero)
+
+    def no_estado(registro):
+        return not estado or registro["estado"] == estado
+
+    def no_recorte(registro):
+        return no_estado(registro) and (
+            not municipio or _normalizar_texto_cidade(registro["municipio"]) == _normalizar_texto_cidade(municipio)
+        )
+
+    metas = [
+        {"estado": uf, "municipio": cidade, "valor": valor}
+        for uf, cidade, valor in _meta_servico_por_escola(catalogo_kits).values()
+    ]
+    recorte = [registro for registro in registros if no_recorte(registro)]
+    concluido = [registro for registro in recorte if registro["status"] == Escola.FATURAMENTO_CONCLUIDO]
+    total_projeto = soma([meta for meta in metas if no_recorte(meta)])
+    total_planilha = soma(recorte, "valor_planilha")
+    total_concluido = soma(concluido)
+    percentual_css = _percentual_css(total_concluido, total_projeto)
+
+    cards = []
+    for status, rotulo in Escola.STATUS_MIP_CHOICES:
+        do_status = [registro for registro in recorte if registro["status"] == status]
+        cards.append({
+            "status": status,
+            "rotulo": rotulo,
+            "valor": soma(do_status),
+            "valor_planilha": soma(do_status, "valor_planilha"),
+            "quantidade_ineps": len(do_status),
+            "na_planilha": sum(1 for registro in do_status if registro["valor_planilha"] is not None),
+        })
+    fora_do_mip = [registro for registro in recorte if not registro["status"] and registro["valor_planilha"] is not None]
+
+    por_estado = []
+    if status_selecionado:
+        agrupado = {}
+        for registro in recorte:
+            if registro["status"] == status_selecionado:
+                agrupado.setdefault(registro["estado"] or "(sem UF)", []).append(registro)
+        total_por_uf = {uf: soma(itens) for uf, itens in agrupado.items()}
+        maior = max(total_por_uf.values(), default=zero)
+        for uf, itens in sorted(agrupado.items(), key=lambda par: -total_por_uf[par[0]]):
+            por_estado.append({
+                "estado": uf,
+                "valor": total_por_uf[uf],
+                "valor_planilha": soma(itens, "valor_planilha"),
+                "quantidade_ineps": len(itens),
+                "percentual_css": _percentual_css(total_por_uf[uf], maior),
+                "ineps": sorted(itens, key=lambda registro: registro["inep"]) if uf == uf_selecionada else [],
+            })
+
+    def linhas_grafico(chave, itens, metas_do_grafico):
+        """Processo Concluído (sistema) x Valor Total do Projeto, por Estado
+        ou Município (barra = % da meta, ordem do maior % para o menor —
+        mesma regra da aba Faturamento), com a conferência da planilha."""
+        agrupado, meta_por_rotulo = {}, {}
+        for registro in itens:
+            agrupado.setdefault(registro[chave] or "(vazio)", []).append(registro)
+        for meta in metas_do_grafico:
+            rotulo = meta[chave] or "(vazio)"
+            meta_por_rotulo[rotulo] = meta_por_rotulo.get(rotulo, zero) + meta["valor"]
+            agrupado.setdefault(rotulo, [])
+        linhas = []
+        for rotulo, grupo in agrupado.items():
+            valor_planilha = soma(grupo, "valor_planilha")
+            valor_concluido = soma([r for r in grupo if r["status"] == Escola.FATURAMENTO_CONCLUIDO])
+            valor_meta = meta_por_rotulo.get(rotulo, zero)
+            if valor_planilha or valor_concluido or valor_meta:
+                linhas.append({
+                    "rotulo": rotulo, "valor": valor_concluido, "meta": valor_meta,
+                    "valor_planilha": valor_planilha, "diferenca_planilha": valor_concluido - valor_planilha,
+                    "percentual": valor_concluido / valor_meta * 100 if valor_meta else Decimal("0"),
+                    "percentual_css": _percentual_css(valor_concluido, valor_meta),
+                })
+        return sorted(linhas, key=lambda linha: (-linha["percentual"], -linha["valor"]))
+
+    return {
+        "conferencia_planilha": conferencia_planilha,
+        "planilha_encontrada": bool(planilha),
+        "arquivo_planilha": CAMINHO_BASE_CONSOLIDADA_MIP.name,
+        "total_projeto": total_projeto,
+        "escolas_projeto": sum(1 for meta in metas if no_recorte(meta)),
+        "falta_projeto": max(total_projeto - total_concluido, zero),
+        "excedente_projeto": max(total_concluido - total_projeto, zero),
+        "total_planilha": total_planilha,
+        "ineps_planilha": sum(1 for registro in recorte if registro["valor_planilha"] is not None),
+        "total_concluido": total_concluido,
+        "ineps_concluido": len(concluido),
+        "diferenca": total_concluido - total_planilha,
+        "diferenca_abs": abs(total_concluido - total_planilha),
+        "percentual_pct": total_concluido / total_projeto * 100 if total_projeto else Decimal("0"),
+        "percentual_css": percentual_css,
+        "percentual_faltante_css": str(Decimal("100") - Decimal(percentual_css)),
+        "cards": cards,
+        "fora_do_mip": len(fora_do_mip),
+        "valor_fora_do_mip": soma(fora_do_mip, "valor_planilha"),
+        "por_estado": por_estado,
+        "grafico_estado": linhas_grafico("estado", registros, metas),
+        "grafico_municipio": (
+            linhas_grafico("municipio", [r for r in registros if no_estado(r)], [m for m in metas if no_estado(m)])
+            if estado else []
+        ),
+    }

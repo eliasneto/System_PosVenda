@@ -6,17 +6,20 @@ from pathlib import Path
 import openpyxl
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import connection, transaction
 
-from apps.escolas.models import PlanilhaRelatorioEaceMip
+from apps.core.services import BackupError, criar_backup_seguranca
+from apps.escolas.models import Lote, PlanilhaRelatorioEaceMip
 from apps.escolas.services import (
     MOTIVO_IMPORTACAO_INCLUIDO,
+    MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA,
     MOTIVO_IMPORTACAO_JA_EM_LOTE,
     MOTIVO_IMPORTACAO_NAO_CADASTRADO,
     MOTIVO_IMPORTACAO_STATUS,
     MOTIVO_IMPORTACAO_VALOR,
     _normalizar_cabecalho,
     importar_lotes_mip_em_massa,
+    valor_total_lotes_mip_por_status,
 )
 
 COLUNA_VALOR_LIBERADO = "VALOR LIBERADO ACS"
@@ -24,6 +27,7 @@ COLUNAS_EXIGIDAS = set(PlanilhaRelatorioEaceMip.COLUNAS_OBRIGATORIAS) | {COLUNA_
 
 ROTULOS_MOTIVO = {
     MOTIVO_IMPORTACAO_INCLUIDO: "Incluído em LOTE",
+    MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA: "Incluído em LOTE com o valor da planilha (IXC diverge ou Status (MIP) fora da regra)",
     MOTIVO_IMPORTACAO_JA_EM_LOTE: "Já estava em LOTE (não mexido)",
     MOTIVO_IMPORTACAO_NAO_CADASTRADO: "INEP não cadastrado no sistema",
     MOTIVO_IMPORTACAO_STATUS: 'Status (MIP) diferente de "Aguardando Validação EACE"',
@@ -33,6 +37,17 @@ ROTULOS_MOTIVO = {
 
 class _SimulacaoConcluida(Exception):
     """Desfaz a transação no fim da simulação."""
+
+
+def _devolver_numeracao_dos_lotes():
+    """O MySQL não devolve o AUTO_INCREMENT no rollback — sem isto, cada
+    simulação "gasta" números e os LOTEs reais (LOTE-<pk>) saem com buraco
+    na numeração. `AUTO_INCREMENT = 1` faz o MySQL voltar para MAX(id)+1.
+    Só fora de transação: ALTER TABLE faz COMMIT implícito no MySQL e
+    efetivaria uma transação de fora (ex.: a de cada teste)."""
+    if connection.vendor == "mysql" and not connection.in_atomic_block:
+        with connection.cursor() as cursor:
+            cursor.execute(f"ALTER TABLE {connection.ops.quote_name(Lote._meta.db_table)} AUTO_INCREMENT = 1")
 
 
 def _abas_da_planilha(caminho):
@@ -129,6 +144,11 @@ class Command(BaseCommand):
         parser.add_argument("--usuario", required=True, help="Username gravado como autor dos LOTEs e dos históricos.")
         parser.add_argument("--relatorio", help="Caminho de um .csv com o resultado de cada INEP.")
         parser.add_argument("--aplicar", action="store_true", help="Grava de verdade (sem isto, só simula).")
+        parser.add_argument(
+            "--incluir-divergentes", action="store_true",
+            help="Inclui também o INEP fora de LOTE que não passa na regra (valores ou Status (MIP)), "
+            "valendo o valor faturado na planilha.",
+        )
 
     def handle(self, *args, **opcoes):
         caminho = Path(opcoes["arquivo"])
@@ -148,17 +168,30 @@ class Command(BaseCommand):
             f"Modo: {'APLICAR (grava de verdade)' if aplicar else 'SIMULACAO (nada é gravado)'}"
         )
 
+        if aplicar:
+            # Mesmo backup de segurança da tela Administrador > Backup — sem
+            # backup confirmado, não grava.
+            try:
+                backup = criar_backup_seguranca(usuario.username)
+            except BackupError as erro:
+                raise CommandError(f"Backup do banco falhou - nada foi gravado: {erro}")
+            self.stdout.write(f"Backup de segurança: {backup}")
+
         resultado = None
         try:
             with transaction.atomic():
-                resultado = importar_lotes_mip_em_massa(linhas_por_inep, usuario, nome_arquivo=caminho.name)
+                resultado = importar_lotes_mip_em_massa(
+                    linhas_por_inep, usuario, nome_arquivo=caminho.name,
+                    incluir_divergentes=opcoes["incluir_divergentes"],
+                )
+                totais_por_status = valor_total_lotes_mip_por_status()
                 resumo_lotes = [
                     (str(lote), lote.estado, lote.municipio, lote.escolas.count()) for lote in resultado["lotes"]
                 ]
                 if not aplicar:
                     raise _SimulacaoConcluida
         except _SimulacaoConcluida:
-            pass
+            _devolver_numeracao_dos_lotes()
 
         ineps = resultado["ineps"]
         contagem = Counter(registro["motivo"] for registro in ineps)
@@ -183,7 +216,27 @@ class Command(BaseCommand):
         for nome, estado, municipio, quantidade in resumo_lotes:
             self.stdout.write(f"  {nome} — {municipio}/{estado} — {quantidade} INEP(s)")
 
-        fora = [registro for registro in ineps if registro["motivo"] not in (MOTIVO_IMPORTACAO_INCLUIDO, MOTIVO_IMPORTACAO_JA_EM_LOTE)]
+        total_planilha = sum((registro["total_planilha"] for registro in ineps), Decimal("0.00"))
+        total_concluido = totais_por_status[Lote.FATURAMENTO_CONCLUIDO]
+        self.stdout.write("\nConferência de valores (depois da importação):")
+        self.stdout.write(f"  Total da planilha: R$ {total_planilha}")
+        self.stdout.write(f"  Total em \"Processo Concluído\" no sistema: R$ {total_concluido}")
+        diferenca = total_concluido - total_planilha
+        estilo = self.style.SUCCESS if diferenca == 0 else self.style.WARNING
+        self.stdout.write(estilo(f"  Diferença: R$ {diferenca}"))
+
+        divergentes = [registro for registro in ineps if registro["motivo"] == MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA]
+        if divergentes:
+            self.stdout.write("\nINEPs incluídos com o valor da planilha:")
+            for registro in divergentes:
+                self.stdout.write(
+                    f"  {registro['inep']} — planilha {registro['total_planilha']} | IXC {registro['total_ixc']}"
+                    f"{' | ' + registro['status_mip'] if registro.get('status_mip') else ''} — {registro['lote']}"
+                )
+
+        fora = [registro for registro in ineps if registro["motivo"] not in (
+            MOTIVO_IMPORTACAO_INCLUIDO, MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA, MOTIVO_IMPORTACAO_JA_EM_LOTE,
+        )]
         if fora:
             self.stdout.write("\nINEPs que ficaram de fora:")
             for registro in fora:

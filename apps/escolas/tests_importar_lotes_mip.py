@@ -1,21 +1,38 @@
 import io
 import shutil
 import tempfile
+from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 import openpyxl
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.escolas.models import Escola, EscolaItemRelatorioEaceMip, Lote
-from apps.escolas.services import _normalizar_texto_cidade, criar_lote_mip
+from apps.escolas.services import _normalizar_texto_cidade, criar_lote_mip, valor_total_lotes_mip_por_status
 from apps.escolas.tests import _criar_escola_elegivel_lote
 from apps.ri.models import KitPadrao, Ri, RiHistorico, RiItemIxc
 
 User = get_user_model()
+
+# `--aplicar` faz o backup de segurança do banco (mysqldump) antes de gravar
+# — simulado em todos os testes deste módulo.
+_PATCH_BACKUP = patch(
+    "apps.escolas.management.commands.importar_lotes_mip_em_massa.criar_backup_seguranca",
+    return_value="/backups/seguranca_teste.sql.gz",
+)
+
+
+def setUpModule():
+    _PATCH_BACKUP.start()
+
+
+def tearDownModule():
+    _PATCH_BACKUP.stop()
 
 CABECALHO = [
     "Projeto", "Cod Fornecedor", "Fornecedor", "Num Obra", "Cod Produto", "Descrição do Item", "Qtde Produto",
@@ -241,6 +258,74 @@ class ImportarLotesMipIxcComItemSemValorTests(TestCase):
         self.assertFalse(EscolaItemRelatorioEaceMip.objects.filter(escola=escola).exists())
 
 
+class ImportarLotesMipIncluirDivergentesTests(TestCase):
+    """Pedido do usuário (2026-10-07): `--incluir-divergentes` — o total de
+    "Processo Concluído" tem que bater com a planilha; quem diverge entra
+    valendo o faturado na planilha, sem mexer no Lado IXC."""
+
+    setUp = ImportarLotesMipEmMassaTests.setUp
+    _planilha = ImportarLotesMipEmMassaTests._planilha
+    _rodar = ImportarLotesMipEmMassaTests._rodar
+
+    def test_sem_a_opcao_divergente_continua_de_fora(self):
+        _criar_escola_elegivel_lote("20100001")
+        saida = self._rodar(self._planilha([_linha("20100001", "999.00")]), "--aplicar")
+        self.assertIn("Valor da planilha, IXC e EACE não batem: 1", saida)
+        self.assertEqual(Lote.objects.count(), 0)
+
+    def test_divergentes_entram_com_valor_da_planilha_e_total_bate(self):
+        _criar_escola_elegivel_lote("20100010")  # bate: 300
+        divergente, ri_divergente = _criar_escola_elegivel_lote("20100011")  # IXC 300, planilha 999
+        em_andamento, _ = _criar_escola_elegivel_lote("20100012")  # Status (MIP) fora da regra
+        em_andamento.status_mip = Escola.EM_ANDAMENTO
+        em_andamento.save()
+        saida = self._rodar(self._planilha([
+            _linha("20100010"), _linha("20100011", "999.00"), _linha("20100012", "450.00"),
+        ]), "--aplicar", "--incluir-divergentes")
+
+        lote = Lote.objects.get()
+        self.assertEqual(lote.status, Lote.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(lote.escolas.count(), 3)
+        self.assertEqual(
+            lote.valores_faturados_planilha, {"20100010": "300.00", "20100011": "999.00", "20100012": "450.00"}
+        )
+        self.assertEqual(lote.valor_faturado_planilha(divergente), Decimal("999.00"))
+        self.assertEqual(valor_total_lotes_mip_por_status()[Lote.FATURAMENTO_CONCLUIDO], Decimal("1749.00"))
+        self.assertIn("Diferença: R$ 0.00", saida)
+        self.assertIn("Incluído em LOTE com o valor da planilha (IXC diverge ou Status (MIP) fora da regra): 2", saida)
+
+        # Lado IXC intacto; histórico explica o valor.
+        self.assertEqual(ri_divergente.itens_ixc.get().descricao_item, "Kit Cobertura Wi-Fi - 2 Access Points")
+        mensagem = RiHistorico.objects.get(ri=ri_divergente, tipo=RiHistorico.IMPORTACAO_MASSA).mensagem
+        self.assertIn("R$ 999.00 faturado na planilha (Valor Total IXC: R$ 300.00 — divergente", mensagem)
+        em_andamento.refresh_from_db()
+        self.assertEqual(em_andamento.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+
+    def test_cidade_so_com_divergentes_tambem_ganha_lote(self):
+        _criar_escola_elegivel_lote("20100020")
+        self._rodar(self._planilha([_linha("20100020", "999.00")]), "--aplicar", "--incluir-divergentes")
+        lote = Lote.objects.get()
+        self.assertTrue(lote.importado_em_massa)
+        self.assertEqual(valor_total_lotes_mip_por_status()[Lote.FATURAMENTO_CONCLUIDO], Decimal("999.00"))
+
+    def test_tela_de_lotes_usa_valor_da_planilha_no_total_por_status(self):
+        _criar_escola_elegivel_lote("20100030")
+        self._rodar(self._planilha([_linha("20100030", "999.00")]), "--aplicar", "--incluir-divergentes")
+        self.usuario.is_superuser = True
+        self.usuario.save()
+        self.client.force_login(self.usuario)
+        resposta = self.client.get(reverse("mip_lote_inep"))
+        concluido = next(r for r in resposta.context["resumo_por_status"] if r["status"] == Lote.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(concluido["valor_total"], Decimal("999.00"))
+        self.assertContains(resposta, "No LOTE: R$ 999")
+
+    def test_lote_criado_pela_tela_continua_usando_ixc(self):
+        escola, _ = _criar_escola_elegivel_lote("20100040")
+        lote = criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
+        self.assertIsNone(lote.valor_faturado_planilha(escola))
+        self.assertEqual(valor_total_lotes_mip_por_status()[Lote.EM_ANDAMENTO], Decimal("300.00"))
+
+
 class NormalizarTextoCidadeTests(TestCase):
     """Cidade do rateio × Município do LOTE: acento e caixa não importam."""
 
@@ -451,3 +536,116 @@ class RetirarDoGridMipTests(TestCase):
         # Confirmação pelo modal padrão do sistema (`core/_modal_confirmar.html`), não pelo `confirm()`.
         self.assertEqual(html.count('data-confirmar-texto-botao="Retirar da lista"'), 4)
         self.assertNotIn("return confirm(", html)
+
+
+@override_settings(MIP_CONFERENCIA_PLANILHA=True)
+class DashboardFaturamentoMipTests(TestCase):
+    """Pedido do usuário (2026-10-07): aba "Faturamento MIP" do Dashboard —
+    valor do MIP por Status (MIP) comparado com a planilha BASE CONSOLIDADA MIP."""
+
+    setUp_base = ImportarLotesMipEmMassaTests.setUp
+    _planilha = ImportarLotesMipEmMassaTests._planilha
+    _rodar = ImportarLotesMipEmMassaTests._rodar
+
+    def setUp(self):
+        self.setUp_base()
+        self.usuario.is_superuser = True
+        self.usuario.save()
+        self.client.force_login(self.usuario)
+
+    def _usar_planilha(self, caminho):
+        patcher = patch("apps.escolas.services.CAMINHO_BASE_CONSOLIDADA_MIP", Path(caminho))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_processo_concluido_bate_com_a_planilha(self):
+        _criar_escola_elegivel_lote("20200001")
+        _criar_escola_elegivel_lote("20200002")
+        _criar_escola_elegivel_lote("20200003", municipio="Goiânia")  # fica fora da planilha
+        caminho = self._planilha([_linha("20200001"), _linha("20200002", "999.00")])
+        self._rodar(caminho, "--aplicar", "--incluir-divergentes")
+        self._usar_planilha(caminho)
+
+        resposta = self.client.get(reverse("dashboard_faturamento_mip"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta.context["total_planilha"], Decimal("1299.00"))
+        self.assertEqual(resposta.context["total_concluido"], Decimal("1299.00"))
+        self.assertEqual(resposta.context["diferenca"], Decimal("0.00"))
+        self.assertContains(resposta, "bate ✓")
+        cards = {card["status"]: card for card in resposta.context["cards"]}
+        self.assertEqual(cards[Escola.FATURAMENTO_CONCLUIDO]["quantidade_ineps"], 2)
+        self.assertEqual(cards[Escola.AGUARDANDO_VALIDACAO_EACE]["valor"], Decimal("300.00"))
+        self.assertEqual(cards[Escola.AGUARDANDO_VALIDACAO_EACE]["valor_planilha"], Decimal("0.00"))
+
+    def test_diferenca_aparece_e_ineps_por_uf(self):
+        _criar_escola_elegivel_lote("20200010")
+        caminho_importacao = self._planilha([_linha("20200010")])
+        self._rodar(caminho_importacao, "--aplicar")
+        caminho_dashboard = self.tmp / "planilha_dashboard.xlsx"
+        Path(self._planilha([_linha("20200010"), _linha("29999990", "500.00")])).rename(caminho_dashboard)
+        self._usar_planilha(caminho_dashboard)
+
+        resposta = self.client.get(
+            reverse("dashboard_faturamento_mip"), {"status_mip": Escola.FATURAMENTO_CONCLUIDO, "status_uf": "GO"},
+        )
+        self.assertEqual(resposta.context["diferenca"], Decimal("-500.00"))
+        self.assertContains(resposta, "faltam R$ 500")
+        self.assertEqual(resposta.context["fora_do_mip"], 1)
+        self.assertEqual([item["inep"] for item in resposta.context["por_estado"][0]["ineps"]], ["20200010"])
+        self.assertContains(resposta, "Planilha ✓")
+
+    def test_filtro_por_estado(self):
+        _criar_escola_elegivel_lote("20200020")
+        _criar_escola_elegivel_lote("20200021", estado="DF", municipio="Brasília")
+        caminho = self._planilha([_linha("20200020"), _linha("20200021", cidade="Brasília", uf="DF")])
+        self._rodar(caminho, "--aplicar")
+        self._usar_planilha(caminho)
+        resposta = self.client.get(reverse("dashboard_faturamento_mip"), {"estado": "DF"})
+        self.assertEqual(resposta.context["total_planilha"], Decimal("300.00"))
+        self.assertEqual([linha["rotulo"] for linha in resposta.context["grafico_municipio"]], ["Brasília"])
+
+    def test_valor_total_do_projeto_usa_valor_de_servico_da_lpu(self):
+        KitPadrao.objects.create(
+            descricao="Nobreak (serviço, material, equipamento)", lote=9,
+            valor_equipamento="900.00", valor_servico="50.00",
+        )
+        escola, _ = _criar_escola_elegivel_lote("20200030")
+        escola.kit_inicial, escola.nobreak_inicial = "2", "Nobreak"
+        escola.save()
+        Escola.objects.create(inep="20200031", nome="Sem kit", estado="GO", municipio="Abadiânia", lote=9)
+        caminho = self._planilha([_linha("20200030")])
+        self._rodar(caminho, "--aplicar")
+        self._usar_planilha(caminho)
+
+        resposta = self.client.get(reverse("dashboard_faturamento_mip"))
+        # Kit (serviço 300) + Nobreak (serviço 50) da 1ª escola + Nobreak
+        # padrão da 2ª (sem kit) — valor de serviço, nunca o de equipamento.
+        self.assertEqual(resposta.context["total_projeto"], Decimal("400.00"))
+        self.assertEqual(resposta.context["total_concluido"], Decimal("300.00"))
+        self.assertEqual(resposta.context["falta_projeto"], Decimal("100.00"))
+        self.assertContains(resposta, "Falta R$ 100")
+        linha_go = resposta.context["grafico_estado"][0]
+        self.assertEqual((linha_go["rotulo"], linha_go["meta"], linha_go["valor"]), ("GO", Decimal("400.00"), Decimal("300.00")))
+
+    @override_settings(MIP_CONFERENCIA_PLANILHA=False)
+    def test_producao_nao_mostra_nem_le_a_planilha(self):
+        _criar_escola_elegivel_lote("20200040")
+        caminho = self._planilha([_linha("20200040")])
+        self._rodar(caminho, "--aplicar")
+        self._usar_planilha(caminho)
+        with patch("apps.escolas.services.valores_planilha_base_consolidada_mip") as ler_planilha:
+            resposta = self.client.get(
+                reverse("dashboard_faturamento_mip"), {"status_mip": Escola.FATURAMENTO_CONCLUIDO, "status_uf": "GO"},
+            )
+        ler_planilha.assert_not_called()
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta.context["total_concluido"], Decimal("300.00"))
+        for texto in ("BASE CONSOLIDADA", "Planilha:", "Planilha ✓", "Fora da planilha", "bate ✓", "não encontrada"):
+            self.assertNotContains(resposta, texto)
+        self.assertContains(resposta, "20200040")
+
+    def test_sem_planilha_avisa(self):
+        self._usar_planilha(self.tmp / "nao-existe.xlsb")
+        resposta = self.client.get(reverse("dashboard_faturamento_mip"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "não encontrada")

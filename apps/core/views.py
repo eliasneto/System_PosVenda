@@ -1,6 +1,7 @@
 from datetime import datetime
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
@@ -8,6 +9,8 @@ from django.db import connections
 from django.http import FileResponse, Http404, HttpResponseForbidden, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render, resolve_url
 
+from apps.escolas.models import Escola
+from apps.escolas.services import montar_dashboard_faturamento_mip
 from apps.ri.models import Ri
 from apps.ri.services import (
     montar_dashboard_equipamentos,
@@ -142,6 +145,56 @@ def home(request):
     )
 
     return render(request, "core/home.html", contexto)
+
+
+@login_required
+def dashboard_faturamento_mip(request):
+    """Pedido do usuário (2026-10-07): aba "Faturamento MIP" — mesmo formato
+    da aba Faturamento, para conferir, por Status (MIP), se o valor do
+    sistema bate com a planilha "BASE CONSOLIDADA MIP"
+    (`montar_dashboard_faturamento_mip`). `?estado=UF[&municipio=]` filtra
+    tudo; `?status_mip=` abre o status por Estado e `?status_uf=` lista os
+    INEPs daquela UF — mesmos cliques da aba Faturamento. A comparação com
+    a planilha só aparece com `settings.MIP_CONFERENCIA_PLANILHA` (validação
+    local; em produção fica desligada, pedido do usuário)."""
+    estado = (request.GET.get("estado") or "").strip().upper()[:2] or None
+    municipio = ((request.GET.get("municipio") or "").strip()[:150] or None) if estado else None
+    status_mip = (request.GET.get("status_mip") or "").strip()
+    if status_mip not in dict(Escola.STATUS_MIP_CHOICES):
+        status_mip = None
+    status_uf = ((request.GET.get("status_uf") or "").strip()[:10] or None) if status_mip else None
+
+    contexto = montar_dashboard_faturamento_mip(
+        estado=estado, municipio=municipio, status_selecionado=status_mip, uf_selecionada=status_uf,
+        conferencia_planilha=settings.MIP_CONFERENCIA_PLANILHA,
+    )
+    filtros_base = {k: v for k, v in {"estado": estado, "municipio": municipio}.items() if v}
+    for card in contexto["cards"]:
+        card["selecionado"] = card["status"] == status_mip
+        params = dict(filtros_base)
+        if not card["selecionado"]:
+            params["status_mip"] = card["status"]
+        card["href"] = f"?{urlencode(params)}"
+    for linha in contexto["por_estado"]:
+        linha["selecionado"] = linha["estado"] == status_uf
+        params = {**filtros_base, "status_mip": status_mip}
+        if not linha["selecionado"]:
+            params["status_uf"] = linha["estado"]
+        linha["href"] = f"?{urlencode(params)}"
+    for linha in contexto["grafico_estado"]:
+        linha["selecionado"] = linha["rotulo"] == estado
+        linha["href"] = f"?{urlencode({'estado': linha['rotulo']})}"
+    for linha in contexto["grafico_municipio"]:
+        linha["selecionado"] = linha["rotulo"] == municipio
+        linha["href"] = f"?{urlencode({'estado': estado, 'municipio': linha['rotulo']})}"
+
+    contexto.update({
+        "estado_filtrado": estado,
+        "municipio_filtrado": municipio,
+        "recorte_label": f"{municipio}/{estado}" if municipio else estado,
+        "status_selecionado_rotulo": dict(Escola.STATUS_MIP_CHOICES).get(status_mip),
+    })
+    return render(request, "core/dashboard_faturamento_mip.html", contexto)
 
 
 @login_required

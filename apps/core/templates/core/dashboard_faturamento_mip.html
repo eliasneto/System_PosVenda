@@ -1,0 +1,236 @@
+{% extends "core/base.html" %}
+{% load humanize %}
+
+{% block title %}Faturamento MIP{% endblock %}
+
+{% block content %}
+{% comment %} Pedido do usuário (2026-10-07): aba "Faturamento MIP" — mesmo formato da
+     aba Faturamento (`montar_dashboard_faturamento_mip`). Tudo que fala da
+     planilha BASE CONSOLIDADA MIP só aparece com `conferencia_planilha`
+     (settings.MIP_CONFERENCIA_PLANILHA — validação local, nunca em produção). {% endcomment %}
+<div class="mb-8">
+    <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Dashboard</p>
+    <h1 class="text-2xl font-black text-gray-900 dark:text-gray-100 tracking-tight">Faturamento MIP</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+        Faturamento do MIP (serviço) por INEP{% if conferencia_planilha %} — conferência com a planilha {{ arquivo_planilha }}{% endif %}.
+    </p>
+</div>
+
+{% if conferencia_planilha and not planilha_encontrada %}
+<div class="mb-6 flex items-center gap-3 text-xs font-bold text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-2xl px-4 py-3">
+    <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+    Planilha "{{ arquivo_planilha }}" não encontrada na pasta doc/ do servidor — os valores da planilha aparecem zerados.
+</div>
+{% endif %}
+
+{% if estado_filtrado %}
+<div class="mb-4 flex flex-wrap items-center gap-3">
+    <span class="inline-flex items-center gap-2 text-xs font-black uppercase tracking-widest text-pv-yellow bg-pv-yellow/10 px-3 py-1.5 rounded-full">
+        <i data-lucide="map-pin" class="w-3.5 h-3.5"></i> Filtrado por {{ estado_filtrado }}{% if municipio_filtrado %} · {{ municipio_filtrado }}{% endif %}
+    </span>
+    <a href="{% url 'dashboard_faturamento_mip' %}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2">
+        Ver todos os estados
+    </a>
+</div>
+{% endif %}
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    {% comment %} Card 1 (pedido do usuário, 2026-10-07): Valor Total do Projeto do MIP —
+         Kit + Nobreak iniciais (1º lado), valor de SERVIÇO da LPU por Lote
+         (a aba Faturamento usa o valor de equipamento). {% endcomment %}
+    <div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+                <i data-lucide="target" class="w-5 h-5 text-pv-yellow"></i>
+            </div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Valor Total do Projeto</p>
+        </div>
+        <p class="text-3xl font-black text-gray-900 dark:text-gray-100 tracking-tight tabular-nums">
+            <span class="mr-1.5">R$</span>{{ total_projeto|intcomma }}
+        </p>
+        <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
+            Kit + Nobreak inicial (1º lado), valor de serviço da LPU{% if recorte_label %}, das escolas de {{ recorte_label }}{% else %}, de todas as escolas{% endif %} ({{ escolas_projeto }}).
+        </p>
+    </div>
+
+    {% comment %} Card 2: Processo Concluído x Valor Total do Projeto. {% endcomment %}
+    <div class="relative bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
+        <span class="absolute top-5 right-5 text-[11px] font-black px-2.5 py-1 rounded-full {% if not falta_projeto %}bg-emerald-500/10 text-emerald-600 dark:text-emerald-400{% else %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400{% endif %}">
+            {{ percentual_pct|floatformat:0 }}%
+        </span>
+        <div class="flex items-start justify-between gap-6">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-2xl {% if not falta_projeto %}bg-emerald-500/10{% else %}bg-red-500/10{% endif %} flex items-center justify-center">
+                        <i data-lucide="trending-up" class="w-5 h-5 {% if not falta_projeto %}text-emerald-500{% else %}text-red-500{% endif %}"></i>
+                    </div>
+                    <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Processo Concluído</p>
+                </div>
+                <p class="text-3xl font-black text-gray-900 dark:text-gray-100 tracking-tight tabular-nums">
+                    <span class="mr-1.5">R$</span>{{ total_concluido|intcomma }}
+                </p>
+                <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">{{ ineps_concluido }} INEP{{ ineps_concluido|pluralize }} em "Processo Concluído".</p>
+                {% if falta_projeto %}
+                <p class="text-xs font-bold text-red-600 dark:text-red-400 mt-2">
+                    Falta R$ {{ falta_projeto|intcomma }} para atingir o total{% if recorte_label %} de {{ recorte_label }}{% else %} do projeto{% endif %}.
+                </p>
+                {% else %}
+                <p class="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-2">
+                    Meta{% if recorte_label %} de {{ recorte_label }}{% endif %} atingida{% if excedente_projeto %} — R$ {{ excedente_projeto|intcomma }} acima do total{% endif %}.
+                </p>
+                {% endif %}
+                {% if conferencia_planilha %}
+                {% comment %} Conferência com a planilha (total faturado) — só validação local. {% endcomment %}
+                <p class="flex flex-wrap items-center gap-1.5 text-[11px] font-bold mt-3 pt-3 border-t border-gray-100 dark:border-gray-800 {% if diferenca == 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}"
+                   title="Total da planilha {{ arquivo_planilha }} ({{ ineps_planilha }} INEPs){% if fora_do_mip %} — {{ fora_do_mip }} INEP(s) da planilha fora do MIP no sistema (R$ {{ valor_fora_do_mip|intcomma }}){% endif %}">
+                    <i data-lucide="file-spreadsheet" class="w-3.5 h-3.5"></i>
+                    Planilha: R$ {{ total_planilha|intcomma }}
+                    {% if diferenca == 0 %}— bate ✓{% elif diferenca < 0 %}— faltam R$ {{ diferenca_abs|intcomma }}{% else %}— R$ {{ diferenca_abs|intcomma }} acima{% endif %}
+                </p>
+                {% endif %}
+            </div>
+            <div class="h-28 w-3 rounded-full overflow-hidden bg-gray-100 dark:bg-gray-800 flex flex-col shrink-0 mt-9"
+                 role="img" aria-label="{{ percentual_pct|floatformat:0 }}% do Valor Total do Projeto em Processo Concluído">
+                <div class="bg-emerald-500" style="height: {{ percentual_css }}%"></div>
+                <div class="bg-red-500" style="height: {{ percentual_faltante_css }}%"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% comment %} 1 card por Status (MIP) — mesmo comportamento dos cards por status do RI
+     da aba Faturamento (com a conferência ligada, mostra também a planilha). {% endcomment %}
+<div class="mt-6">
+    <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+        <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Faturamento por status do MIP</p>
+        <p class="text-[11px] text-gray-400 dark:text-gray-500">Valor no LOTE / Valor Total (IXC){% if conferencia_planilha %} x planilha{% endif %}{% if recorte_label %} · {{ recorte_label }}{% endif %}</p>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {% for card in cards %}
+        <a href="{{ card.href }}"
+           {% if card.selecionado %}aria-current="true"{% endif %}
+           title="{% if card.selecionado %}Fechar valores por Estado{% else %}Ver {{ card.rotulo }} por Estado{% endif %}"
+           class="bg-white dark:bg-gray-900 border-2 rounded-3xl p-4 sm:p-5 shadow-sm flex flex-col gap-2 min-w-0 transition hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 {% if card.selecionado %}border-amber-400{% else %}border-gray-100 dark:border-gray-800 hover:border-pv-yellow/60{% endif %}">
+            <p class="text-[10px] font-black uppercase tracking-widest {% if card.selecionado %}text-pv-yellow{% else %}text-gray-400 dark:text-gray-500{% endif %}">{{ card.rotulo }}</p>
+            <p class="text-sm sm:text-xl font-black text-gray-900 dark:text-gray-100 tracking-tight tabular-nums whitespace-nowrap">
+                <span class="mr-1">R$</span>{{ card.valor|intcomma }}
+            </p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500">{{ card.quantidade_ineps }} INEP{{ card.quantidade_ineps|pluralize }}</p>
+            {% if conferencia_planilha and card.na_planilha %}
+            <p class="text-[11px] font-bold {% if card.valor_planilha == card.valor %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}"
+               title="Soma da planilha dos {{ card.na_planilha }} INEP(s) deste status que estão na planilha">
+                Planilha: R$ {{ card.valor_planilha|intcomma }}{% if card.valor_planilha == card.valor %} ✓{% endif %}
+            </p>
+            {% endif %}
+        </a>
+        {% endfor %}
+    </div>
+
+    {% if status_selecionado_rotulo %}
+    <div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-6 sm:p-8 shadow-sm mt-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+            <div>
+                <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">{{ status_selecionado_rotulo }} por Estado</p>
+                <p class="text-[11px] text-gray-400 dark:text-gray-500">Clique num estado para ver os INEPs e o valor de cada um.</p>
+            </div>
+            {% for card in cards %}{% if card.selecionado %}
+            <a href="{{ card.href }}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2">Fechar</a>
+            {% endif %}{% endfor %}
+        </div>
+        <div class="space-y-4">
+            {% for linha in por_estado %}
+            <div id="status-uf-{{ linha.estado|slugify }}" class="scroll-mt-24">
+            <a href="{{ linha.href }}#status-uf-{{ linha.estado|slugify }}" class="block group" aria-expanded="{% if linha.selecionado %}true{% else %}false{% endif %}">
+                <div class="flex items-center justify-between gap-3 text-xs font-bold mb-1.5">
+                    <span class="inline-flex items-center gap-1.5 shrink-0 {% if linha.selecionado %}text-pv-yellow{% else %}text-gray-600 dark:text-gray-300{% endif %}">
+                        <i data-lucide="chevron-right" class="w-3.5 h-3.5 transition-transform {% if linha.selecionado %}rotate-90{% endif %}"></i>
+                        {{ linha.estado }}
+                    </span>
+                    <span class="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-right min-w-0">
+                        <span class="text-gray-500 dark:text-gray-400 tabular-nums whitespace-nowrap">R$ {{ linha.valor|intcomma }}</span>
+                        {% if conferencia_planilha %}
+                        <span class="text-gray-300 dark:text-gray-600">·</span>
+                        <span class="tabular-nums whitespace-nowrap {% if linha.valor_planilha == linha.valor %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">Planilha: R$ {{ linha.valor_planilha|intcomma }}</span>
+                        {% endif %}
+                        <span class="text-gray-300 dark:text-gray-600">·</span>
+                        <span class="text-gray-400 dark:text-gray-500 whitespace-nowrap">{{ linha.quantidade_ineps }} INEP{{ linha.quantidade_ineps|pluralize }}</span>
+                    </span>
+                </div>
+                <div class="h-2.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                    <div class="h-full rounded-full transition-all {% if linha.selecionado %}bg-pv-yellow{% else %}bg-gray-400 dark:bg-gray-600 group-hover:bg-pv-yellow/70{% endif %}"
+                         style="width: {{ linha.percentual_css }}%"></div>
+                </div>
+            </a>
+            {% if linha.selecionado %}
+            <div class="mt-3 ml-5 border border-gray-100 dark:border-gray-800 rounded-2xl overflow-hidden">
+                <div class="max-h-96 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                    {% for item in linha.ineps %}
+                    <a href="{% url 'ri_detail' inep=item.inep %}" class="flex items-center justify-between gap-3 px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-gray-800/60 transition">
+                        <span class="flex items-center gap-3 min-w-0">
+                            <span class="font-bold text-gray-800 dark:text-gray-100 shrink-0 tabular-nums">{{ item.inep }}</span>
+                            <span class="text-gray-500 dark:text-gray-400 truncate">{{ item.nome }}</span>
+                        </span>
+                        <span class="flex items-center gap-3 shrink-0">
+                            <span class="font-black text-gray-900 dark:text-gray-100 tabular-nums">R$ {{ item.valor|intcomma }}</span>
+                            {% if not conferencia_planilha %}
+                            {% elif item.valor_planilha is None %}
+                            <span class="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 whitespace-nowrap">Fora da planilha</span>
+                            {% elif item.valor_planilha == item.valor %}
+                            <span class="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 whitespace-nowrap">Planilha ✓</span>
+                            {% else %}
+                            <span class="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 whitespace-nowrap tabular-nums">Planilha: R$ {{ item.valor_planilha|intcomma }}</span>
+                            {% endif %}
+                        </span>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            </div>
+            {% empty %}
+            <p class="text-xs text-gray-400 dark:text-gray-500">Nenhum INEP em "{{ status_selecionado_rotulo }}"{% if recorte_label %} em {{ recorte_label }}{% endif %}.</p>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{% comment %} "Processo Concluído" x Valor Total do Projeto por Estado; clicar filtra a
+     página e abre os Municípios do estado (mesmo comportamento da aba Faturamento). {% endcomment %}
+<div class="relative bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm mt-6">
+    <div class="flex items-center gap-3 mb-6">
+        <div class="w-10 h-10 rounded-2xl bg-pv-yellow/10 flex items-center justify-center">
+            <i data-lucide="bar-chart-3" class="w-5 h-5 text-pv-yellow"></i>
+        </div>
+        <div>
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Concluído por Estado</p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500">Clique num estado para filtrar a página e ver os municípios.</p>
+        </div>
+    </div>
+    <div class="space-y-4">
+        {% for linha in grafico_estado %}
+        {% include "core/_linha_faturamento_mip.html" %}
+        {% empty %}
+        <p class="text-xs text-gray-400 dark:text-gray-500">Nenhum valor para exibir.</p>
+        {% endfor %}
+    </div>
+
+    {% if estado_filtrado %}
+    <div class="mt-8 pt-6 border-t border-gray-100 dark:border-gray-800">
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <p class="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Por Município · {{ estado_filtrado }}</p>
+            {% if municipio_filtrado %}
+            <a href="?estado={{ estado_filtrado }}" class="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline underline-offset-2 shrink-0">Ver todos os municípios</a>
+            {% endif %}
+        </div>
+        <div class="space-y-4">
+            {% for linha in grafico_municipio %}
+            {% include "core/_linha_faturamento_mip.html" %}
+            {% empty %}
+            <p class="text-xs text-gray-400 dark:text-gray-500">Nenhum município com valor em {{ estado_filtrado }}.</p>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

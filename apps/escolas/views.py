@@ -652,12 +652,21 @@ def mip_lote_inep_view(request):
             valor_total_lado3, _incompleto3 = _valor_total_itens(
                 _resolver_lado3_relatorio_eace_mip(escola)
             )
+            # Pedido do usuário (2026-10-07): no LOTE importado em massa o
+            # INEP vale o faturado na planilha (`Lote.valores_faturados_
+            # planilha`); nos demais, o Valor Total (IXC) de sempre.
+            valor_faturado_planilha = registro_lote.valor_faturado_planilha(escola)
             escolas_do_lote.append(
                 {
                     "escola": escola,
                     "valor_total_lado2": valor_total_lado2,
-                    "valor_total_lado2_incompleto": incompleto2,
+                    "valor_total_lado2_incompleto": incompleto2 and valor_faturado_planilha is None,
                     "valor_total_lado3": valor_total_lado3,
+                    "valor_no_lote": valor_faturado_planilha if valor_faturado_planilha is not None else valor_total_lado2,
+                    "valor_faturado_planilha": valor_faturado_planilha,
+                    "valor_planilha_diverge_ixc": (
+                        valor_faturado_planilha is not None and valor_faturado_planilha != valor_total_lado2
+                    ),
                     # RN ampliada (bug real reportado pelo usuário,
                     # 2026-09-24): INEP rateado pode ter mais de 1 Nota
                     # Fiscal (`NotaFiscalMip`, 1 por fração/Cidade) —
@@ -666,14 +675,15 @@ def mip_lote_inep_view(request):
                 }
             )
         # Pedido do usuário (2026-09-16): coluna "Valor Total do LOTE" na
-        # tabela principal — soma o Valor Total (IXC) de todos os INEPs do
+        # tabela principal — soma o Valor Total (IXC) (no LOTE importado em
+        # massa, o faturado na planilha — `valor_no_lote`) de todos os INEPs do
         # LOTE (mesmo valor que vai pra planilha de faturamento,
         # `gerar_planilha_faturamento_implantacao_lote`/H10), não o EACE.
         # Mesmo padrão de "Total geral" do grid `mip_inep.html` (RN-080):
         # ignora INEP sem total (None) na soma e marca com "*" quando
         # algum item ficou incompleto (sem Valor de serviço no catálogo).
         valor_total_lote = sum(
-            (item["valor_total_lado2"] for item in escolas_do_lote if item["valor_total_lado2"] is not None),
+            (item["valor_no_lote"] for item in escolas_do_lote if item["valor_no_lote"] is not None),
             Decimal("0.00"),
         )
         valor_total_lote_incompleto = any(item["valor_total_lado2_incompleto"] for item in escolas_do_lote)

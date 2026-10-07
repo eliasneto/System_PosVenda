@@ -264,3 +264,9 @@ LOGGING = {
         "apps.integracoes.eace": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
+
+# Pedido do usuário (2026-10-07): a aba Dashboard > Faturamento MIP só mostra
+# a conferência com a planilha "BASE CONSOLIDADA MIP" (total/valores da
+# planilha) quando ligada — usada na validação local; em produção fica
+# desligada (padrão) e a tela não mostra nem lê a planilha.
+MIP_CONFERENCIA_PLANILHA = config("MIP_CONFERENCIA_PLANILHA", default=False, cast=bool)
