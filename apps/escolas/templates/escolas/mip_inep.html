@@ -131,11 +131,36 @@
     <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span> Sem dado do Relatório EACE (MIP) ainda</span>
 </div>
 
+{% if not request.user.is_visualizador and page_obj.paginator.count %}
+<!-- Pedido do usuário (2026-09-30): retirar do grid os INEPs que sobraram
+     (não foram para LOTE) — só some da lista; volta sozinho se vier numa
+     nova sincronização do Relatório EACE (MIP). Caixas de seleção das
+     linhas apontam para este form pelo atributo `form`. -->
+<form id="form-retirar-grid-mip" method="POST" action="{% url 'mip_retirar_grid' %}" class="flex justify-end mb-3">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <button type="button" data-retirar-selecionados disabled
+            data-confirmar
+            data-confirmar-titulo="Retirar do grid do MIP?"
+            data-confirmar-mensagem="Os INEPs selecionados saem da lista do MIP. Nenhum outro dado é alterado, e eles só voltam se vierem numa nova sincronização do Relatório EACE (MIP)."
+            data-confirmar-texto-botao="Retirar da lista"
+            data-confirmar-cor="perigo"
+            class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-[11px] font-black uppercase bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition disabled:opacity-40 disabled:cursor-not-allowed">
+        <i data-lucide="list-x" class="w-4 h-4"></i> Retirar selecionados (<span data-retirar-contagem>0</span>)
+    </button>
+</form>
+{% endif %}
+
 <div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
     <div class="overflow-x-auto contain-layout">
         <table class="min-w-full text-left border-collapse">
             <thead>
                 <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    {% if not request.user.is_visualizador %}
+                    <th class="px-4 py-2 w-8">
+                        <input type="checkbox" data-retirar-todos title="Selecionar todos desta página" class="w-3.5 h-3.5 cursor-pointer accent-pv-yellow">
+                    </th>
+                    {% endif %}
                     <th class="px-4 py-2">INEP</th>
                     <th class="px-4 py-2">Nome da Escola</th>
                     <th class="px-4 py-2">Estado</th>
@@ -150,6 +175,7 @@
                     {% if not request.user.is_visualizador %}
                     <th class="px-4 py-2">Valor Total (IXC)</th>
                     <th class="px-4 py-2">Valor Total (EACE)</th>
+                    <th class="px-4 py-2 w-10"></th>
                     {% endif %}
                 </tr>
             </thead>
@@ -157,6 +183,12 @@
                 {% for linha in page_obj %}
                 <tr class="hover:bg-{% if linha.divergencia_aberta %}red-100{% else %}gray-50{% endif %} dark:hover:bg-{% if linha.divergencia_aberta %}red-900/30{% else %}gray-800{% endif %} transition-all group cursor-pointer divide-x divide-gray-300 dark:divide-gray-700 {% if linha.divergencia_aberta %}bg-red-50 dark:bg-red-950/20{% endif %}"
                     data-inep-toggle title="Clique para ver os 3 lados (Kit declarado, IXC e Relatório EACE)">
+                    {% if not request.user.is_visualizador %}
+                    <td class="px-4 py-2" data-no-toggle>
+                        <input type="checkbox" name="escola_ids" value="{{ linha.escola.pk }}" form="form-retirar-grid-mip"
+                               data-retirar-checkbox class="w-3.5 h-3.5 cursor-pointer accent-pv-yellow">
+                    </td>
+                    {% endif %}
                     <td class="px-4 py-2">
                         <div class="flex items-center gap-2">
                             <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-gray-300 dark:text-gray-600 shrink-0 transition-transform" data-inep-chevron></i>
@@ -165,12 +197,7 @@
                             {% elif linha.status_planilha_mip == "vermelho" %}
                             <span class="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" title="Nenhum item lançado ainda no Relatório EACE (MIP) — sem dado para comparar com o IXC."></span>
                             {% endif %}
-                            {% if linha.escola.legado %}
-                            <span class="font-black italic uppercase text-[12px] leading-none text-pv-yellow bg-pv-black px-1.5 py-0.5 rounded"
-                                  title="INEP legado — dados de equipamento vieram do histórico do pós-venda, anterior a este sistema">{{ linha.escola.inep }}</span>
-                            {% else %}
                             <span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[12px] leading-none">{{ linha.escola.inep }}</span>
-                            {% endif %}
                         </div>
                     </td>
                     <td class="px-4 py-2"><span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">{{ linha.escola.nome }}</span></td>
@@ -200,10 +227,26 @@
                         <span class="text-[11px] text-gray-400 dark:text-gray-500">—</span>
                         {% endif %}
                     </td>
+                    <td class="px-2 py-2 text-center" data-no-toggle>
+                        <form method="POST" action="{% url 'mip_retirar_grid' %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                            <input type="hidden" name="escola_ids" value="{{ linha.escola.pk }}">
+                            <button type="button" title="Retirar da lista" aria-label="Retirar o INEP {{ linha.escola.inep }} da lista"
+                                    data-confirmar
+                                    data-confirmar-titulo="Retirar o INEP {{ linha.escola.inep }} do grid?"
+                                    data-confirmar-mensagem="O INEP sai da lista do MIP. Nenhum outro dado é alterado, e ele só volta se vier numa nova sincronização do Relatório EACE (MIP)."
+                                    data-confirmar-texto-botao="Retirar da lista"
+                                    data-confirmar-cor="perigo"
+                                    class="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition">
+                                <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                            </button>
+                        </form>
+                    </td>
                     {% endif %}
                 </tr>
                 <tr class="hidden" data-inep-detalhe>
-                    <td colspan="{% if request.user.is_visualizador %}5{% else %}7{% endif %}" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
+                    <td colspan="{% if request.user.is_visualizador %}5{% else %}9{% endif %}" class="px-8 py-6 bg-{% if linha.divergencia_aberta %}red-50/60{% else %}gray-50/60{% endif %} dark:bg-{% if linha.divergencia_aberta %}red-950/20{% else %}gray-800/40{% endif %}">
                         <div class="flex items-center justify-between gap-3 mb-2">
                             <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">Itens (Kit declarado × IXC × Relatório EACE) — valor de serviço</p>
                             <a href="{% url 'ri_detail' inep=linha.escola.inep %}" class="shrink-0 inline-flex items-center gap-1 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400 hover:underline">
@@ -254,7 +297,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="{% if request.user.is_visualizador %}5{% else %}7{% endif %}" class="px-8 py-20 text-center">
+                    <td colspan="{% if request.user.is_visualizador %}5{% else %}9{% endif %}" class="px-8 py-20 text-center">
                         <div class="flex flex-col items-center gap-4 opacity-40">
                             <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-400 dark:text-gray-500">
                                 <i data-lucide="search-x" class="w-8 h-8"></i>
@@ -276,13 +319,14 @@
                  RN-096: some inteiro pro Visualizador — é só valor. -->
             <tfoot>
                 <tr class="text-[11px] font-black uppercase text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/60 border-t-2 border-gray-300 dark:border-gray-700">
-                    <td colspan="5" class="px-4 py-3 text-right">Total geral</td>
+                    <td colspan="6" class="px-4 py-3 text-right">Total geral</td>
                     <td class="px-4 py-2">
                         R$ {{ total_geral_lado2|intcomma }}{% if total_geral_lado2_incompleto %}<span class="text-amber-500 dark:text-amber-400" title="Um ou mais INEPs têm item do Lado IXC sem Valor de serviço encontrado no catálogo — não somado.">*</span>{% endif %}
                     </td>
                     <td class="px-4 py-2">
                         R$ {{ total_geral_lado3|intcomma }}{% if total_geral_lado3_incompleto %}<span class="text-amber-500 dark:text-amber-400" title="Um ou mais INEPs têm item do Lado Relatório EACE sem Valor de serviço preenchido — não somado.">*</span>{% endif %}
                     </td>
+                    <td></td>
                 </tr>
             </tfoot>
             {% endif %}
@@ -358,54 +402,6 @@
     {% endif %}
 </div>
 
-<!-- RN-081 (a criar): INEPs encontrados na última sincronização do
-     Relatório EACE (MIP), mas cuja Escola não está em "Aguardando
-     validação EACE" — não é uma linha normal do grid (RN-074), mas
-     usuário pediu pra sinalizar esse descompasso mesmo assim, sempre em
-     vermelho. -->
-{% if escolas_fora_da_validacao_eace %}
-<div class="mt-8 bg-white dark:bg-gray-900 rounded-[2.5rem] border border-red-200 dark:border-red-900/50 shadow-sm overflow-hidden">
-    <div class="px-8 py-6 border-b border-red-100 dark:border-red-900/40">
-        <p class="text-[10px] font-black uppercase text-red-500 dark:text-red-400 tracking-widest mb-1">Fora da Validação EACE</p>
-        <p class="text-xs font-bold text-gray-500 dark:text-gray-400">
-            Estes INEPs apareceram na última sincronização do Relatório EACE (MIP), mas o Status (MIP) não está em "Aguardando Validação EACE" — confira o status na tela de detalhe.
-        </p>
-    </div>
-    <div class="overflow-x-auto contain-layout">
-        <table class="min-w-full text-left border-collapse">
-            <thead>
-                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
-                    <th class="px-4 py-2">INEP</th>
-                    <th class="px-4 py-2">Nome da Escola</th>
-                    <th class="px-4 py-2">Estado</th>
-                    <th class="px-4 py-2">Município</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
-                {% for escola in escolas_fora_da_validacao_eace %}
-                <tr class="hover:bg-red-50 dark:hover:bg-red-900/20 transition-all cursor-pointer divide-x divide-gray-300 dark:divide-gray-700"
-                    data-inep-navegar="{% url 'mip_detail' inep=escola.inep %}" title="Ver os 3 lados e o histórico">
-                    <td class="px-4 py-2">
-                        <div class="flex items-center gap-2">
-                            <span class="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" title="Encontrado na planilha, mas o RI não está em Validação EACE."></span>
-                            {% if escola.legado %}
-                            <span class="font-black italic uppercase text-[12px] leading-none text-pv-yellow bg-pv-black px-1.5 py-0.5 rounded"
-                                  title="INEP legado — dados de equipamento vieram do histórico do pós-venda, anterior a este sistema">{{ escola.inep }}</span>
-                            {% else %}
-                            <span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[12px] leading-none">{{ escola.inep }}</span>
-                            {% endif %}
-                        </div>
-                    </td>
-                    <td class="px-4 py-2"><span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">{{ escola.nome }}</span></td>
-                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ escola.estado|default:"—" }}</span></td>
-                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ escola.municipio|default:"—" }}</span></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -413,7 +409,8 @@
 // Drill-down: clique na linha do INEP expande/recolhe a linha de detalhe
 // imediatamente abaixo (mesmo padrão do Grid de Equipamentos, `grid_inep.html`).
 document.querySelectorAll('[data-inep-toggle]').forEach(function (linha) {
-    linha.addEventListener('click', function () {
+    linha.addEventListener('click', function (evento) {
+        if (evento.target.closest('[data-no-toggle]')) return;
         var detalhe = linha.nextElementSibling;
         if (!detalhe || !detalhe.hasAttribute('data-inep-detalhe')) return;
         var expandido = !detalhe.classList.contains('hidden');
@@ -423,15 +420,27 @@ document.querySelectorAll('[data-inep-toggle]').forEach(function (linha) {
     });
 });
 
-// RN-081 (a criar): clique em qualquer linha da lista "Fora da Validação
-// EACE" abre o detalhe do INEP (mesmo destino dos cards de drill-down do
-// grid principal) — `<tr>` não pode ser filho direto de um `<a>`
-// (HTML inválido), por isso a navegação é via `data-inep-navegar` + JS.
-document.querySelectorAll('[data-inep-navegar]').forEach(function (linha) {
-    linha.addEventListener('click', function () {
-        window.location.href = linha.getAttribute('data-inep-navegar');
-    });
-});
+// Pedido do usuário (2026-09-30): seleção para "Retirar selecionados".
+(function () {
+    var botao = document.querySelector('[data-retirar-selecionados]');
+    var todos = document.querySelector('[data-retirar-todos]');
+    var caixas = Array.prototype.slice.call(document.querySelectorAll('[data-retirar-checkbox]'));
+    if (!botao) return;
+    function atualizar() {
+        var marcadas = caixas.filter(function (caixa) { return caixa.checked; }).length;
+        botao.disabled = marcadas === 0;
+        botao.querySelector('[data-retirar-contagem]').textContent = marcadas;
+        if (todos) todos.checked = marcadas > 0 && marcadas === caixas.length;
+    }
+    caixas.forEach(function (caixa) { caixa.addEventListener('change', atualizar); });
+    if (todos) {
+        todos.addEventListener('change', function () {
+            caixas.forEach(function (caixa) { caixa.checked = todos.checked; });
+            atualizar();
+        });
+    }
+    atualizar();
+})();
 
 document.querySelectorAll('select[data-select-placeholder]').forEach(function (select) {
     function atualizarCorSelect() {

@@ -3,11 +3,17 @@ Badge de "Status do RI" na linha resumida do grid (FEAT-007). FEAT-019:
 troca out-of-band pelo id, atualizada junto com o formulário de status
 sem precisar recarregar a página nem reabrir o drill-down.
 {% endcomment %}
-<span class="inline-flex items-center gap-2" id="status-badge-{{ escola.inep }}" hx-swap-oob="true">
-    <span class="w-2.5 h-2.5 rounded-full shrink-0 {% if not ri %}bg-gray-300 dark:bg-gray-600{% elif divergencia_aberta %}bg-orange-500{% elif ri.status == 'faturamento_ri_concluido' %}bg-green-500{% else %}bg-blue-500{% endif %}"></span>
-    <span class="text-[11px] font-bold text-gray-800 dark:text-gray-200">{% if ri %}{{ ri.get_status_display }}{% else %}Sem RI{% endif %}</span>
+{% comment %}Pedido do usuário (2026-09-30): status, selo do MIP e selo de importação em massa um abaixo do outro, para o grid não ficar largo.{% endcomment %}
+<span class="inline-flex flex-col items-start gap-1" id="status-badge-{{ escola.inep }}" hx-swap-oob="true">
+    <span class="inline-flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full shrink-0 {% if not ri %}bg-gray-300 dark:bg-gray-600{% elif divergencia_aberta %}bg-orange-500{% elif ri.status == 'faturamento_ri_concluido' %}bg-green-500{% else %}bg-blue-500{% endif %}"></span>
+        <span class="text-[11px] font-bold text-gray-800 dark:text-gray-200">{% if ri %}{{ ri.get_status_display }}{% else %}Sem RI{% endif %}</span>
+    </span>
     {% comment %}Pedido do usuário (2026-09-26): INEP no MIP fica no RI como "Faturamento RI Concluído"; o Status (MIP) aparece aqui só como rótulo.{% endcomment %}
     {% if ri and escola.status_mip %}
     <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 whitespace-nowrap" title="Status (MIP)">MIP: {{ escola.get_status_mip_display }}</span>
+    {% endif %}
+    {% if ri and escola.em_lote_importado_em_massa %}
+    <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-400 whitespace-nowrap" title="LOTE criado por importação em massa">Importação em massa</span>
     {% endif %}
 </span>

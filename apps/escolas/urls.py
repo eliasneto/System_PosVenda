@@ -4,6 +4,7 @@ from . import views, views_rpa_mip_lote, views_validacao_nf_mip
 
 urlpatterns = [
     path("mip/", views.mip_inep_view, name="mip_inep"),
+    path("mip/retirar-do-grid/", views.mip_retirar_grid_view, name="mip_retirar_grid"),
     path("mip/lote/", views.mip_lote_inep_view, name="mip_lote_inep"),
     path("mip/lote/criar/", views.mip_lote_criar_view, name="mip_lote_criar"),
     # e-mail do LOTE comentado (pedido do usuário, 2026-09-15) — ver apps.escolas.views.mip_lote_enviar_email_view
@@ -19,6 +20,7 @@ urlpatterns = [
         name="mip_lote_baixar_planilhas_zip",
     ),
     path("mip/lote/<int:pk>/status/", views.mip_lote_status_update_view, name="mip_lote_status_update"),
+    path("mip/lote/status-em-massa/", views.mip_lote_status_em_massa_view, name="mip_lote_status_em_massa"),
     path("mip/lote/<int:pk>/desfazer/", views.mip_lote_desfazer_view, name="mip_lote_desfazer"),
     path(
         "mip/lote/<int:pk>/enviar-nf-portal/",

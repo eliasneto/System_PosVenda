@@ -1,5 +1,5 @@
 # Arquitetura Técnica — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-09-03_
+_Última atualização: 2026-09-29_
 
 > Esta pasta documenta um **sistema novo e separado** do `modulo-posVenda`
 > (repositório e banco de dados próprios, ver `requisitos.md`, bloco 0 e
@@ -272,7 +272,9 @@ INEP é considerado concluído (Faturado).
 - Reorganização original (FEAT-007) foi só de navegação/UI — não alterou
   view, URL, template ou lógica do grid da FEAT-007
   (`apps/ri/views.py`, `grid_inep.html`).
-- Outros itens dentro de "Projeto" ficam em aberto para quando existirem.
+- Hoje (2026-09-29) "Projeto" tem 5 subitens: Equipamentos, MIP,
+  MIP (LOTE), Fila (RPA EACE de RI e MIP, `ADR-008`) e Validação MIP (NF)
+  (FEAT-055). O Visualizador vê só Equipamentos e MIP (RN-093/RN-096).
 
 ### Fora do escopo da v1 (gap — Hub de Integrações, dividido em v2 e v3)
 
@@ -334,6 +336,15 @@ INEP é considerado concluído (Faturado).
   nem worker dedicado — decisão registrada em `ADR-007` (RN-105/RN-106/
   RN-107, `business_rules.md`). Credenciais (`IXC_URL`/`IXC_TOKEN`) no
   `.env` real do projeto, fora do controle de versão (CLAUDE.md §6).
+- **RPA EACE do MIP (2026-09-28/29, FEAT-054/055/056, RN-108 a RN-112,
+  `ADR-008`):** mesmo submódulo `apps/integracoes/eace/` (`rpa_mip.py`),
+  reaproveitando login/Medições do RPA do RI sem alterá-los. Caminho
+  Medições → "Ver MIPs" → pedido de maior número → card do município;
+  anexa só o PDF da NF (NFS-e) e confirma a mudança de status do card.
+  Usado por 2 telas: "Projeto > Validação MIP (NF)" (só leitura dos
+  status) e o ícone de envio por LOTE em "MIP (LOTE)". Os 3 tipos de
+  execução do portal (RI, MIP, Validação) usam a mesma fila e o mesmo
+  `rpa_eace_worker`, com log próprio por tipo — 1 login no portal por vez.
 - Processo RE (instalação de link) com tela própria. **Nota de
   prontidão (2026-08-22):** o usuário confirmou que a v1 continua só RI —
   RE não entra agora, nem como requisito, nem como tela. O pedido é só
@@ -413,6 +424,7 @@ confirmado pelo cliente como `valor`, `quantidade`, `kit_relatorio`,
 ## Histórico de Alterações
 | Data | Alteração | Motivo |
 |---|---|---|
+| 2026-09-29 | RPA EACE do MIP registrado ("Fora do escopo da v1", ao lado do RPA de anexo do RI) e menu "Projeto" atualizado (MIP (LOTE), Fila, Validação MIP (NF)); `ADR-008` nova — fila única do RPA EACE para RI, MIP (LOTE) e Validação MIP (NF), log próprio por tipo, emenda na `ADR-005` | Usuário pediu o RPA do MIP, a tela de validação e o envio pela mesma fila do RI; escolheu log próprio do MIP e, depois, a Validação no worker existente em vez de um container novo; Orquestrador formaliza trabalho já entregue pelo Dev nesta sessão |
 | 2026-09-23 | "Fora do escopo da v1" (Versão 3) atualizado — `FEAT-053` (Automações IXC: Login/Endereços e Atendimentos, escrita em massa via planilha) entregue e documentada, com `apps/integracoes/ixc/` + `apps/ixc/`; esclarecido que o gap original desta seção (leitura/parsing do IXC para preencher o Lado IXC do RI/MIP) continua em aberto e é um problema diferente, mesmo reaproveitando potencialmente o mesmo `IXCClient`; `ADR-007` registrada (processamento em chunks via HTMX, sem fila/worker dedicado) | Usuário trouxe material de referência de outro sistema (sgpspeed, pasta `IXC/` na raiz, removida do repositório depois de migrada) e pediu para implantar as automações e ligá-las ao frontend já criado; Orquestrador formaliza `FEAT-053`/`ADR-007`/RN-105-107 (`business_rules.md`/`checklist.md`) nesta sessão |
 | 2026-09-16 | Módulo "MIP" revisado — grid volta a mostrar todo INEP cadastrado (mesmo universo do grid "Equipamentos"), não só quem já passou pelo handoff `status_mip`; Grid de Equipamentos deixa de excluir INEP por `status_mip`; coluna "Status (MIP)" passa a mostrar o Status do RI real enquanto não há handoff (`ADR-006`, RN-103 nova); "Estrutura de navegação" atualizada | Usuário pediu para o INEP deixar de "sumir" do Grid de Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como imagem do RI, mesmo card e mesmo histórico para as duas telas; Orquestrador registrou a decisão nesta sessão (`FEAT-052` criada, implementação ainda não iniciada) |
 | 2026-09-08 | Módulo "MIP" reescrito — grid deixa de mostrar todos os INEPs e passa a mostrar só os em "Aguardando validação EACE" (RN-074); ganha colunas Valor Total (IXC)/Valor Total (EACE) com destaque de divergência (RN-076/RN-077), Estado/Município no lugar de Endereço (RN-078), filtros de Estado/Município e data de entrada no status (RN-075/RN-079), linha de total geral (RN-080) e bolinha de sincronização com lista "Fora da Validação EACE" (RN-081); "Estrutura de navegação" e "Decisões Pendentes" atualizadas (uso do período do Relatório EACE (MIP), RN-073, resolvido) | Usuário pediu, ao longo do dia, uma sequência de ajustes no grid do MIP diretamente ao Dev; Orquestrador formaliza documentação de trabalho já entregue e testado pelo Dev nesta mesma sessão (530 testes, sem regressão, validado inclusive contra dado real de produção) |

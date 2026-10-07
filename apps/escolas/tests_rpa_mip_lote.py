@@ -263,17 +263,47 @@ class WorkerFilaUnicaTests(BaseLoteComNf):
 
     CMD = "apps.ri.management.commands.processar_fila_rpa_eace"
 
-    def _rodar(self, ri_mais_antigo_em=None):
+    def _rodar(self, ri_mais_antigo_em=None, validacao=None):
         ri_qs = MagicMock()
         ri_qs.filter.return_value.order_by.return_value.first.return_value = (
             MagicMock(enfileirado_em=ri_mais_antigo_em) if ri_mais_antigo_em else None
         )
         saida = StringIO()
         with patch(f"{self.CMD}.LogRpaEace.objects", ri_qs), \
+                patch(f"{self.CMD}.processar_proxima_validacao_nf_mip", return_value=validacao) as val, \
                 patch(f"{self.CMD}.processar_proximo_rpa_mip", return_value={"log_id": 1, "resultado": "sucesso", "motivo": ""}) as mip, \
                 patch(f"{self.CMD}.processar_proximo_da_fila_rpa_eace", return_value=None) as ri:
             call_command("processar_fila_rpa_eace", stdout=saida)
+        self.validacao_mock = val
         return mip, ri, saida.getvalue()
+
+    def test_com_os_envios_vazios_processa_a_validacao_mip(self):
+        from apps.escolas.models import ValidacaoNfMip
+
+        validacao = ValidacaoNfMip.objects.create(origem=ValidacaoNfMip.MANUAL, status=ValidacaoNfMip.SUCESSO)
+        _, ri, saida = self._rodar(validacao=validacao)
+        ri.assert_called_once()
+        self.validacao_mock.assert_called_once()
+        self.assertIn(f"Validação MIP (NF) #{validacao.pk}: Sucesso", saida)
+
+    def test_com_envio_na_fila_nao_roda_a_validacao(self):
+        enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        self._rodar()
+        self.validacao_mock.assert_not_called()
+
+    def test_validacao_de_verdade_sai_da_fila(self):
+        """Sem mock da validação: a Validação MIP "Na fila" vira Sucesso na
+        passada do worker da fila EACE (RPA do portal mockado)."""
+        from apps.escolas.models import ValidacaoNfMip
+        from apps.escolas.validacao_nf_mip import enfileirar_validacao_nf_mip
+
+        validacao, _ = enfileirar_validacao_nf_mip(ValidacaoNfMip.MANUAL, self.usuario, "506")
+        resultado = ResultadoRpaMip(sucesso=True, pedido="506", simulado=True, dados_pdf={}, cards_encontrados=[])
+        with patch(RPA, return_value=resultado), \
+                patch(f"{self.CMD}.processar_proximo_da_fila_rpa_eace", return_value=None):
+            call_command("processar_fila_rpa_eace", stdout=StringIO())
+        validacao.refresh_from_db()
+        self.assertEqual(validacao.status, ValidacaoNfMip.SUCESSO)
 
     def test_so_mip_na_fila(self):
         enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)

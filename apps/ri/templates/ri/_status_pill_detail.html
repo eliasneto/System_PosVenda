@@ -41,4 +41,7 @@ backend também recusa).
     {% if ri.escola.status_mip %}
     <p class="text-[10px] font-black uppercase text-amber-400 mt-1" title="Status (MIP)">MIP: {{ ri.escola.get_status_mip_display }}</p>
     {% endif %}
+    {% if ri.escola.em_lote_importado_em_massa %}
+    <p class="text-[10px] font-black uppercase text-sky-400 mt-1" title="LOTE criado por importação em massa">Importação em massa</p>
+    {% endif %}
 </div>

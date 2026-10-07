@@ -54,9 +54,10 @@ depois de um novo registro, sem recarregar a página.
                 {% if entrada.tipo == 'mensagem' %}bg-blue-50 dark:bg-blue-900/20 text-blue-500 dark:text-blue-400
                 {% elif entrada.tipo == 'anexo' %}bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400
                 {% elif entrada.tipo == 'email' %}bg-purple-50 dark:bg-purple-900/20 text-purple-500 dark:text-purple-400
+                {% elif entrada.tipo == 'importacao_massa' %}bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-400
                 {% elif entrada.tipo == 'validacao_nf' %}bg-teal-50 dark:bg-teal-900/20 text-teal-600 dark:text-teal-400
                 {% else %}bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400{% endif %}">
-                <i data-lucide="{% if entrada.tipo == 'mensagem' %}message-square{% elif entrada.tipo == 'anexo' %}paperclip{% elif entrada.tipo == 'email' %}mail{% elif entrada.tipo == 'validacao_nf' %}file-check{% else %}history{% endif %}" class="w-4 h-4"></i>
+                <i data-lucide="{% if entrada.tipo == 'mensagem' %}message-square{% elif entrada.tipo == 'anexo' %}paperclip{% elif entrada.tipo == 'email' %}mail{% elif entrada.tipo == 'validacao_nf' %}file-check{% elif entrada.tipo == 'importacao_massa' %}upload{% else %}history{% endif %}" class="w-4 h-4"></i>
             </div>
             <div class="flex-1 bg-gray-50 dark:bg-gray-800 rounded-xl px-4 py-3">
                 <div class="flex items-center justify-between gap-2 mb-1">
@@ -89,6 +90,9 @@ depois de um novo registro, sem recarregar a página.
                     <span class="font-bold text-gray-800 dark:text-gray-200">{{ entrada.valor_novo }}</span>
                     {% endif %}
                 </p>
+                {% elif entrada.tipo == 'importacao_massa' %}
+                <p class="text-[10px] font-black uppercase text-sky-600 dark:text-sky-400 mb-1">Importação em massa</p>
+                <p class="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-line">{{ entrada.mensagem }}</p>
                 {% elif entrada.tipo == 'validacao_nf' %}
                 <p class="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-line">{{ entrada.mensagem }}</p>
                 {% if entrada.resultado_validacao_nf %}

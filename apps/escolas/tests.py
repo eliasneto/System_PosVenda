@@ -44,6 +44,18 @@ from apps.ri.models import Documento, KitPadrao, Ri, RiHistorico, RiItemEace, Ri
 
 User = get_user_model()
 
+
+def _get_grid_mip(client, *args, **kwargs):
+    """Pedido do usuário (2026-09-30): o grid do MIP só mostra INEP que veio
+    no Relatório EACE (MIP) (`encontrado_relatorio_eace_mip=True`). Os
+    testes do grid anteriores a essa regra criam INEPs sem sincronização
+    — marca como encontrados os que ainda não têm valor (`None`) antes de
+    abrir a tela; quem foi marcado `False` de propósito continua fora."""
+    Escola.objects.filter(
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, encontrado_relatorio_eace_mip__isnull=True,
+    ).update(encontrado_relatorio_eace_mip=True)
+    return client.get(reverse("mip_inep"), *args, **kwargs)
+
 CABECALHO = [
     "LOTE", "UF ", "MUNICIPIO", "INEP", "UNIDADE ESCOLAR ",
     "ENDEREÇO UNIDADE ESCOLAR ", "VELOCIDADE", "KIT WIFI ESTIMADO",
@@ -343,7 +355,7 @@ class MipInepViewTests(TestCase):
         Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
 
     def test_exige_login(self):
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertEqual(resp.status_code, 302)
         self.assertIn(reverse("login"), resp.url)
 
@@ -351,7 +363,7 @@ class MipInepViewTests(TestCase):
         """Estado e Município em colunas separadas (pedido do usuário) —
         no lugar da coluna Endereço, removida."""
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, self.escola.inep)
         self.assertContains(resp, self.escola.nome)
@@ -361,7 +373,7 @@ class MipInepViewTests(TestCase):
 
     def test_coluna_endereco_foi_substituida_por_estado_e_municipio(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "<th class=\"px-4 py-2\">Estado</th>")
         self.assertContains(resp, "<th class=\"px-4 py-2\">Município</th>")
         self.assertNotContains(resp, "<th class=\"px-4 py-2\">Endereço</th>")
@@ -373,7 +385,7 @@ class MipInepViewTests(TestCase):
         escola_em_andamento = Escola.objects.create(inep="10000003", nome="Escola Em Andamento")
         Ri.objects.create(escola=escola_em_andamento, status=Ri.ANDAMENTO)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, self.escola.inep)
         self.assertNotContains(resp, escola_em_andamento.inep)
         resp_ri = self.client.get(reverse("grid_inep"))
@@ -385,7 +397,7 @@ class MipInepViewTests(TestCase):
         Equipamentos."""
         escola_sem_ri = Escola.objects.create(inep="10000004", nome="Escola Sem RI")
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, escola_sem_ri.inep)
         resp_ri = self.client.get(reverse("grid_inep"))
         self.assertContains(resp_ri, escola_sem_ri.inep)
@@ -394,13 +406,13 @@ class MipInepViewTests(TestCase):
         outra_escola = Escola.objects.create(inep="10000002", nome="Escola Sobral", municipio="Sobral", estado="CE")
         Ri.objects.create(escola=outra_escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"q": "Sobral"})
+        resp = _get_grid_mip(self.client, {"q": "Sobral"})
         self.assertContains(resp, outra_escola.inep)
         self.assertNotContains(resp, self.escola.inep)
 
     def test_busca_sem_resultado_mostra_estado_vazio(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"q": "inep-que-nao-existe"})
+        resp = _get_grid_mip(self.client, {"q": "inep-que-nao-existe"})
         self.assertContains(resp, "Nenhum INEP encontrado")
 
     def test_nao_mostra_status_de_ri_ou_conexao(self):
@@ -411,7 +423,7 @@ class MipInepViewTests(TestCase):
         string "Status do RI" pura — `core/base.html` já a usa num
         comentário de CSS, presente em qualquer página do sistema.)"""
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, "Status de conexão")
         self.assertNotContains(resp, "Sem RI")
 
@@ -495,7 +507,7 @@ class MipInepStatusFiltroTests(TestCase):
         Ri.objects.create(escola=concluido, status=Ri.FATURAMENTO_CONCLUIDO)
 
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, em_andamento.inep)
         self.assertContains(resp, aguardando.inep)
         self.assertNotContains(resp, concluido.inep)
@@ -515,23 +527,26 @@ class MipInepStatusFiltroTests(TestCase):
         Ri.objects.create(escola=escola, status=Ri.IMPLANTACAO_EACE)
 
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, escola.inep)
 
         resp_ri = self.client.get(reverse("grid_inep"))
         self.assertContains(resp_ri, escola.inep)
 
-    def test_inep_legado_mostra_o_mesmo_destaque_do_grid_de_equipamentos(self):
-        """Bug reportado pelo usuário (2026-09-10): o INEP legado
-        (`Escola.legado=True`, `importar_ri_legado_eace`) nasce direto em
-        "Aguardando validação EACE". O destaque em negrito/branco
-        precisa aparecer aqui também, igual ao Grid de Equipamentos."""
+    def test_inep_legado_nao_tem_mais_destaque_amarelo(self):
+        """Pedido do usuário (2026-09-30): o destaque amarelo do número do
+        INEP legado (`Escola.legado=True`) saiu do Grid de Equipamentos,
+        do MIP e do MIP (LOTE) — o INEP aparece igual aos demais."""
         escola = Escola.objects.create(inep="10000005", nome="Escola Legado", legado=True)
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
 
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
-        self.assertContains(resp, "INEP legado")
+        resp = _get_grid_mip(self.client)
+        self.assertContains(resp, escola.inep)
+        self.assertNotContains(resp, "INEP legado")
+        resp_ri = self.client.get(reverse("grid_inep"))
+        self.assertContains(resp_ri, escola.inep)
+        self.assertNotContains(resp_ri, "INEP legado")
 
 
 class MipInepDrilldownTests(TestCase):
@@ -559,7 +574,7 @@ class MipInepDrilldownTests(TestCase):
 
     def test_lado3_sem_item_sincronizado_mostra_nenhum_item_lancado(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, "Em aberto — planilha de origem ainda não definida.")
         self.assertContains(resp, "Nenhum item lançado.")
 
@@ -569,7 +584,7 @@ class MipInepDrilldownTests(TestCase):
             quantidade=1, valor_servico="250.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "Kit Cobertura Wi-Fi - 8 Access Points — 1 un. —")
         self.assertContains(resp, "R$ 250,00")
 
@@ -577,7 +592,7 @@ class MipInepDrilldownTests(TestCase):
         """Sem RiItemEace lançado, cai na mesma referência ao vivo do Grid
         de Equipamentos (RN-010), mas mostrando valor_servico."""
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "Kit Cobertura Wi-Fi - 8 Access Points")
         self.assertContains(resp, "R$ 250,00")
         self.assertContains(resp, "referência, ainda não lançado no RI")
@@ -590,7 +605,7 @@ class MipInepDrilldownTests(TestCase):
             ri=self.ri, descricao_item="Kit Cobertura Wi-Fi - 8 Access Points", quantidade=2, valor_unitario="1000.00",
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "Kit Cobertura Wi-Fi - 8 Access Points — 2 un. —")
         self.assertContains(resp, "R$ 250,00")
         self.assertNotContains(resp, "referência, ainda não lançado no RI")
@@ -601,7 +616,7 @@ class MipInepDrilldownTests(TestCase):
             valor_unitario="0.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "IXC")
         self.assertContains(resp, "R$ 250,00")
 
@@ -613,7 +628,7 @@ class MipInepDrilldownTests(TestCase):
             ri=self.ri, descricao_item=produto.descricao_curta, quantidade=3, valor_unitario="0.00", eh_kit=False,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "Cabo de rede — 3 un. —")
         self.assertContains(resp, "R$ 10,00")
 
@@ -625,14 +640,14 @@ class MipInepDrilldownTests(TestCase):
             valor_unitario="0.00", eh_kit=False,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "valor de serviço não encontrado")
 
     def test_ri_sem_item_ixc_mostra_nenhum_item_lancado(self):
         """RI já existe (RN-074, a criar — exigido pra aparecer na lista),
         mas ainda sem RiItemIxc lançado."""
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "Nenhum item lançado.")
 
 
@@ -652,13 +667,13 @@ class MipValorTotalLado2Tests(TestCase):
 
     def test_coluna_lote_foi_substituida_por_valor_total(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "Valor Total (IXC)")
         self.assertNotContains(resp, "<th class=\"px-4 py-2\">Lote</th>")
 
     def test_sem_item_no_lado_ixc_mostra_travessao(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertIsNone(linha["valor_total_lado2"])
 
@@ -674,7 +689,7 @@ class MipValorTotalLado2Tests(TestCase):
             ri=self.ri, descricao_item="Cabo de rede", quantidade=3, valor_unitario="0.00", eh_kit=False,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         # 1 x 300,00 (KIT) + 3 x 10,00 (Cabo de rede) = 330,00
         self.assertEqual(linha["valor_total_lado2"], Decimal("330.00"))
@@ -694,7 +709,7 @@ class MipValorTotalLado2Tests(TestCase):
             valor_unitario="0.00", eh_kit=False,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["valor_total_lado2"], Decimal("300.00"))
         self.assertTrue(linha["valor_total_lado2_incompleto"])
@@ -713,7 +728,7 @@ class MipValorTotalLado2Tests(TestCase):
             quantidade=1, valor_unitario="0.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "R$ 10.356,00")
 
 
@@ -729,12 +744,12 @@ class MipValorTotalLado3Tests(TestCase):
 
     def test_coluna_valor_total_eace_aparece(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "Valor Total (EACE)")
 
     def test_sem_item_no_lado3_mostra_travessao(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertIsNone(linha["valor_total_lado3"])
 
@@ -748,7 +763,7 @@ class MipValorTotalLado3Tests(TestCase):
             quantidade=3, valor_servico="10.00", eh_kit=False,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["valor_total_lado3"], Decimal("330.00"))
         self.assertFalse(linha["valor_total_lado3_incompleto"])
@@ -762,7 +777,7 @@ class MipValorTotalLado3Tests(TestCase):
             quantidade=1, valor_servico=None, eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["valor_total_lado3"], Decimal("0"))
         self.assertTrue(linha["valor_total_lado3_incompleto"])
@@ -792,7 +807,7 @@ class MipValorTotalDivergeTests(TestCase):
             quantidade=1, valor_servico="300.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertFalse(linha["valor_total_diverge"])
         self.assertNotContains(resp, "Diverge do Valor Total (IXC)")
@@ -807,7 +822,7 @@ class MipValorTotalDivergeTests(TestCase):
             quantidade=1, valor_servico="250.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertTrue(linha["valor_total_diverge"])
         self.assertContains(resp, "Diverge do Valor Total (IXC)")
@@ -821,7 +836,7 @@ class MipValorTotalDivergeTests(TestCase):
             quantidade=1, valor_unitario="0.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertFalse(linha["valor_total_diverge"])
 
@@ -857,7 +872,7 @@ class MipTotalGeralTests(TestCase):
 
     def test_total_geral_soma_todos_os_ineps_filtrados(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         # IXC: 1 x 300,00 (CE) + 2 x 300,00 (SP) = 900,00
         self.assertEqual(resp.context["total_geral_lado2"], Decimal("900.00"))
         # EACE: só a CE tem item lançado = 300,00
@@ -867,7 +882,7 @@ class MipTotalGeralTests(TestCase):
 
     def test_total_geral_muda_ao_filtrar_por_estado(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "SP"})
+        resp = _get_grid_mip(self.client, {"estado": "SP"})
         self.assertEqual(resp.context["total_geral_lado2"], Decimal("600.00"))
         self.assertEqual(resp.context["total_geral_lado3"], Decimal("0"))
 
@@ -877,12 +892,12 @@ class MipTotalGeralTests(TestCase):
             valor_unitario="0.00", eh_kit=False,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertTrue(resp.context["total_geral_lado2_incompleto"])
 
     def test_sem_resultado_nao_mostra_total_geral(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"q": "inep-inexistente"})
+        resp = _get_grid_mip(self.client, {"q": "inep-inexistente"})
         self.assertNotContains(resp, "Total geral")
 
 
@@ -904,7 +919,7 @@ class MipStatusPlanilhaMipTests(TestCase):
             escola=escola, descricao_item="Kit Cobertura Wi-Fi", quantidade=1, valor_servico=Decimal("100.00"),
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "verde")
         self.assertContains(resp, "bg-emerald-500")
@@ -913,17 +928,17 @@ class MipStatusPlanilhaMipTests(TestCase):
         escola = Escola.objects.create(inep="10000061", nome="Escola Vermelha", lote=9)
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "vermelho")
 
-    def test_bug_35583972_item_de_sincronizacao_anterior_mostra_verde(self):
+    def test_bug_35583972_fora_da_ultima_sincronizacao_nao_aparece_no_grid(self):
         """Caso real reportado pelo usuário (INEP 35583972): a última
         sincronização não trouxe o INEP de novo (`encontrado_relatorio_
         eace_mip=False`), mas ele já tinha item lançado de uma rodada
-        anterior, com Valor Total (IXC) e (EACE) batendo — antes desta
-        correção isso ficava vermelho, mesmo sem nenhum problema real no
-        dado; agora fica verde, porque o dado existe."""
+        anterior. Antes aparecia com bolinha verde; pedido do usuário
+        (2026-09-30): o grid do MIP só mostra INEP que veio no Relatório
+        EACE (MIP) — este deixa de aparecer."""
         escola = Escola.objects.create(
             inep="35583972", nome="Escola Bug Bolinha", lote=9, encontrado_relatorio_eace_mip=False,
         )
@@ -932,9 +947,8 @@ class MipStatusPlanilhaMipTests(TestCase):
             escola=escola, descricao_item="Kit Cobertura Wi-Fi", quantidade=1, valor_servico=Decimal("100.00"),
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
-        linha = resp.context["page_obj"][0]
-        self.assertEqual(linha["status_planilha_mip"], "verde")
+        resp = _get_grid_mip(self.client)
+        self.assertEqual(len(resp.context["page_obj"]), 0)
 
     def test_encontrado_na_ultima_sincronizacao_mas_sem_item_lancado_mostra_vermelha(self):
         """Simétrico ao teste acima: `encontrado_relatorio_eace_mip=True`
@@ -946,7 +960,7 @@ class MipStatusPlanilhaMipTests(TestCase):
         )
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "vermelho")
 
@@ -958,56 +972,24 @@ class MipStatusPlanilhaMipTests(TestCase):
         escola = Escola.objects.create(inep="10000062", nome="Escola Sem Sync", lote=9)
         Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "vermelho")
 
-    def test_encontrado_fora_da_validacao_eace_aparece_so_na_lista_a_parte(self):
-        """RN-104 (2026-09-17): a escola NÃO aparece no grid principal
-        (RI em "Em Andamento", nunca fez handoff) — só na lista "Fora da
-        Validação EACE" (RN-081, sinaliza o descompasso da própria
-        sincronização, sem relação com a visibilidade do grid)."""
+    def test_lista_fora_da_validacao_eace_nao_aparece_mais(self):
+        """Pedido do usuário (2026-09-30): a lista separada "Fora da
+        Validação EACE" saiu da tela — INEP encontrado na planilha mas fora
+        de "Aguardando Validação EACE" não aparece em lugar nenhum do grid."""
         escola = Escola.objects.create(
             inep="10000063", nome="Escola Fora Validacao", estado="SP", municipio="Campinas", lote=9,
             encontrado_relatorio_eace_mip=True,
         )
         Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertEqual(resp.context["page_obj"].paginator.count, 0)
-        self.assertEqual(list(resp.context["escolas_fora_da_validacao_eace"]), [escola])
-        self.assertContains(resp, "Fora da Validação EACE")
-        self.assertContains(resp, escola.inep)
-
-    def test_nao_encontrado_nunca_aparece_na_lista_fora_da_validacao_eace(self):
-        """RN-081: sem ter sido encontrado na última sincronização
-        (`encontrado_relatorio_eace_mip=False`), o INEP nunca entra na
-        lista separada "Fora da Validação EACE" — mesmo sem aparecer no
-        grid principal (RN-104: sem RI, não há handoff)."""
-        Escola.objects.create(
-            inep="10000064", nome="Escola Irrelevante", lote=9, encontrado_relatorio_eace_mip=False,
-        )
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
-        self.assertNotContains(resp, "10000064")
-        self.assertEqual(list(resp.context["escolas_fora_da_validacao_eace"]), [])
-
-    def test_sem_nenhum_fora_da_validacao_eace_nao_mostra_secao(self):
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
         self.assertNotContains(resp, "Fora da Validação EACE")
-
-    def test_lista_a_parte_respeita_busca(self):
-        escola_sp = Escola.objects.create(
-            inep="10000065", nome="Escola SP Fora", estado="SP", lote=9, encontrado_relatorio_eace_mip=True,
-        )
-        escola_rj = Escola.objects.create(
-            inep="10000066", nome="Escola RJ Fora", estado="RJ", lote=9, encontrado_relatorio_eace_mip=True,
-        )
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"q": "SP Fora"})
-        self.assertContains(resp, escola_sp.inep)
-        self.assertNotContains(resp, escola_rj.inep)
+        self.assertNotContains(resp, escola.inep)
 
 
 class MipDivergenciaValorServicoTests(TestCase):
@@ -1035,7 +1017,7 @@ class MipDivergenciaValorServicoTests(TestCase):
             quantidade=1, valor_unitario="0.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, "Valor de serviço diverge")
 
     def test_divergencia_quando_valor_do_kit_diverge(self):
@@ -1051,7 +1033,7 @@ class MipDivergenciaValorServicoTests(TestCase):
             quantidade=1, valor_servico="250.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertEqual(resp.context["total_divergencia"], 1)
         self.assertContains(resp, "Valor de serviço diverge")
 
@@ -1065,7 +1047,7 @@ class MipDivergenciaValorServicoTests(TestCase):
             quantidade=1, valor_servico="300.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, "Valor de serviço diverge")
 
     def test_produto_avulso_com_valor_divergente(self):
@@ -1082,7 +1064,7 @@ class MipDivergenciaValorServicoTests(TestCase):
             quantidade=1, valor_servico="9.00", eh_kit=False,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "Valor de serviço diverge")
 
     def test_produto_avulso_divergente_destaca_nome_no_lado3(self):
@@ -1102,7 +1084,7 @@ class MipDivergenciaValorServicoTests(TestCase):
             quantidade=1, valor_servico="400.00", eh_kit=False,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         linha = resp.context["page_obj"][0]
         self.assertIn(item_mip.pk, linha["itens_mip_divergentes_pks"])
 
@@ -1126,7 +1108,7 @@ class MipDivergenciaValorServicoTests(TestCase):
             quantidade=1, valor_servico="250.00", eh_kit=True,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"divergencia": "1"})
+        resp = _get_grid_mip(self.client, {"divergencia": "1"})
         self.assertContains(resp, self.escola.inep)
         self.assertNotContains(resp, outra_escola.inep)
 
@@ -1197,7 +1179,7 @@ class MipFiltroPeriodoTests(TestCase):
 
     def test_sem_planilha_ativa_nao_mostra_card(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, "No período")
 
     def test_planilha_ativa_sem_periodo_definido_nao_mostra_card(self):
@@ -1206,7 +1188,7 @@ class MipFiltroPeriodoTests(TestCase):
         calcular o card "No período"."""
         PlanilhaRelatorioEaceMip.substituir(_xlsx_relatorio_eace_mip(), self.admin)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertNotContains(resp, "No período")
 
     def test_card_mostra_total_de_ineps_com_item_no_periodo(self):
@@ -1220,7 +1202,7 @@ class MipFiltroPeriodoTests(TestCase):
             quantidade=1, data_emissao_acs=datetime.date(2026, 10, 1),
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "No período")
         self.assertEqual(resp.context["total_periodo"], 1)
 
@@ -1235,7 +1217,7 @@ class MipFiltroPeriodoTests(TestCase):
             quantidade=1, data_emissao_acs=datetime.date(2026, 10, 1),
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"periodo": "1"})
+        resp = _get_grid_mip(self.client, {"periodo": "1"})
         self.assertContains(resp, self.escola_no_periodo.inep)
         self.assertNotContains(resp, self.escola_fora_do_periodo.inep)
 
@@ -1245,7 +1227,7 @@ class MipFiltroPeriodoTests(TestCase):
             escola=self.escola_no_periodo, descricao_item="Rack de parede", quantidade=1,
         )
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertEqual(resp.context["total_periodo"], 0)
 
 
@@ -1269,31 +1251,31 @@ class MipFiltroDataAtivacaoTests(TestCase):
     def test_sem_filtro_de_data_mostra_normalmente(self):
         self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, self.escola.inep)
 
     def test_data_dentro_do_intervalo_mostra_o_inep(self):
         self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"data_inicial": "01/09/2026", "data_final": "10/09/2026"})
+        resp = _get_grid_mip(self.client, {"data_inicial": "01/09/2026", "data_final": "10/09/2026"})
         self.assertContains(resp, self.escola.inep)
 
     def test_data_fora_do_intervalo_esconde_o_inep(self):
         self._definir_data_ativacao(datetime.date(2026, 8, 20))
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"data_inicial": "01/09/2026", "data_final": "10/09/2026"})
+        resp = _get_grid_mip(self.client, {"data_inicial": "01/09/2026", "data_final": "10/09/2026"})
         self.assertNotContains(resp, self.escola.inep)
 
     def test_so_data_inicial_filtra_a_partir_dela(self):
         self._definir_data_ativacao(datetime.date(2026, 8, 20))
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"data_inicial": "01/09/2026"})
+        resp = _get_grid_mip(self.client, {"data_inicial": "01/09/2026"})
         self.assertNotContains(resp, self.escola.inep)
 
     def test_so_data_final_filtra_ate_ela(self):
         self._definir_data_ativacao(datetime.date(2026, 9, 15))
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"data_final": "10/09/2026"})
+        resp = _get_grid_mip(self.client, {"data_final": "10/09/2026"})
         self.assertNotContains(resp, self.escola.inep)
 
     def test_ri_sem_data_ativacao_some_ao_filtrar_por_data(self):
@@ -1302,22 +1284,22 @@ class MipFiltroDataAtivacaoTests(TestCase):
         há data pra comparar, então some assim que um filtro de data é
         aplicado (CLAUDE.md §9: nunca inventa/assume um dado ausente)."""
         self.client.force_login(self.user)
-        resp_sem_filtro = self.client.get(reverse("mip_inep"))
+        resp_sem_filtro = _get_grid_mip(self.client)
         self.assertContains(resp_sem_filtro, self.escola.inep)
-        resp_com_filtro = self.client.get(reverse("mip_inep"), {"data_inicial": "01/01/2026", "data_final": "31/12/2026"})
+        resp_com_filtro = _get_grid_mip(self.client, {"data_inicial": "01/01/2026", "data_final": "31/12/2026"})
         self.assertNotContains(resp_com_filtro, self.escola.inep)
 
     def test_data_inicial_depois_da_final_ignora_o_filtro_e_avisa(self):
         self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"data_inicial": "10/09/2026", "data_final": "01/09/2026"})
+        resp = _get_grid_mip(self.client, {"data_inicial": "10/09/2026", "data_final": "01/09/2026"})
         self.assertContains(resp, self.escola.inep)
         self.assertContains(resp, "A data inicial não pode ser depois da data final")
 
     def test_data_em_formato_invalido_e_ignorada_silenciosamente(self):
         self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"data_inicial": "não-é-uma-data"})
+        resp = _get_grid_mip(self.client, {"data_inicial": "não-é-uma-data"})
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, self.escola.inep)
 
@@ -1327,7 +1309,7 @@ class MipFiltroDataAtivacaoTests(TestCase):
         (formato antigo) não é mais reconhecido — ignorado, não quebra."""
         self._definir_data_ativacao(datetime.date(2026, 9, 5))
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"data_inicial": "2026-09-01"})
+        resp = _get_grid_mip(self.client, {"data_inicial": "2026-09-01"})
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, self.escola.inep)
 
@@ -1357,7 +1339,7 @@ class MipFiltroEstadoMunicipioTests(TestCase):
 
     def test_select_estado_so_lista_uf_com_inep_na_base(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertEqual(sorted(resp.context["estados_disponiveis"]), ["CE", "RJ", "SP"])
         self.assertContains(resp, '<option value="CE"')
         self.assertContains(resp, '<option value="SP"')
@@ -1365,21 +1347,21 @@ class MipFiltroEstadoMunicipioTests(TestCase):
 
     def test_filtro_estado_mostra_so_escolas_daquele_estado(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "CE"})
+        resp = _get_grid_mip(self.client, {"estado": "CE"})
         self.assertContains(resp, self.escola_ce_fortaleza.inep)
         self.assertContains(resp, self.escola_ce_sobral.inep)
         self.assertNotContains(resp, self.escola_sp.inep)
 
     def test_sem_estado_selecionado_select_municipio_fica_desabilitado(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "data-select-placeholder disabled")
 
     def test_municipio_sem_estado_e_ignorado_mesmo_vindo_na_url(self):
         """Pedido do usuário: Município só funciona depois de escolher
         Estado — sem Estado, o filtro de Município nem é aplicado."""
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"municipio": "Fortaleza"})
+        resp = _get_grid_mip(self.client, {"municipio": "Fortaleza"})
         self.assertEqual(resp.context["municipio_filtro"], "")
         self.assertContains(resp, self.escola_ce_fortaleza.inep)
         self.assertContains(resp, self.escola_ce_sobral.inep)
@@ -1387,20 +1369,20 @@ class MipFiltroEstadoMunicipioTests(TestCase):
 
     def test_select_municipio_lista_so_municipios_do_estado_escolhido(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "CE"})
+        resp = _get_grid_mip(self.client, {"estado": "CE"})
         self.assertEqual(sorted(resp.context["municipios_disponiveis"]), ["Fortaleza", "Sobral"])
         self.assertNotContains(resp, "data-select-placeholder disabled")
 
     def test_filtro_estado_e_municipio_juntos(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "CE", "municipio": "Sobral"})
+        resp = _get_grid_mip(self.client, {"estado": "CE", "municipio": "Sobral"})
         self.assertContains(resp, self.escola_ce_sobral.inep)
         self.assertNotContains(resp, self.escola_ce_fortaleza.inep)
         self.assertNotContains(resp, self.escola_sp.inep)
 
     def test_estado_invalido_e_ignorado(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "XX"})
+        resp = _get_grid_mip(self.client, {"estado": "XX"})
         self.assertEqual(resp.context["estado_filtro"], "")
         self.assertContains(resp, self.escola_ce_fortaleza.inep)
         self.assertContains(resp, self.escola_sp.inep)
@@ -1410,7 +1392,7 @@ class MipFiltroEstadoMunicipioTests(TestCase):
         anterior) some sem esvaziar o resultado inteiro — mesmo critério
         de "não inventar/assumir filtro" do CLAUDE.md §9."""
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "CE", "municipio": "Campinas"})
+        resp = _get_grid_mip(self.client, {"estado": "CE", "municipio": "Campinas"})
         self.assertEqual(resp.context["municipio_filtro"], "")
         self.assertContains(resp, self.escola_ce_fortaleza.inep)
         self.assertContains(resp, self.escola_ce_sobral.inep)
@@ -1535,7 +1517,7 @@ class MipDetailViewTests(TestCase):
         # validação EACE".
         Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(
             resp,
             reverse("mip_detail", kwargs={"inep": self.escola.inep}),
@@ -1575,7 +1557,7 @@ class VisualizadorMipTests(TestCase):
 
     def test_grid_do_mip_esconde_valor_financeiro(self):
         self.client.force_login(self.visualizador)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertEqual(resp.status_code, 200)
         self.assertNotContains(resp, "R$")
         self.assertNotContains(resp, "Valor Total (IXC)")
@@ -1590,7 +1572,7 @@ class VisualizadorMipTests(TestCase):
             username="analista-mip-valor", password="senha-teste-123",
         )
         self.client.force_login(analista)
-        resp = self.client.get(reverse("mip_inep"))
+        resp = _get_grid_mip(self.client)
         self.assertContains(resp, "R$")
         self.assertContains(resp, "Valor Total (IXC)")
 
@@ -3415,7 +3397,7 @@ def _criar_escola_elegivel_lote(inep, *, estado="GO", municipio="Abadiânia", da
     FEAT-044 — nomes iguais por coincidência, conceitos diferentes."""
     escola = Escola.objects.create(
         inep=inep, nome=f"Escola {inep}", estado=estado, municipio=municipio, lote=9,
-        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, encontrado_relatorio_eace_mip=True,
     )
     ri = Ri.objects.create(
         escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE,
@@ -3443,7 +3425,7 @@ def _criar_escola_rateada_lote(inep, *, estado="GO", municipio="Abadiânia", cid
     cidade_extra = cidade_extra or f"{municipio}2"
     escola = Escola.objects.create(
         inep=inep, nome=f"Escola {inep}", estado=estado, municipio=municipio, lote=9,
-        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, cod_fornecedor="52598",
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, cod_fornecedor="52598", encontrado_relatorio_eace_mip=True,
     )
     ri = Ri.objects.create(
         escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE,
@@ -4002,7 +3984,7 @@ class MipLoteBotaoGridTests(TestCase):
 
     def test_sem_filtro_completo_nao_mostra_botao(self):
         self.client.force_login(self.usuario)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "GO"})
+        resp = _get_grid_mip(self.client, {"estado": "GO"})
         self.assertNotContains(resp, "Criar LOTE")
         self.assertContains(resp, "Preencha Estado e Município")
 
@@ -4011,7 +3993,7 @@ class MipLoteBotaoGridTests(TestCase):
         usuário, INEP 52171205): filtrar só Estado/Município (sem data)
         já mostra o botão "Criar LOTE" habilitado."""
         self.client.force_login(self.usuario)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "GO", "municipio": "Abadiânia"})
+        resp = _get_grid_mip(self.client, {"estado": "GO", "municipio": "Abadiânia"})
         self.assertContains(resp, "Criar LOTE")
         self.assertContains(resp, "1 INEP")
         self.assertNotContains(resp, 'button" disabled')
@@ -4061,7 +4043,7 @@ class MipLoteBotaoGridTests(TestCase):
         from django.contrib.humanize.templatetags.humanize import intcomma
 
         self.client.force_login(self.usuario)
-        resp = self.client.get(reverse("mip_inep"), {"estado": "GO", "municipio": "Abadiânia"})
+        resp = _get_grid_mip(self.client, {"estado": "GO", "municipio": "Abadiânia"})
         self.assertContains(resp, "Buscar pelo número do INEP")
         self.assertContains(resp, f'data-inep="{self.escola.inep}"')
         item = resp.context["escolas_elegiveis_lote_detalhe"][0]
@@ -5022,6 +5004,93 @@ class MipLoteBaixarPlanilhasZipViewTests(TestCase):
 # entre "Em Andamento" (vai para o RI), "Em Faturamento" (novo status
 # intermediário) e "Processo Concluído" (encerra, fim do processo).
 # ---------------------------------------------------------------------------
+
+
+class MipLoteStatusEmMassaViewTests(TestCase):
+    """Pedido do usuário (2026-09-30): `mip_lote_status_em_massa_view` —
+    troca o Status de N LOTEs marcados de uma vez."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-status-massa", password="senha-teste-123")
+        self.visualizador = User.objects.create_user(
+            username="visualizador-status-massa", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.lotes = []
+        for indice in range(3):
+            escola = Escola.objects.create(inep=f"1000019{indice}", nome=f"Escola Massa {indice}")
+            Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_VALIDACAO_EACE)
+            escola.status_mip = Escola.EM_ANDAMENTO
+            escola.save(update_fields=["status_mip"])
+            lote = Lote.objects.create(estado="GO", municipio=f"Cidade {indice}", status=Lote.EM_ANDAMENTO)
+            lote.escolas.set([escola])
+            self.lotes.append(lote)
+        self.url = reverse("mip_lote_status_em_massa")
+
+    def _post(self, lotes, status):
+        return self.client.post(self.url, {"lote_ids": [lote.pk for lote in lotes], "status": status})
+
+    def test_exige_login(self):
+        resp = self._post(self.lotes, Lote.EM_FATURAMENTO)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("login"), resp.url)
+
+    def test_altera_so_os_lotes_marcados_e_seus_ineps(self):
+        self.client.force_login(self.usuario)
+        resp = self._post(self.lotes[:2], Lote.EM_FATURAMENTO)
+        self.assertRedirects(resp, reverse("mip_lote_inep"))
+        for lote in self.lotes[:2]:
+            lote.refresh_from_db()
+            self.assertEqual(lote.status, Lote.EM_FATURAMENTO)
+            self.assertEqual(lote.escolas.get().status_mip, Escola.EM_FATURAMENTO_LOTE)
+        self.lotes[2].refresh_from_db()
+        self.assertEqual(self.lotes[2].status, Lote.EM_ANDAMENTO)
+        self.assertEqual(self.lotes[2].escolas.get().status_mip, Escola.EM_ANDAMENTO)
+
+    def test_lote_ja_concluido_e_pulado(self):
+        self.lotes[0].status = Lote.FATURAMENTO_CONCLUIDO
+        self.lotes[0].save()
+        self.client.force_login(self.usuario)
+        resp = self._post(self.lotes[:2], Lote.EM_FATURAMENTO)
+        self.lotes[0].refresh_from_db()
+        self.lotes[1].refresh_from_db()
+        self.assertEqual(self.lotes[0].status, Lote.FATURAMENTO_CONCLUIDO)
+        self.assertEqual(self.lotes[1].status, Lote.EM_FATURAMENTO)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any("não foram alterados" in m for m in mensagens))
+
+    def test_sem_status_ou_sem_selecao_nao_altera_nada(self):
+        self.client.force_login(self.usuario)
+        self._post(self.lotes, "")
+        self._post([], Lote.EM_FATURAMENTO)
+        self._post(self.lotes, "valor-invalido")
+        for lote in self.lotes:
+            lote.refresh_from_db()
+            self.assertEqual(lote.status, Lote.EM_ANDAMENTO)
+
+    def test_id_invalido_e_ignorado(self):
+        self.client.force_login(self.usuario)
+        self.client.post(self.url, {"lote_ids": ["abc", self.lotes[0].pk], "status": Lote.EM_FATURAMENTO})
+        self.lotes[0].refresh_from_db()
+        self.assertEqual(self.lotes[0].status, Lote.EM_FATURAMENTO)
+
+    def test_visualizador_bloqueado(self):
+        self.client.force_login(self.visualizador)
+        self._post(self.lotes, Lote.EM_FATURAMENTO)
+        for lote in self.lotes:
+            lote.refresh_from_db()
+            self.assertEqual(lote.status, Lote.EM_ANDAMENTO)
+
+    def test_registra_historico_de_cada_inep(self):
+        self.client.force_login(self.usuario)
+        antes = RiHistorico.objects.count()
+        self._post(self.lotes, Lote.EM_FATURAMENTO)
+        self.assertGreaterEqual(RiHistorico.objects.count(), antes + 3)
+
+    def test_menu_mudar_status_da_linha_conhece_a_rota_em_massa(self):
+        self.client.force_login(self.usuario)
+        resp = self.client.get(reverse("mip_lote_inep"))
+        self.assertContains(resp, self.url)
+        self.assertContains(resp, "Mudar status")
 
 
 class MipLoteStatusUpdateViewTests(TestCase):

@@ -282,16 +282,16 @@ class GridInepViewTests(TestCase):
         self.assertNotContains(resp, "form-responsavel-grid-")
         self.assertNotContains(resp, f'data-abrir-modal-email="modal-email-{self.ri.pk}"')
 
-    def test_grid_tem_as_5_colunas_conexao_e_status_ri_sem_responsavel(self):
-        """RF-05 + RF-20 (revisto em 2026-08-25, RN-012): grid tem 5 colunas
-        - INEP, Nome, Endereço, Conexão (Escola/RF-20) e Status do RI
-        (RN-001) - "Responsável" não é mais coluna da tabela principal."""
+    def test_grid_sem_colunas_conexao_e_responsavel(self):
+        """RF-05 (revisto em 2026-08-25, RN-012): "Responsável" não é mais
+        coluna da tabela principal. Pedido do usuário (2026-09-30): a
+        coluna "Conexão" também saiu do grid (o filtro por Status de
+        conexão continua)."""
         self.client.force_login(self.user)
         resp = self.client.get(reverse("grid_inep"))
         self.assertNotContains(resp, "<th class=\"px-4 py-2\">Responsável</th>")
-        self.assertContains(
-            resp, '<th class="px-4 py-2" title="Status de conexão da Escola (RF-20)">Conexão</th>'
-        )
+        self.assertNotContains(resp, "Conexão</th>")
+        self.assertContains(resp, 'name="status_conexao"')
 
     def test_drilldown_mostra_responsavel_editavel(self):
         """RN-012: "Responsável" aparece dentro do drill-down, como um

@@ -169,6 +169,14 @@ class Escola(models.Model):
             return self.get_status_mip_display()
         return None
 
+    @property
+    def em_lote_importado_em_massa(self):
+        """Pedido do usuário (2026-09-30): INEP que entrou em LOTE pela
+        importação em massa (`importar_lotes_mip_em_massa`) ganha o selo
+        "Importação em massa" também em Equipamentos. Usa `self.lotes.all()`
+        para aproveitar `prefetch_related("lotes")` do grid."""
+        return any(lote.importado_em_massa for lote in self.lotes.all())
+
     def recalcular_status_conexao(self):
         """RN-007: desconectado -> parcialmente conectado -> conectado,
         conforme o preenchimento das datas de instalação de RE e RI."""
@@ -542,6 +550,11 @@ class Lote(models.Model):
     notas_fiscais_zip_enviado_em = models.DateTimeField(
         "Notas Fiscais (.zip) enviado em", null=True, blank=True
     )
+    # Pedido do usuário (2026-09-29): LOTE criado pelo comando
+    # `importar_lotes_mip_em_massa` (planilha "BASE CONSOLIDADA MIP"), não
+    # pelo botão "Criar LOTE" — sinalizado na tela "Projeto > MIP (LOTE)".
+    importado_em_massa = models.BooleanField("Criado por importação em massa", default=False)
+    arquivo_importacao = models.CharField("Arquivo da importação em massa", max_length=255, blank=True)
 
     class Meta:
         verbose_name = "Lote"

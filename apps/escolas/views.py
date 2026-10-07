@@ -8,7 +8,6 @@ from urllib.parse import quote, urlencode
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db import transaction
 from django.db.models import DateField, OuterRef, Prefetch, Q, Subquery
 from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
@@ -19,7 +18,7 @@ from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
 from apps.ri.forms import RiHistoricoForm, RiItemIxcProdutoFormSet
 from apps.ri.models import Documento, EmailFinanceiroLog, KitPadrao, Ri, RiHistorico, RiItemIxc
-from apps.ri.services import sincronizar_divergencia_kit_relatorio, trocar_status_com_log
+from apps.ri.services import sincronizar_divergencia_kit_relatorio
 
 # `LoteEmailForm` — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.forms`).
 from .forms import LoteNotasFiscaisZipUploadForm, NotasFiscaisMipUploadForm, PlanilhaRelatorioEaceMipUploadForm
@@ -35,6 +34,8 @@ from .services import (
     _resolver_lado_ixc,
     _valor_servico,
     _valor_total_itens,
+    aplicar_status_lote_mip,
+    aplicar_status_lotes_mip_em_massa,
     criar_lote_mip,
     desfazer_lote_mip,
     # enviar_email_lote, montar_assunto_email_lote, montar_corpo_email_lote — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.services`).
@@ -42,6 +43,8 @@ from .services import (
     escolas_elegiveis_lote_mip,
     planilhas_faturamento_implantacao_lote,
     rateio_relatorio_eace_mip_da_escola,
+    refletir_status_mip_no_ri,
+    retirar_do_grid_mip,
     sincronizar_notas_fiscais_mip_lote_em_andamento,
     sincronizar_relatorio_eace_mip_de_todas_as_escolas,
 )
@@ -120,12 +123,9 @@ def mip_inep_view(request):
     diferem) é sinalizada à parte, no próprio valor (RN-077), não pela
     bolinha.
 
-    `Escola.encontrado_relatorio_eace_mip` continua existindo só para a
-    lista separada abaixo do grid principal
-    (`escolas_fora_da_validacao_eace`): INEP que apareceu na última
-    sincronização mas cuja Escola NÃO está (ou não está mais) em
-    "Aguardando Validação EACE" — sinaliza um descompasso da própria
-    sincronização, não tem relação com o valor de nenhum INEP.
+    `Escola.encontrado_relatorio_eace_mip` decide quem entra no grid
+    (pedido do usuário, 2026-09-30: só INEP que veio no Relatório EACE
+    (MIP)); a antiga lista separada "Fora da Validação EACE" saiu da tela.
 
     RN-074 (revista por RN-092, e de novo por RN-104): usuário pediu para
     a lista deixar de mostrar todos os INEPs cadastrados (RN-066) e
@@ -214,7 +214,12 @@ def mip_inep_view(request):
     # (`ri.views.grid_inep_view`) continua mostrando toda Escola sempre —
     # RN-104 não mexe nele.
     ri_atual_qs = Ri.objects.filter(escola=OuterRef("pk")).order_by("-criado_em")
-    escolas = Escola.objects.filter(status_mip=Escola.AGUARDANDO_VALIDACAO_EACE)
+    # Pedido do usuário (2026-09-30): só entra no MIP o INEP que veio no
+    # Relatório EACE (MIP) — apareceu na planilha ativa na última
+    # sincronização (`Escola.encontrado_relatorio_eace_mip`, RN-081).
+    escolas = Escola.objects.filter(
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, encontrado_relatorio_eace_mip=True,
+    )
 
     # RN-079 (a criar): opções do filtro Estado — só os estados que já
     # têm pelo menos 1 INEP na base do grid ("Validação EACE"), calculado
@@ -431,35 +436,9 @@ def mip_inep_view(request):
         for escola in escolas_elegiveis_lote
     ]
 
-    # RN-081 (revista pela RN-092): INEPs encontrados na última
-    # sincronização do Relatório EACE (MIP), mas cuja Escola não está com
-    # `status_mip="Aguardando Validação EACE"` — não são linha normal do
-    # grid, mas o usuário pediu pra sinalizar esse descompasso mesmo
-    # assim: aparecem à parte, sempre em vermelho. Cobre tanto quem nunca
-    # entrou no MIP (`status_mip` `None`) quanto quem já saiu dessa etapa
-    # (Em Andamento/Faturamento Concluído). Só a busca (`q`) filtra essa
-    # lista — Estado/Município não, porque o `<select>` de Estado (RN-079)
-    # só oferece as UFs da base do MIP, e essas escolas por definição
-    # estão fora dela (poderiam ter um Estado nem listado no `<select>`);
-    # divergência/período/data de ativação também não fazem sentido pra
-    # quem nunca chegou nesse status. `.exclude(status_mip=...)` sozinho
-    # excluiria também quem nunca entrou no MIP (`status_mip` NULL) —
-    # três-valores do SQL faz `NOT (NULL = 'x')` virar NULL, tratado como
-    # falso pelo WHERE; por isso o "OR ... isnull" explícito abaixo (mesma
-    # cautela já registrada na versão anterior desta regra).
-    escolas_fora_da_validacao_eace = Escola.objects.filter(
-        encontrado_relatorio_eace_mip=True
-    ).filter(
-        Q(status_mip__isnull=True) | ~Q(status_mip=Escola.AGUARDANDO_VALIDACAO_EACE)
-    )
-    if q:
-        escolas_fora_da_validacao_eace = escolas_fora_da_validacao_eace.filter(
-            Q(inep__icontains=q)
-            | Q(nome__icontains=q)
-            | Q(municipio__icontains=q)
-            | Q(estado__icontains=q)
-        )
-    escolas_fora_da_validacao_eace = list(escolas_fora_da_validacao_eace.order_by("nome"))
+    # Pedido do usuário (2026-09-30): a lista separada "Fora da Validação
+    # EACE" (RN-081) saiu da tela — o MIP mostra só o grid dos INEPs que
+    # vieram no Relatório EACE (MIP).
 
     paginator = Paginator(linhas, 25)
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -489,7 +468,6 @@ def mip_inep_view(request):
             "total_elegiveis_lote": total_elegiveis_lote,
             "escolas_elegiveis_lote": escolas_elegiveis_lote,
             "escolas_elegiveis_lote_detalhe": escolas_elegiveis_lote_detalhe,
-            "escolas_fora_da_validacao_eace": escolas_fora_da_validacao_eace,
             "q": q,
         },
     )
@@ -1001,30 +979,66 @@ def mip_lote_status_update_view(request, pk):
         )
         return redirect(next_url)
 
-    escolas = list(lote.escolas.all())
     # Pedido do usuário (2026-09-26): "Em Andamento MIP" deixou de reabrir o
     # RI — os três status só trocam o Status (MIP) de cada INEP; o RI
-    # continua em "Faturamento RI Concluído" (`_refletir_status_mip_no_ri`).
-    status_escola_novo = {
-        Lote.EM_ANDAMENTO: Escola.EM_ANDAMENTO,
-        Lote.EM_FATURAMENTO: Escola.EM_FATURAMENTO_LOTE,
-        Lote.FATURAMENTO_CONCLUIDO: Escola.FATURAMENTO_CONCLUIDO,
-    }[novo_status]
-    with transaction.atomic():
-        for escola in escolas:
-            status_anterior = escola.get_status_mip_display()
-            escola.status_mip = status_escola_novo
-            escola.save(update_fields=["status_mip"])
-            ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
-            if ri_atual:
-                _registrar_log_campo_mip(
-                    ri_atual, request.user, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
-                )
-                _refletir_status_mip_no_ri(escola, ri_atual, request.user)
-        lote.status = novo_status
-        lote.save(update_fields=["status"])
+    # continua em "Faturamento RI Concluído" (`refletir_status_mip_no_ri`).
+    aplicar_status_lote_mip(lote, novo_status, request.user)
     messages.success(request, f'{lote} atualizado para "{lote.get_status_display()}".')
 
+    return redirect(next_url)
+
+
+@login_required
+def mip_lote_status_em_massa_view(request):
+    """Pedido do usuário (2026-09-30): troca o Status de vários LOTEs
+    marcados de uma vez — mesmos checkboxes do "Baixar planilhas (.zip)"
+    (botão com `formaction` apontando para cá). Regra em
+    `apps.escolas.services.aplicar_status_lotes_mip_em_massa`."""
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("mip_lote_inep")
+    if request.method != "POST":
+        return redirect(next_url)
+
+    novo_status = (request.POST.get("status") or "").strip()
+    if novo_status not in (Lote.EM_ANDAMENTO, Lote.EM_FATURAMENTO, Lote.FATURAMENTO_CONCLUIDO):
+        messages.error(request, "Escolha o novo status antes de alterar os LOTEs marcados.")
+        return redirect(next_url)
+    lote_ids = [pk for pk in request.POST.getlist("lote_ids") if pk.isdigit()]
+    if not lote_ids:
+        messages.error(request, "Selecione ao menos um LOTE para alterar o status.")
+        return redirect(next_url)
+
+    alterados, pulados = aplicar_status_lotes_mip_em_massa(lote_ids, novo_status, request.user)
+    rotulo = dict(Lote.STATUS_CHOICES)[novo_status]
+    if alterados:
+        messages.success(request, f'{len(alterados)} LOTE(s) atualizado(s) para "{rotulo}".')
+    if pulados:
+        messages.error(
+            request,
+            f'{len(pulados)} LOTE(s) já em "Processo Concluído" não foram alterados: '
+            + ", ".join(str(lote) for lote in pulados) + ".",
+        )
+    return redirect(next_url)
+
+
+@login_required
+def mip_retirar_grid_view(request):
+    """Pedido do usuário (2026-09-30): botão "Retirar da lista" do grid do
+    MIP — 1 INEP (ícone da linha) ou vários (caixas de seleção). Regra em
+    `apps.escolas.services.retirar_do_grid_mip`; confirmação no navegador
+    (`onsubmit="return confirm(...)"`)."""
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("mip_inep")
+    if request.method != "POST":
+        return redirect(next_url)
+
+    retirados = retirar_do_grid_mip(request.POST.getlist("escola_ids"), request.user)
+    if retirados:
+        messages.success(request, f"{retirados} INEP(s) retirado(s) do grid do MIP.")
+    else:
+        messages.error(request, "Nenhum INEP selecionado para retirar do grid.")
     return redirect(next_url)
 
 
@@ -1231,21 +1245,11 @@ def mip_detail_view(request, inep):
     )
 
 
-def _refletir_status_mip_no_ri(escola, ri, usuario):
-    """Pedido do usuário (2026-09-26; a formalizar pelo Orquestrador em
-    business_rules.md): INEP no MIP, qualquer Status (MIP), fica no RI como
-    "Faturamento RI Concluído" — o Status (MIP) aparece no RI só como
-    rótulo. Substitui a regra de 2026-09-25 ("Processo Concluído" gravava
-    o RI como "Faturamento Concluído")."""
-    if ri and escola.status_mip and ri.status != Ri.FATURAMENTO_RI_CONCLUIDO:
-        trocar_status_com_log(ri, Ri.FATURAMENTO_RI_CONCLUIDO, usuario)
-
-
 @login_required
 def mip_status_update_view(request, inep):
     """RN-092 (revista em 2026-09-26, pedido do usuário): troca o Status
     (MIP). Nenhum status reabre mais o RI — ele fica em "Faturamento RI
-    Concluído" (`_refletir_status_mip_no_ri`), inclusive com "Em
+    Concluído" (`refletir_status_mip_no_ri`), inclusive com "Em
     Andamento MIP" (antes voltava o RI para "Em Andamento").
 
     FEAT-044/FEAT-046/RN-098 (a formalizar pelo Orquestrador em
@@ -1282,7 +1286,7 @@ def mip_status_update_view(request, inep):
         _registrar_log_campo_mip(
             ri_atual, request.user, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
         )
-        _refletir_status_mip_no_ri(escola, ri_atual, request.user)
+        refletir_status_mip_no_ri(escola, ri_atual, request.user)
     messages.success(request, "Status (MIP) atualizado.")
     return redirect("mip_detail", inep=inep)
 

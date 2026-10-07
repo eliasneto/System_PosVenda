@@ -17,7 +17,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 import zipfile
+from collections import Counter
 from decimal import Decimal
 
 import openpyxl
@@ -31,7 +33,7 @@ from django.utils import timezone
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
 from apps.ri.models import KitPadrao, Ri, RiHistorico
-from apps.ri.services import casar_planilha_eace_com_catalogo, quantidade_planilha_eace
+from apps.ri.services import casar_planilha_eace_com_catalogo, quantidade_planilha_eace, trocar_status_com_log
 
 from .models import Escola, EscolaItemRelatorioEaceMip, Lote, NotasFiscaisMip, PlanilhaRelatorioEaceMip
 
@@ -795,7 +797,8 @@ def _normalizar_texto_cidade(texto):
     rateio com `Lote.municipio`/`Escola.municipio` — sem acento nem caixa
     não importam aqui (RN a formalizar, pedido do usuário, 2026-09-24),
     só o texto bruto (nunca alterado) é que aparece na tela/planilha."""
-    return (texto or "").strip().casefold()
+    sem_acento = unicodedata.normalize("NFKD", (texto or "").strip())
+    return "".join(caractere for caractere in sem_acento if not unicodedata.combining(caractere)).casefold()
 
 
 def _grupos_rateio_relatorio_eace_mip_da_escola(escola):
@@ -863,7 +866,7 @@ def rateio_relatorio_eace_mip_da_escola(escola):
 # ---------------------------------------------------------------------------
 
 
-def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim):
+def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim, *, exigir_relatorio_eace_mip=True):
     """Base elegível para um LOTE: mesma combinação de filtros do grid do
     MIP — Estado/Município (RN-079, comparados exatos, iguais ao `<select>`
     da tela) e, quando informada, Data de Ativação do RI atual (RN-075,
@@ -901,6 +904,11 @@ def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim):
     escolas = Escola.objects.annotate(data_ativacao_ri_atual=data_ativacao_ri_atual).filter(
         status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, estado=estado, municipio=municipio,
     )
+    if exigir_relatorio_eace_mip:
+        # Pedido do usuário (2026-09-30): LOTE só com INEP que veio no
+        # Relatório EACE (MIP) — mesmo critério do grid do MIP. A
+        # importação em massa desliga (a planilha dela é a própria fonte).
+        escolas = escolas.filter(encontrado_relatorio_eace_mip=True)
     if data_inicio:
         escolas = escolas.filter(data_ativacao_ri_atual__gte=data_inicio)
     if data_fim:
@@ -965,7 +973,7 @@ def _registrar_log_campo_lote(ri, usuario, campo, valor_anterior, valor_novo):
 
 
 @transaction.atomic
-def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_ids=None):
+def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_ids=None, exigir_relatorio_eace_mip=True):
     """Cria o `Lote` com os INEPs elegíveis (`escolas_elegiveis_lote_mip`,
     acima) do filtro Estado+Município (+ Data início/fim, quando
     informada) — chamada pelo botão "Criar LOTE" da tela "Projeto > MIP"
@@ -1010,7 +1018,9 @@ def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_
     if data_inicio and data_fim and data_inicio > data_fim:
         raise LoteMipError("A data inicial não pode ser depois da data final.")
 
-    elegiveis = escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim)
+    elegiveis = escolas_elegiveis_lote_mip(
+        estado, municipio, data_inicio, data_fim, exigir_relatorio_eace_mip=exigir_relatorio_eace_mip,
+    )
     if not elegiveis:
         periodo = f" no período informado" if (data_inicio or data_fim) else ""
         raise LoteMipError(
@@ -1098,6 +1108,267 @@ def desfazer_lote_mip(lote, usuario):
             )
             _registrar_log_campo_lote(ri_atual, usuario, "LOTE", identificacao_lote, "Desfeito")
     lote.delete()
+
+
+RETIRADO_DO_GRID_MIP = "Retirado da lista (volta se vier numa nova sincronização do Relatório EACE (MIP))"
+
+
+@transaction.atomic
+def retirar_do_grid_mip(escola_ids, usuario):
+    """Pedido do usuário (2026-09-30): tira do grid do MIP os INEPs que
+    sobraram (não foram para LOTE) — só desmarca "veio no Relatório EACE
+    (MIP)" (`encontrado_relatorio_eace_mip`), sem mexer em nenhum outro
+    dado; o INEP volta sozinho quando aparecer numa nova sincronização.
+    Só age sobre quem está de fato no grid (Aguardando Validação EACE e
+    marcado como encontrado) e grava 1 entrada no histórico de cada um.
+    Devolve quantos foram retirados."""
+    escolas = list(
+        Escola.objects.filter(
+            pk__in=[pk for pk in escola_ids if str(pk).isdigit()],
+            status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+            encontrado_relatorio_eace_mip=True,
+        )
+    )
+    for escola in escolas:
+        escola.encontrado_relatorio_eace_mip = False
+        escola.save(update_fields=["encontrado_relatorio_eace_mip"])
+        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if ri_atual:
+            _registrar_log_campo_lote(ri_atual, usuario, "Grid do MIP", "Na lista", RETIRADO_DO_GRID_MIP)
+    return len(escolas)
+
+
+def refletir_status_mip_no_ri(escola, ri, usuario):
+    """Pedido do usuário (2026-09-26; a formalizar pelo Orquestrador em
+    business_rules.md): INEP no MIP, qualquer Status (MIP), fica no RI como
+    "Faturamento RI Concluído" — o Status (MIP) aparece no RI só como
+    rótulo. Substitui a regra de 2026-09-25 ("Processo Concluído" gravava
+    o RI como "Faturamento Concluído")."""
+    if ri and escola.status_mip and ri.status != Ri.FATURAMENTO_RI_CONCLUIDO:
+        trocar_status_com_log(ri, Ri.FATURAMENTO_RI_CONCLUIDO, usuario)
+
+
+@transaction.atomic
+def aplicar_status_lote_mip(lote, novo_status, usuario):
+    """RN-101: troca o Status do LOTE e o Status (MIP) de TODOS os seus
+    INEPs (tudo ou nada), com 1 entrada no histórico de cada INEP. Quem
+    chama valida se a troca é permitida (`mip_lote_status_update_view`,
+    `importar_lotes_mip_em_massa`)."""
+    status_escola_novo = {
+        Lote.EM_ANDAMENTO: Escola.EM_ANDAMENTO,
+        Lote.EM_FATURAMENTO: Escola.EM_FATURAMENTO_LOTE,
+        Lote.FATURAMENTO_CONCLUIDO: Escola.FATURAMENTO_CONCLUIDO,
+    }[novo_status]
+    for escola in lote.escolas.all():
+        status_anterior = escola.get_status_mip_display()
+        escola.status_mip = status_escola_novo
+        escola.save(update_fields=["status_mip"])
+        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if ri_atual:
+            _registrar_log_campo_lote(
+                ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display(),
+            )
+            refletir_status_mip_no_ri(escola, ri_atual, usuario)
+    lote.status = novo_status
+    lote.save(update_fields=["status"])
+
+
+@transaction.atomic
+def aplicar_status_lotes_mip_em_massa(lote_ids, novo_status, usuario):
+    """Pedido do usuário (2026-09-30): troca o Status de N LOTEs de uma vez
+    em "Projeto > MIP (LOTE)" — mesma `aplicar_status_lote_mip` de cada
+    LOTE, tudo ou nada. LOTE já em "Processo Concluído" é pulado (mesma
+    trava da troca individual, `mip_lote_status_update_view`). Devolve
+    `(alterados, pulados)`."""
+    alterados, pulados = [], []
+    for lote in Lote.objects.filter(pk__in=lote_ids).order_by("pk"):
+        if lote.status == Lote.FATURAMENTO_CONCLUIDO:
+            pulados.append(lote)
+            continue
+        aplicar_status_lote_mip(lote, novo_status, usuario)
+        alterados.append(lote)
+    return alterados, pulados
+
+
+# ---------------------------------------------------------------------------
+# Pedido do usuário (2026-09-29): importação em massa de LOTEs a partir da
+# planilha "BASE CONSOLIDADA MIP" (mesmo formato do Relatório EACE do MIP,
+# RN-069) — comando `importar_lotes_mip_em_massa`. Decisões do usuário:
+# INEP já em LOTE não é tocado; entram os INEPs que passam na regra do
+# LOTE (RN-098) e também os que só estavam com o Lado EACE (MIP) vazio,
+# com o Valor Total (IXC) igual ao da planilha (Lado EACE preenchido com
+# as linhas da própria planilha, mesmo Sincronizador do MIP); LOTE por
+# Estado + Município, criado já em "Processo Concluído".
+# ---------------------------------------------------------------------------
+
+MOTIVO_IMPORTACAO_INCLUIDO = "incluido"
+MOTIVO_IMPORTACAO_JA_EM_LOTE = "ja_em_lote"
+MOTIVO_IMPORTACAO_NAO_CADASTRADO = "nao_cadastrado"
+MOTIVO_IMPORTACAO_STATUS = "status_mip_nao_elegivel"
+MOTIVO_IMPORTACAO_VALOR = "valor_divergente"
+
+
+class _DesfazerPreenchimentoLado3(Exception):
+    """Interno: desfaz (savepoint) o Lado EACE (MIP) gravado nesta rodada
+    quando, mesmo preenchido, o INEP não fica com os valores batendo."""
+
+
+def _totais_lote_mip(escola, catalogo_kits):
+    """Valor Total (IXC) e (EACE) do INEP, `None` quando ausente ou
+    incompleto (algum item sem Valor de serviço) — mesma conta de
+    `escolas_elegiveis_lote_mip`."""
+    ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").prefetch_related("itens_ixc").first()
+    total_ixc, incompleto_ixc = _valor_total_itens(_resolver_lado_ixc(ri_atual, escola.lote, catalogo_kits))
+    total_eace, incompleto_eace = _valor_total_itens(_resolver_lado3_relatorio_eace_mip(escola))
+    return (
+        None if incompleto_ixc else total_ixc,
+        None if incompleto_eace else total_eace,
+    )
+
+
+def _registrar_historico_importacao_em_massa(escola, registro, lote, usuario, nome_arquivo):
+    """Pedido do usuário (2026-09-30): 1 entrada no histórico do RI atual
+    do INEP dizendo que o processo foi importado em massa — quando, por
+    quem, de qual arquivo — e o que mudou (LOTE, Status (MIP), Status do
+    RI, equipamentos do Lado EACE (MIP), Município); o que não mudou
+    aparece como "sem alteração"."""
+    ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+    if ri_atual is None:
+        return
+    escola.refresh_from_db(fields=["status_mip"])
+
+    def mudanca(rotulo, antes, depois):
+        if antes == depois:
+            return f"- {rotulo}: sem alteração ({depois or '—'})"
+        return f"- {rotulo}: {antes or '(vazio)'} → {depois}"
+
+    if registro["lado3_preenchido"]:
+        itens = ", ".join(
+            f"{item.descricao_item} ({item.quantidade} un.)" for item in escola.itens_relatorio_eace_mip.all()
+        )
+        linha_equipamentos = f"- Equipamentos (Relatório EACE MIP): incluídos pela planilha — {itens}"
+    else:
+        linha_equipamentos = "- Equipamentos: sem alteração"
+    municipio_anterior = registro.get("municipio_anterior")
+    nome_usuario = (usuario.get_full_name() or usuario.username) if usuario else "Sistema"
+    linhas = [
+        f"Processo importado em massa em {timezone.localtime().strftime('%d/%m/%Y %H:%M')} "
+        f"por {nome_usuario} (arquivo {nome_arquivo}).",
+        "Alterações:",
+        f"- LOTE: {lote} ({lote.municipio}/{lote.estado})",
+        mudanca("Status (MIP)", registro["status_mip_antes"], escola.get_status_mip_display()),
+        mudanca("Status do RI", registro["status_ri_antes"], ri_atual.get_status_display()),
+        linha_equipamentos,
+        mudanca("Município", municipio_anterior or escola.municipio, escola.municipio),
+    ]
+    RiHistorico.objects.create(
+        ri=ri_atual, tipo=RiHistorico.IMPORTACAO_MASSA, autor=usuario, mensagem="\n".join(linhas),
+    )
+
+
+def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo):
+    """`linhas_por_inep`: {INEP (8 dígitos): [linhas]} no formato de
+    `_agrupar_linhas_relatorio_eace_mip_por_inep`, com a chave extra
+    `valor_liberado` (Decimal, coluna "Valor Liberado ACS"). Grava tudo
+    numa transação (quem chama decide se desfaz, ex.: simulação) e
+    devolve `{"ineps": [...], "lotes": [...]}` — 1 entrada por INEP com o
+    motivo de inclusão/exclusão e os 3 totais (planilha, IXC, EACE)."""
+    catalogo_kits = list(KitPadrao.objects.all())
+    escolas = {
+        escola.inep: escola
+        for escola in Escola.objects.filter(inep__in=list(linhas_por_inep)).prefetch_related("lotes")
+    }
+    resultado_ineps = []
+    candidatos = {}
+
+    for inep, linhas in linhas_por_inep.items():
+        total_planilha = sum((linha["valor_liberado"] for linha in linhas), Decimal("0.00"))
+        registro = {
+            "inep": inep, "total_planilha": total_planilha, "total_ixc": None, "total_eace": None,
+            "lado3_preenchido": False, "lote": "",
+        }
+        resultado_ineps.append(registro)
+        escola = escolas.get(inep)
+        if escola is None:
+            registro["motivo"] = MOTIVO_IMPORTACAO_NAO_CADASTRADO
+            continue
+        registro["estado"], registro["municipio"] = escola.estado, escola.municipio
+        lotes_existentes = list(escola.lotes.all())
+        if lotes_existentes:
+            registro["motivo"] = MOTIVO_IMPORTACAO_JA_EM_LOTE
+            registro["lote"] = ", ".join(str(lote) for lote in lotes_existentes)
+            continue
+        total_ixc, total_eace = _totais_lote_mip(escola, catalogo_kits)
+        registro["total_ixc"], registro["total_eace"] = total_ixc, total_eace
+        if escola.status_mip != Escola.AGUARDANDO_VALIDACAO_EACE:
+            registro["motivo"] = MOTIVO_IMPORTACAO_STATUS
+            registro["status_mip"] = escola.get_status_mip_display() or "(sem Status (MIP))"
+            continue
+
+        ri_antes = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        registro["status_mip_antes"] = escola.get_status_mip_display()
+        registro["status_ri_antes"] = ri_antes.get_status_display() if ri_antes else ""
+        lado3_vazio = not escola.itens_relatorio_eace_mip.exists()
+        if lado3_vazio and total_ixc is not None and total_ixc == total_planilha:
+            try:
+                with transaction.atomic():
+                    _sincronizar_relatorio_eace_mip_da_escola(escola, linhas, sobrepor=False, usuario=usuario)
+                    total_ixc, total_eace = _totais_lote_mip(escola, catalogo_kits)
+                    if total_eace != total_planilha:
+                        raise _DesfazerPreenchimentoLado3
+                registro["lado3_preenchido"] = True
+                registro["total_eace"] = total_eace
+            except _DesfazerPreenchimentoLado3:
+                total_ixc, total_eace = _totais_lote_mip(escola, catalogo_kits)
+
+        if total_ixc is None or total_ixc != total_eace or total_eace != total_planilha:
+            registro["motivo"] = MOTIVO_IMPORTACAO_VALOR
+            continue
+        registro["motivo"] = MOTIVO_IMPORTACAO_INCLUIDO
+        candidatos.setdefault((escola.estado, _normalizar_texto_cidade(escola.municipio)), []).append(
+            (escola, registro)
+        )
+
+    lotes = []
+    for (estado, _municipio_normalizado), itens in sorted(candidatos.items()):
+        # Pedido do usuário (2026-09-29): mesmo Município com grafias
+        # diferentes no cadastro (ex.: "SAO PAULO" e "São Paulo") vira 1
+        # LOTE só — o INEP com a grafia diferente passa a usar a mais
+        # comum sem ser toda em maiúsculas, com registro no histórico.
+        grafias = Counter(escola.municipio for escola, _ in itens)
+        municipio = max(grafias, key=lambda grafia: (not grafia.isupper(), grafias[grafia]))
+        for escola, registro in itens:
+            if escola.municipio == municipio:
+                continue
+            municipio_anterior = escola.municipio
+            escola.municipio = municipio
+            escola.save(update_fields=["municipio"])
+            registro["municipio"], registro["municipio_anterior"] = municipio, municipio_anterior
+            ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+            if ri_atual:
+                _registrar_log_campo_lote(ri_atual, usuario, "Município", municipio_anterior, municipio)
+        try:
+            lote = criar_lote_mip(
+                estado, municipio, None, None, usuario, escola_ids=[escola.pk for escola, _ in itens],
+                exigir_relatorio_eace_mip=False,
+            )
+        except LoteMipError:
+            for _, registro in itens:
+                registro["motivo"] = MOTIVO_IMPORTACAO_VALOR
+            continue
+        lote.importado_em_massa = True
+        lote.arquivo_importacao = nome_arquivo
+        lote.save(update_fields=["importado_em_massa", "arquivo_importacao"])
+        aplicar_status_lote_mip(lote, Lote.FATURAMENTO_CONCLUIDO, usuario)
+        ids_no_lote = set(lote.escolas.values_list("pk", flat=True))
+        for escola, registro in itens:
+            if escola.pk in ids_no_lote:
+                registro["lote"] = str(lote)
+                _registrar_historico_importacao_em_massa(escola, registro, lote, usuario, nome_arquivo)
+            else:
+                registro["motivo"] = MOTIVO_IMPORTACAO_VALOR
+        lotes.append(lote)
+    return {"ineps": resultado_ineps, "lotes": lotes}
 
 
 # Pedido do usuario (2026-09-15): envio de e-mail do LOTE comentado (nao

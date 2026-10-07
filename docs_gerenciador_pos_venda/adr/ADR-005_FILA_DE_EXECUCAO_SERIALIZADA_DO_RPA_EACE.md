@@ -10,6 +10,11 @@ rodando de verdade em produção, validado processando 1 item real da fila
 contra o portal. Pendência de infraestrutura resolvida — ver
 "Pendências".
 
+**Emenda (2026-09-29):** a mesma fila e o mesmo `rpa_eace_worker` passam
+a levar também o envio da NF dos LOTEs do MIP (log próprio
+`LogRpaEaceMip`) e a Validação MIP (NF) — continua 1 execução do portal
+por vez. Ver `ADR-008` (RN-112).
+
 ## Contexto
 A Fase 2 da `FEAT-033` (entregue em 2026-09-03) colocou ao vivo, na tela
 de detalhe do RI, um botão "Disparar RPA" por log de Nota Fiscal — hoje a

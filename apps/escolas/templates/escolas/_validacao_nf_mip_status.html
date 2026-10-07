@@ -46,7 +46,7 @@ recarrega com os cards novos no grid.
                 <span class="text-[11px] font-bold text-gray-600 dark:text-gray-400">{{ ultima.progresso_pct }}%{% if ultima.etapa_atual %} — {{ ultima.etapa_atual }}{% endif %}{% if ultima.pedido_solicitado %} (pedido {{ ultima.pedido_solicitado }}){% endif %}</span>
             </div>
             {% elif ultima.status == 'na_fila' %}
-            <p class="text-[11px] font-bold text-gray-600 dark:text-gray-400">Aguardando o worker do MIP começar{% if ultima.pedido_solicitado %} — pedido {{ ultima.pedido_solicitado }}{% endif %}.</p>
+            <p class="text-[11px] font-bold text-gray-600 dark:text-gray-400">Aguardando a fila do RPA EACE (roda depois dos envios de NF que já estão na fila){% if ultima.pedido_solicitado %} — pedido {{ ultima.pedido_solicitado }}{% endif %}.</p>
             {% elif ultima.status == 'erro' %}
             <p class="text-[11px] font-bold text-red-600 dark:text-red-400">{{ ultima.motivo_legivel }}</p>
             {% else %}

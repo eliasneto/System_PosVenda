@@ -12,7 +12,11 @@ simulação, sem PDF e sem município.
 - `enfileirar_validacao_nf_mip`: botão "Rodar agora" (e o agendamento) -
   só entra na fila; se já houver uma na fila/processando, reaproveita.
 - `processar_proxima_validacao_nf_mip`: executa a próxima da fila - quem
-  chama em loop é o worker do MIP (`manage.py processar_validacao_nf_mip`).
+  chama em loop é o worker da fila do RPA EACE (`manage.py
+  processar_fila_rpa_eace`, `rpa_eace_worker`), quando não há envio de NF
+  (RI/MIP) esperando - decisão do usuário, 2026-09-29, no lugar de um
+  container próprio. `manage.py processar_validacao_nf_mip` continua para
+  1 passada manual.
 """
 
 from __future__ import annotations

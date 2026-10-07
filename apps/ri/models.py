@@ -780,6 +780,11 @@ class RiHistorico(models.Model):
     # detalhe estruturado (por PDF: OK/divergente + motivos); `mensagem`
     # (limite de 250 caracteres) só guarda o resumo.
     VALIDACAO_NF = "validacao_nf"
+    # Pedido do usuário (2026-09-30): 1 entrada por INEP que entrou em LOTE
+    # pelo comando `importar_lotes_mip_em_massa` — quando, por quem e o que
+    # foi alterado (`mensagem`, texto de várias linhas). As mudanças campo a
+    # campo continuam nas entradas `log_campo`/`log_status` de sempre.
+    IMPORTACAO_MASSA = "importacao_massa"
     TIPO_CHOICES = [
         (MENSAGEM, "Mensagem"),
         (ANEXO, "Anexo"),
@@ -787,6 +792,7 @@ class RiHistorico(models.Model):
         (LOG_CAMPO, "Mudança de campo"),
         (EMAIL, "E-mail"),
         (VALIDACAO_NF, "Validação de Nota Fiscal"),
+        (IMPORTACAO_MASSA, "Importação em massa"),
     ]
 
     ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="historico")

@@ -1,5 +1,5 @@
 # Regras de Negócio — Gerenciador Pós-Venda (Faturamento EACE por INEP)
-_Última atualização: 2026-09-05_ (RN-065 criada — botão "Marcar como concluído manualmente" por Nota Fiscal, conta como Sucesso pro avanço de status do RI; correção: a seção de Notas Fiscais não some mais quando o RI avança de status, fica visível pra auditoria; RN-053 criada — Mês da Operação do Lado IXC na planilha, ano sempre corrente; RN-054 criada — linhas de grade ocultas em toda aba criada automaticamente; RN-055 criada — produto sem valor de Equipamento sai da lista do Lado IXC; RN-056 criada — gatilho da RPA de anexo no portal EACE, log por Nota Fiscal com seleção manual de PDF/XML, ampliada com os motivos "OSP não encontrada"/"Documento já enviado"; RN-057 criada — validação dos dados da Nota Fiscal extraídos do PDF contra o portal EACE antes do anexo, ampliada em 2026-09-04 com Produto/Valor extraídos do PDF exibidos no select antes de escolher; RN-058 criada — fila de execução serializada do RPA EACE, com reprocessamento automático só de erro não mapeado, implementada e testada em 2026-09-03; RN-063 criada em 2026-09-04 — consulta somente-leitura das pendências do portal EACE antes de escolher a Nota Fiscal; RN-064 criada em 2026-09-04 — correção: OSP resolvida pelo item que bate com o Valor da NF, não mais "qualquer" OSP do RI, e consulta de pendências cobrindo todas as OSPs distintas do RI)
+_Última atualização: 2026-09-29_ (RN-108 a RN-112 — RPA EACE do MIP, Validação MIP (NF), NF e envio por LOTE, fila única RI + MIP; histórico completo no fim do documento)
 
 ## Ciclo de Vida do RI
 
@@ -1186,7 +1186,7 @@ consumidor rodando de verdade via serviço `rpa_eace_worker` no
 do `email_scheduler`) — validado processando 1 item real da fila contra
 o portal em produção.
 
-**Features relacionadas:** FEAT-033.
+**Features relacionadas:** FEAT-033; FEAT-055/FEAT-056 (mesma fila, com log próprio do MIP — RN-112, 2026-09-29).
 
 **Status:** Ativa
 
@@ -3828,9 +3828,157 @@ recente daquele slot para exibição na tela.
 
 **Status:** Ativa.
 
+## RPA EACE do MIP (Nota Fiscal por município)
+
+### RN-108 — Anexo da NF do município no portal EACE (caminho do MIP)
+**Descrição:** O RPA do MIP anexa a Nota Fiscal (só o PDF) no card do
+município dentro do pedido do MIP no portal EACE, e só quando o card
+ainda espera a NF e o valor bate.
+
+**Contexto:** Pedido do usuário (2026-09-28/29), que informou o caminho
+passo a passo com o HTML do portal. A NF do MIP é por município (não por
+INEP) e é uma NFS-e (nota de serviço).
+
+**Critérios:**
+- Caminho: login → perfil Fornecedor → Medições → "Ver MIPs" → pedido de
+  **maior número** na coluna Pedido (ou o pedido informado) → card do
+  município.
+- Município comparado sem acento e sem diferença de maiúscula ("São
+  Paulo" = "SAO PAULO"). O mesmo município pode ter mais de 1 card; o
+  valor desempata.
+- Ciclo do card no portal: **Pendente** (aguarda a NF) → **Aguardando
+  Aprovação** (NF anexada) → **Aprovado** (o portal muda sozinho). Só
+  "Pendente" aceita o PDF.
+- Valor da NF: "Valor Total da Nota" (NF de produto) ou, na NFS-e,
+  "Valor total do serviço" e, na falta dele, "Valor total cobrado". Tem
+  que ser igual ao "Valor total a ser emitido" do card.
+- 2 ou mais cards pendentes do município com o mesmo valor: recusa (não
+  adivinha).
+- Depois de anexar, só é Sucesso se o card mudar para "Aguardando
+  Aprovação"/"Aprovado" em até 30 s; senão, Erro "envio não confirmado".
+- Recusa por status registra em que status o card estava.
+
+**Exceções:** Modo de validação (comando `validar_rpa_mip`, simulação
+por padrão) percorre o caminho e para antes de anexar.
+
+**Impacto técnico:** `apps/integracoes/eace/rpa_mip.py`; o leitor de NF
+do RPA do RI (`extrair_dados_pdf.py`) não muda.
+
+**Features relacionadas:** FEAT-054 (nova), FEAT-056.
+
+**Status:** Ativa.
+
+### RN-109 — Validação MIP (NF): leitura dos status do portal
+**Descrição:** "Projeto > Validação MIP (NF)" lê, no portal EACE, todos
+os cards de município de um pedido do MIP (Município, Cod. IBGE, Status,
+Valor total a ser emitido) e mostra o resultado num grid — só leitura,
+nunca anexa nada.
+
+**Contexto:** Pedido do usuário (2026-09-28) para acompanhar os status
+"Aguardando Aprovação"/"Aprovado" sem abrir o portal.
+
+**Critérios:**
+- Botão "Rodar agora" com Nº do pedido opcional (em branco = maior
+  pedido; inexistente = Erro citando o número). Só enfileira.
+- 1 execução em andamento por vez; clicar de novo reaproveita a que já
+  está na fila.
+- Grid mostra a última execução com Sucesso; uma execução com Erro não
+  apaga a leitura anterior. Tela mostra data/hora e status ("Sucesso",
+  "Erro", "Na fila", "Processando") da última execução.
+- Execução automática todo dia das 08:00 às 19:00, 1 por hora, sempre no
+  maior pedido — **desligada** até o usuário informar a partir de quando
+  deve rodar (`VALIDACAO_NF_MIP_AGENDADA=True` para ligar).
+- Fora do Visualizador.
+
+**Exceções:** Execução "Processando" há mais de 30 min vira Erro
+("interrompida").
+
+**Impacto técnico:** `ValidacaoNfMip`/`CardValidacaoNfMip`
+(`apps/escolas/models.py`), `apps/escolas/validacao_nf_mip.py`.
+
+**Features relacionadas:** FEAT-055 (nova).
+
+**Status:** Ativa.
+
+### RN-110 — NF do LOTE: a NF comum a todos os INEPs
+**Descrição:** A NF enviada por um LOTE do MIP é a que aparece em
+**todos** os INEPs do LOTE (a NF do município).
+
+**Contexto:** Decisão do usuário (2026-09-29). INEP rateado pode ter NF
+de outro município também, por isso "comum a todos", não "qualquer uma".
+
+**Critérios:**
+- Nomes do PDF comparados sem diferença entre espaço e "_" e sem
+  maiúscula (dado real: a mesma NF gravada 2 vezes pelas sincronizações
+  de 24/09 e 25/09). Entre duplicatas, vale a sincronização mais recente.
+- Sem exatamente 1 NF comum (INEP sem NF, nenhuma comum, 2 ou mais
+  diferentes): envio bloqueado, com o motivo na tela.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `apps/escolas/rpa_mip_lote.py`. A duplicidade vem
+da sincronização de NF do MIP, que não foi alterada.
+
+**Features relacionadas:** FEAT-056 (nova).
+
+**Status:** Ativa.
+
+### RN-111 — Ícone "Enviar ao portal EACE" do LOTE
+**Descrição:** Cada LOTE tem um ícone que coloca na fila o envio da sua
+NF ao portal (RN-108/RN-110), com estado de acordo com o último envio.
+
+**Contexto:** Pedido do usuário (2026-09-29).
+
+**Critérios:**
+- Pede confirmação antes de enfileirar.
+- Na fila / Processando: inacessível (mostra a etapa).
+- Sucesso: desabilitado de vez.
+- Erro "documento já enviado" (card não estava mais Pendente):
+  desabilitado como o Sucesso, mostrando o status do card — tentar de
+  novo nunca daria certo.
+- Demais erros: habilita de novo, mostrando o motivo.
+- Fora do Visualizador.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** `LogRpaEaceMip` (`apps/escolas/models.py`),
+`_rpa_mip_lote_acao.html`.
+
+**Features relacionadas:** FEAT-056 (nova).
+
+**Status:** Ativa.
+
+### RN-112 — Fila única do RPA EACE: RI, MIP e Validação MIP
+**Descrição:** A fila do RPA EACE (RN-058) passa a levar também o envio
+da NF do LOTE (MIP) e a Validação MIP (NF), sempre 1 execução do portal
+por vez em todo o sistema.
+
+**Contexto:** Decisões do usuário (2026-09-29): "usar a mesma fila que
+usamos para RI, só informar o que é RI e o que é MIP" e, depois, a
+Validação no mesmo worker em vez de um container próprio.
+
+**Critérios:**
+- Cada passada processa o envio mais antigo entre RI e MIP (ordem de
+  chegada). Só com os envios vazios processa a Validação MIP (NF).
+- Envio do MIP segue a RN-058: erro de regra de negócio é definitivo na
+  1ª tentativa; erro técnico ganha 1 reprocessamento. "Envio não
+  confirmado" nunca reprocessa sozinho (evita anexar a NF 2 vezes).
+- "Projeto > Fila" mostra os 2 tipos, marcados RI e MIP; totais somam os
+  2.
+
+**Exceções:** Nenhuma.
+
+**Impacto técnico:** comando `processar_fila_rpa_eace` (worker
+`rpa_eace_worker`); `ADR-008`.
+
+**Features relacionadas:** FEAT-055, FEAT-056, FEAT-033.
+
+**Status:** Ativa.
+
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-09-29 | RN-108 a RN-112 criadas (RPA EACE do MIP: anexo da NF do município com ciclo Pendente → Aguardando Aprovação → Aprovado; Validação MIP (NF) só leitura com execução automática desligada; NF comum a todos os INEPs do LOTE; ícone de envio por LOTE; fila única RI + MIP + Validação); RN-058 ganha referência cruzada (mesma fila e mesmas regras de reprocessamento para o MIP) | Usuário pediu o RPA do MIP, a tela de validação e o envio pelo LOTE nesta sessão, decidindo log próprio do MIP, NF comum a todos os INEPs, "documento já enviado" desabilitando o ícone e a Validação no worker da fila EACE; Orquestrador formaliza trabalho já entregue e testado pelo Dev |
 | 2026-09-23 | RN-105 criada (regra "tudo ou nada" da automação Atendimentos IXC); RN-106 criada (usuário responsável fixo `"76"` no IXC para Atendimentos abertos pela automação); RN-107 criada (2 execuções independentes por tela — Processamento 1/2); RN-004 ganha ampliação (Automações IXC também restritas a Administrador) | Dev implementou e testou `FEAT-053` (Automações IXC: Login/Endereços e Atendimentos) nesta mesma sessão, a partir de material trazido do projeto sgpspeed (pasta `IXC/`, removida do repositório depois de migrada) — Orquestrador formaliza as regras; usuário confirmou manter `USUARIO_IXC_PADRAO="76"` e escolheu processamento em chunks sem fila dedicada (ver `ADR-007`) quando perguntado |
 | 2026-09-16 | RN-103 criada (Grid de Equipamentos deixa de excluir INEP pelo `status_mip`; grid do MIP passa a mostrar toda Escola cadastrada, não só quem já passou pelo handoff; coluna/filtro "Status (MIP)" passa a mostrar o Status do RI real enquanto não há handoff; RN-092 ganha emenda registrando a revisão parcial) | Usuário pediu para o INEP deixar de "sumir" do Grid de Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como imagem do RI (todos os INEPs, mesmo card, mesmo histórico); Orquestrador registrou a regra e `ADR-006`/`FEAT-052` nesta sessão; implementação ainda não iniciada |
 | 2026-09-16 | RN-098 criada (criação/desfazer de LOTE — elegibilidade e agrupamento de INEPs, FEAT-044/049/050); RN-101 criada (ciclo de status do LOTE — Em Andamento/Em Faturamento/Processo Concluído — e-mail do LOTE comentado, não usado por enquanto, FEAT-045/046); RN-102 criada (nome do Município em maiúsculo no texto de observação da planilha de faturamento de implantação) | Todo o conjunto (FEAT-044 a FEAT-046, FEAT-049, FEAT-050) já estava implementado e testado pelo Dev desde 2026-09-14, mas nunca tinha sido formalizado em `business_rules.md`/`checklist.md` — Orquestrador formaliza nesta sessão; usuário pediu, em turnos seguintes, para comentar o e-mail do LOTE e liberar a troca de status sem ele (RN-101), criar o download de planilhas de vários LOTEs em `.zip` (FEAT-051 nova) e o Município em maiúsculo na observação (RN-102); nenhum deploy em produção desta rodada ainda |

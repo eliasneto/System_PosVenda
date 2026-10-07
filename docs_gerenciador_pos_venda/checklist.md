@@ -1,5 +1,5 @@
 # Checklist — Gerenciador Pós-Venda (v1 · Faturamento EACE por INEP)
-_Última atualização: 2026-09-08_
+_Última atualização: 2026-09-29_
 
 > **Versão-alvo:** 1.0.0. **Nome exibido no menu do sistema:** "Gerenciador
 > Pós Venda" (sem hífen) — ver `architecture.md`, "Identidade do Sistema e
@@ -4169,11 +4169,110 @@ se 1 execução controlada, com poucas linhas, antes do primeiro uso
 real. Pasta `IXC/` (material de origem, com credenciais reais) removida
 do repositório a pedido do usuário depois da migração.
 
+
+---
+
+### FEAT-054 — RPA EACE do MIP: anexar a NF do município no portal
+
+**Descrição:** Automação (Playwright) que entra no portal EACE pelo
+caminho do MIP — login → Fornecedor → Medições → Ver MIPs → pedido de
+maior número (ou um pedido informado) → card do município — valida
+status e valor e anexa **só o PDF** da Nota Fiscal (sem XML). Inclui um
+comando de validação para o usuário acompanhar o caminho com uma
+captura de tela por etapa, antes de ligar a automação no sistema.
+**Tipo:** backend-only
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta — pré-requisito da FEAT-055 e da FEAT-056.
+**Critérios de aceite:**
+- Só anexa em card "Pendente" do município cujo "Valor total a ser
+  emitido" é igual ao valor da NF; 2+ cards candidatos → recusa.
+- Depois de anexar, só conta Sucesso se o card sair de "Pendente"
+  ("Aguardando Aprovação"/"Aprovado").
+- Lê o valor da NFS-e (layout de nota de serviço) sem mudar o leitor
+  usado pelo RPA do RI.
+- Comando de validação roda em simulação por padrão (não anexa), com
+  captura por etapa, vídeo e navegador visível opcionais.
+**Regras relacionadas:** RN-108.
+**Dependências:** FEAT-033 (reaproveita login/Medições do RPA EACE).
+**Tipo de validação:** QA — integração externa real (portal EACE).
+**Entrega do Dev:**
+- Caminho completo validado no portal real (pedido 506, 45 cards lidos).
+- "Ver MIPs" tratado abrindo na mesma aba ou em aba nova.
+- Grid do portal só renderiza cards ao rolar — o RPA rola até carregar
+  todos (primeira leitura real trazia 17 de 45).
+- Mensagens de erro em português, com o status do card no portal.
+**Pendência atual:** aguardando QA; nenhum envio real anexou NF ainda
+(todos os cards do pedido 506 já estavam "Aprovado"); confirmar com o
+usuário se o valor do portal corresponde ao "Valor total do serviço" ou
+ao "cobrado" da NFS-e quando os dois forem diferentes.
+
+### FEAT-055 — Projeto > Validação MIP (NF)
+
+**Descrição:** Tela com o grid Município / Valor / Status dos cards do
+pedido do MIP no portal EACE, data/hora e status da última rotina
+("Sucesso"/"Erro") e botão "Rodar agora" (com Nº do pedido opcional).
+A rotina só lê o portal — nunca anexa nada.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Média.
+**Critérios de aceite:**
+- "Rodar agora" só enfileira; enquanto houver execução em andamento, o
+  botão fica inacessível e a tela se atualiza sozinha até terminar.
+- Pedido em branco lê o de maior número; pedido inexistente vira Erro
+  com o número na mensagem.
+- Grid mostra sempre a última leitura com Sucesso (Erro não apaga).
+- Visualizador não vê o link nem acessa a tela.
+- Execução automática (08h–19h, de hora em hora) existe mas fica
+  desligada até o usuário liberar.
+**Regras relacionadas:** RN-109, RN-112.
+**Dependências:** FEAT-054.
+**Tipo de validação:** QA.
+**Entrega do Dev:**
+- Resumo por status (quantidade e valor), com filtro por card e por
+  município; responsivo (celular e desktop verificados).
+- Execuções processadas pelo mesmo worker da fila do RPA EACE (ADR-008).
+- Leitura real em homologação: pedido 506, 45 cards, Sucesso.
+**Pendência atual:** aguardando QA; a mudança "worker da fila EACE
+processa a Validação" está no código, mas ainda não foi para o servidor
+(até o deploy, execução pedida pelo botão precisa de passada manual);
+usuário vai informar a partir de quando ligar a execução automática.
+
+### FEAT-056 — MIP (LOTE): enviar a NF do LOTE ao portal EACE
+
+**Descrição:** Ícone "Enviar ao portal EACE" em cada LOTE (coluna
+Ações de "Projeto > MIP (LOTE)", mesmo padrão dos demais ícones) que
+coloca na fila do RPA EACE o envio da NF comum a todos os INEPs do
+LOTE (a NF é por município), processado pela FEAT-054.
+**Tipo:** fullstack
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta.
+**Critérios de aceite:**
+- Pede confirmação antes de enfileirar.
+- Na fila/Processando: inacessível; Sucesso: desabilitado de vez;
+  "documento já enviado": desabilitado, mostrando o status do card;
+  demais erros: habilita de novo, com o motivo.
+- Sem exatamente 1 NF comum aos INEPs: desabilitado, com o motivo.
+- "Projeto > Fila" mostra os envios do MIP marcados como MIP.
+- Visualizador não envia.
+**Regras relacionadas:** RN-110, RN-111, RN-112, RN-058.
+**Dependências:** FEAT-054, FEAT-033 (fila/worker do RPA EACE).
+**Tipo de validação:** QA — integração externa real e fila compartilhada.
+**Entrega do Dev:**
+- Mesma fila e mesmo worker do RPA do RI, com log próprio do MIP;
+  1 execução do portal por vez em todo o sistema.
+- Mesma NF gravada 2 vezes com nome diferente (sincronizações de
+  24/09 e 25/09) conta como 1 — 30 dos 31 LOTEs reais ficam aptos.
+- Primeiro envio real (LOTE-0037) chegou ao card e recusou corretamente
+  ("já estava no portal", card Aprovado).
+**Pendência atual:** aguardando QA; falta 1 envio que anexe de verdade
+(card "Pendente") para validar o fluxo completo no portal.
+
 ---
 
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|
+| 2026-09-29 | `FEAT-054`, `FEAT-055` e `FEAT-056` criadas, `🔍 Aguardando QA` — RPA EACE do MIP (anexa só o PDF da NF no card do município, RN-108), tela "Projeto > Validação MIP (NF)" (leitura de status do portal, RN-109) e ícone de envio da NF por LOTE em "MIP (LOTE)" (RN-110/RN-111), todos na fila única do RPA EACE (RN-112, `ADR-008` nova, emenda na `ADR-005`); deploy em homologação (`192.168.90.109`, commit `1d75612`) com backup do banco antes, 12 migrations aplicadas, containers `Up` e telas respondendo 200; roteiro de deploy rápido criado (`DEPLOY_RAPIDO.md`, raiz) | Usuário pediu o RPA do MIP (caminho informado passo a passo com o HTML do portal), a tela de validação com botão e rotina automática (desligada até ele liberar), o envio pelo LOTE usando a mesma fila do RI, e o deploy; decisões do usuário: log próprio do MIP (não o do RI), NF comum a todos os INEPs, "documento já enviado" desabilita o ícone, Validação processada pelo worker da fila EACE em vez de container próprio; Orquestrador formaliza trabalho já entregue e testado pelo Dev nesta mesma sessão |
 | 2026-09-23 | `FEAT-053` criada, `🔍 Aguardando QA` — Automações IXC: menu "Automações IXC" com 2 telas (Login/Endereços, Atendimentos), cada uma com 2 grids independentes (Processamento 1/2, RN-107 nova); upload de planilha real (modelo trazido do sgpspeed, `doc/Modelo Login Enderecos IXC.xlsx`/`Modelo Atendimento IXC.xlsx`), processamento em chunks via HTMX (`ADR-007` nova, sem fila/worker dedicado) com Start/Stop e progresso real, planilha de saída com resultado por linha; RN-105 (tudo ou nada, Atendimentos) e RN-106 (usuário `"76"` fixo no IXC) novas; RN-004 ampliada. 19 testes novos (`apps.ixc`), API do IXC sempre mockada; suíte completa (1039 testes) sem regressão — 1 falha pré-existente e não relacionada em `apps.auditoria` | Usuário trouxe o material de referência (client HTTP + automações de negócio) de outro sistema (sgpspeed) numa pasta `IXC/` na raiz e pediu para implantar as 2 automações e ligá-las ao frontend já criado; perguntado sobre o mecanismo de processamento (sem Celery no projeto) e sobre o ID de usuário fixo do IXC, escolheu chunks via HTMX e manter `"76"`; ao final, pediu a remoção da pasta `IXC/` (já migrada); Orquestrador formaliza FEAT-053/RN-105/RN-106/RN-107/ADR-007 nesta sessão — sem teste real contra a API de produção do IXC ainda |
 | 2026-09-18 | Deploy em produção (`192.168.90.109`, commit `cd8a409`) concluído — backup do banco validado antes (`backups/backup_pre_deploy_20260918_130005.sql.gz`), código atualizado (`git reset --hard` na branch `feat-002-importar-escolas-planilha`), containers reconstruídos (`db`/`web`/`nginx`/`email_scheduler`/`rpa_eace_worker` todos `Up`, `db` `(healthy)`), 3 migrations novas aplicadas sem indício de banco vazio (`escolas.0016`, `escolas.0017`, `ri.0035`), `collectstatic` sem novidade, `/login/` e o estático respondendo `200 OK`. Login real na aplicação ainda não confirmado por um humano nesta rodada — checagem automatizada via SSH/curl apenas, sem credencial exposta em log | Usuário pediu commit, push e pull no servidor de produção; DevOps executou o passo a passo do `DEPLOYMENT.md` (backup → git pull → build → migrate → collectstatic → validação) via SSH (`plink`, chave de host fixada, senha lida de arquivo temporário fora do histórico de comandos) |
 | 2026-09-17 | Deploy em produção (`192.168.90.109`, commit `09bdd36`) concluído — backup do banco validado antes (`backups/backup_pre_deploy_20260917_160635.sql.gz`; uma primeira tentativa foi interrompida por engano e gerou um arquivo de 20 bytes, descartado antes de seguir), containers reconstruídos (`db`/`web`/`nginx`/`email_scheduler`/`rpa_eace_worker` todos `Up`, `db` `(healthy)`), sem migration nova a aplicar (mudança da rodada não alterou schema), `/login/` e o estático respondendo `200 OK`, login real na aplicação confirmado pelo usuário com dado carregado na tela | Usuário pediu o pull no servidor de produção, subir os containers atualizados e validar a saúde de todos; DevOps executou o passo a passo do `DEPLOYMENT.md` (backup → git pull → build → migrate → collectstatic → validação) via SSH, guiado comando a comando pelo usuário, sem incidente |
