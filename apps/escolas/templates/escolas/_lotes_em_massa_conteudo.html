@@ -1,0 +1,71 @@
+{% load humanize %}
+{% comment %}
+LOTE em massa (pedido do usuário, 2026-10-13): conteúdo do modal "Criar LOTEs
+em massa" (`mip_lotes_em_massa_previa_view`, carregado por HTMX) — 1 LOTE
+previsto por cidade com INEP elegível. O usuário desmarca a cidade que não
+atende; os INEPs dela continuam no MIP. Confirmar cria 1 LOTE por cidade
+marcada (`mip_lotes_em_massa_criar_view`).
+{% endcomment %}
+<form method="POST" action="{% url 'mip_lotes_em_massa_criar' %}" class="flex flex-col min-h-0 flex-1" id="form-lotes-em-massa">
+    {% csrf_token %}
+    <input type="hidden" name="data_inicial" value="{{ data_inicial|date:'d/m/Y' }}">
+    <input type="hidden" name="data_final" value="{{ data_final|date:'d/m/Y' }}">
+
+    <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-800 shrink-0">
+        {% if lotes_previstos %}
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+            1 LOTE por cidade com INEP elegível{% if estado_filtro %} em {{ estado_filtro }}{% endif %}{% if data_inicial or data_final %}, ativação de {{ data_inicial|date:'d/m/Y'|default:"—" }} a {{ data_final|date:'d/m/Y'|default:"—" }}{% endif %}.
+            Desmarque o LOTE que não atende — os INEPs dele continuam no MIP.
+        </p>
+        <p class="text-xs mt-1 text-gray-500 dark:text-gray-400">
+            <span id="contador-lotes-em-massa" class="font-black text-gray-900 dark:text-gray-100">{{ lotes_previstos|length }}</span>
+            de {{ lotes_previstos|length }} LOTE(s) selecionado(s).
+        </p>
+        {% else %}
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+            Nenhuma cidade com INEP elegível (só entram os "Aguardando Validação EACE" com Valor Total IXC = EACE).
+        </p>
+        {% endif %}
+    </div>
+
+    <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0 space-y-2">
+        {% for previsto in lotes_previstos %}
+        <div class="rounded-xl border border-gray-100 dark:border-gray-800" data-lote-previsto>
+            <div class="flex items-center gap-2 px-3 py-2">
+                <label class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                    <input type="checkbox" name="cidades" value="{{ previsto.estado }}|{{ previsto.municipio }}" checked
+                           class="checkbox-lote-em-massa w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-pv-yellow focus:ring-amber-400 shrink-0">
+                    <span class="text-xs font-black text-gray-800 dark:text-gray-100 truncate">{{ previsto.municipio }}/{{ previsto.estado }}</span>
+                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 shrink-0">{{ previsto.escolas|length }} INEP(s)</span>
+                </label>
+                <span class="text-xs font-black text-gray-900 dark:text-gray-100 shrink-0 tabular-nums">R$ {{ previsto.valor_total|intcomma }}</span>
+                <button type="button" data-toggle-lote-previsto title="Ver os INEPs deste LOTE" aria-expanded="false"
+                        class="inline-flex items-center justify-center w-6 h-6 text-gray-400 shrink-0 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+                    <i data-lucide="chevron-down" class="w-3.5 h-3.5 transition-transform" data-lote-previsto-chevron></i>
+                </button>
+            </div>
+            <div class="hidden px-3 pb-2 ml-7 space-y-1" data-lote-previsto-ineps>
+                {% for escola in previsto.escolas %}
+                <div class="flex items-center justify-between gap-3 text-[11px]">
+                    <span class="min-w-0 truncate"><span class="font-bold text-gray-700 dark:text-gray-300">{{ escola.inep }}</span> <span class="text-gray-500 dark:text-gray-400">{{ escola.nome }}</span></span>
+                    <span class="text-gray-600 dark:text-gray-400 shrink-0 tabular-nums">R$ {{ escola.valor_total_lote_mip|intcomma }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="flex justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800 shrink-0">
+        <button type="button" data-fechar-modal-email class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+            Cancelar
+        </button>
+        {% if lotes_previstos %}
+        <button type="submit" id="btn-confirmar-lotes-em-massa"
+                class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition inline-flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
+            <i data-lucide="package-plus" class="w-3.5 h-3.5"></i>
+            Criar LOTE
+        </button>
+        {% endif %}
+    </div>
+</form>

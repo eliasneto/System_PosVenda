@@ -570,6 +570,12 @@ class Lote(models.Model):
     valores_faturados_planilha = models.JSONField(
         "Valor faturado por INEP (planilha da importação em massa)", default=dict, blank=True
     )
+    # Pedido do usuário (2026-10-13): rateio manual feito no modal "Revisar
+    # INEPs do LOTE" — o valor total do INEP dividido em N partes (Cidade +
+    # valor), cada parte vira uma planilha de faturamento própria
+    # (`planilhas_faturamento_implantacao_lote`). Só para INEP sem rateio
+    # automático por Cidade. {INEP: [{"cidade": "...", "valor": "..."}]}.
+    rateio_manual = models.JSONField("Rateio manual por INEP", default=dict, blank=True)
 
     class Meta:
         verbose_name = "Lote"

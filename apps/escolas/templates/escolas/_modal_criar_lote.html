@@ -28,6 +28,12 @@ informativo aqui: não desmarca nem separa o INEP do LOTE — a divisão de
 verdade acontece na hora de baixar a planilha de faturamento
 (`apps.escolas.services.planilhas_faturamento_implantacao_lote`).
 
+Rateio manual (pedido do usuário, 2026-10-13): INEP SEM rateio automático
+ganha o botão "Ratear" — divide o valor total do INEP em N partes (Cidade +
+valor, mínimo 2), soma sempre igual ao total; cada parte vira uma planilha
+de faturamento própria. Campos `rateio_cidade_<pk>`/`rateio_valor_<pk>`,
+validados de novo em `apps.escolas.services.criar_lote_mip`.
+
 Parâmetros: `escolas_elegiveis_lote` (lista de `Escola`, usada só para o
 contador), `escolas_elegiveis_lote_detalhe` (lista de dicts
 `{"escola": Escola, "rateio": [...]}`, usada para renderizar cada linha),
@@ -100,6 +106,14 @@ contador), `escolas_elegiveis_lote_detalhe` (lista de dicts
                             <span class="text-xs font-black text-gray-900 dark:text-gray-100 shrink-0 tabular-nums" title="Valor Total (IXC) do INEP">
                                 {% if item.valor_total is not None %}R$ {{ item.valor_total|intcomma }}{% else %}—{% endif %}
                             </span>
+                            {% if not item.rateio and item.valor_total is not None %}
+                            <button type="button" data-toggle-rateio-manual
+                                    title="Dividir o valor deste INEP em partes — cada parte gera uma planilha própria"
+                                    class="inline-flex items-center gap-1 px-2 h-6 text-[9px] font-black uppercase text-gray-500 dark:text-gray-400 shrink-0 rounded-lg hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-900/20 dark:hover:text-amber-400 transition">
+                                <i data-lucide="split" class="w-3 h-3"></i>
+                                <span data-rateio-manual-rotulo>Ratear</span>
+                            </button>
+                            {% endif %}
                             {% if item.rateio %}
                             <button type="button" data-toggle-rateio
                                     title="INEP rateado entre cidades — ver detalhe"
@@ -121,6 +135,29 @@ contador), `escolas_elegiveis_lote_detalhe` (lista de dicts
                             {% endfor %}
                         </div>
                         {% endif %}
+                        {% if not item.rateio and item.valor_total is not None %}
+                        <div class="hidden ml-0 sm:ml-9 mr-0 sm:mr-3 mb-2 px-3 py-3 bg-amber-50 dark:bg-amber-900/10 rounded-xl space-y-2"
+                             data-rateio-manual-painel data-escola-id="{{ item.escola.pk }}"
+                             data-valor-total="{{ item.valor_total|stringformat:'s' }}"
+                             data-cidade-padrao="{{ municipio_filtro }}">
+                            <p class="text-[9px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                                Ratear R$ {{ item.valor_total|intcomma }} — cada parte vira uma planilha
+                            </p>
+                            <div class="space-y-1.5" data-rateio-manual-partes></div>
+                            <div class="flex items-center justify-between gap-2 pt-1">
+                                <button type="button" data-rateio-manual-adicionar
+                                        class="inline-flex items-center gap-1 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400 hover:underline">
+                                    <i data-lucide="plus" class="w-3 h-3"></i>Adicionar parte
+                                </button>
+                                <button type="button" data-rateio-manual-remover
+                                        class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400">
+                                    Remover rateio
+                                </button>
+                            </div>
+                            <p class="text-[11px] font-bold" data-rateio-manual-status aria-live="polite"></p>
+                            <p class="hidden text-[11px] font-bold text-red-600 dark:text-red-400" data-rateio-manual-erro role="alert"></p>
+                        </div>
+                        {% endif %}
                     </div>
                     {% empty %}
                     <p class="text-xs text-gray-400 dark:text-gray-500 italic">Nenhum INEP elegível.</p>
@@ -140,6 +177,20 @@ contador), `escolas_elegiveis_lote_detalhe` (lista de dicts
         </form>
     </div>
 </div>
+
+<template id="template-parte-rateio-manual">
+    <div class="flex items-center gap-2" data-rateio-manual-parte>
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 w-4 shrink-0 tabular-nums" data-rateio-manual-numero></span>
+        <input type="text" maxlength="150" placeholder="Cidade" autocomplete="off" data-rateio-manual-cidade
+               class="flex-1 min-w-0 px-2 sm:px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:ring-2 focus:ring-amber-400 text-xs font-bold text-gray-800 dark:text-gray-100">
+        <input type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0,00" data-rateio-manual-valor
+               class="w-20 sm:w-28 shrink-0 px-2 sm:px-3 py-1.5 [appearance:textfield] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:ring-2 focus:ring-amber-400 text-xs font-bold text-right tabular-nums text-gray-800 dark:text-gray-100">
+        <button type="button" data-rateio-manual-excluir-parte title="Excluir esta parte"
+                class="inline-flex items-center justify-center w-6 h-6 shrink-0 text-gray-400 hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition disabled:opacity-30 disabled:pointer-events-none">
+            <i data-lucide="x" class="w-3.5 h-3.5"></i>
+        </button>
+    </div>
+</template>
 
 <script>
 // FEAT-050: "Marcar/Desmarcar todos" e contador ao vivo — só deste modal
@@ -222,5 +273,159 @@ contador), `escolas_elegiveis_lote_detalhe` (lista de dicts
             if (chevron) chevron.classList.toggle('rotate-180', !expandido);
         });
     });
+
+    // Rateio manual (pedido do usuário, 2026-10-13): botão "Ratear" divide
+    // o valor do INEP em N partes (Cidade + valor). A soma tem que fechar
+    // exatamente com o valor total — conferida aqui e de novo no servidor
+    // (`criar_lote_mip`). Conta em centavos para não errar por arredondamento.
+    var formLote = document.getElementById('form-criar-lote');
+    var templateParte = document.getElementById('template-parte-rateio-manual');
+    var moeda = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+
+    function emCentavos(texto) {
+        var numero = Number(String(texto || '').trim());
+        if (!String(texto || '').trim() || !isFinite(numero)) return null;
+        return Math.round(numero * 100);
+    }
+
+    function partesDo(painel) {
+        return Array.prototype.slice.call(painel.querySelectorAll('[data-rateio-manual-parte]'));
+    }
+
+    function atualizarPainel(painel) {
+        var escolaId = painel.getAttribute('data-escola-id');
+        var total = emCentavos(painel.getAttribute('data-valor-total'));
+        var partes = partesDo(painel);
+        var soma = 0;
+        partes.forEach(function (parte, indice) {
+            var numero = indice + 1;
+            parte.querySelector('[data-rateio-manual-numero]').textContent = numero;
+            var cidade = parte.querySelector('[data-rateio-manual-cidade]');
+            var valor = parte.querySelector('[data-rateio-manual-valor]');
+            cidade.name = 'rateio_cidade_' + escolaId;
+            valor.name = 'rateio_valor_' + escolaId;
+            cidade.setAttribute('aria-label', 'Cidade da parte ' + numero);
+            valor.setAttribute('aria-label', 'Valor da parte ' + numero);
+            soma += emCentavos(valor.value) || 0;
+            parte.querySelector('[data-rateio-manual-excluir-parte]').disabled = partes.length <= 2;
+        });
+
+        var status = painel.querySelector('[data-rateio-manual-status]');
+        var diferenca = total - soma;
+        if (diferenca === 0) {
+            status.textContent = '✓ Soma fechada: ' + moeda.format(soma / 100);
+            status.className = 'text-[11px] font-bold text-emerald-600 dark:text-emerald-400';
+        } else {
+            status.textContent = 'Distribuído ' + moeda.format(soma / 100) + ' de ' + moeda.format(total / 100) +
+                (diferenca > 0 ? ' — falta ' : ' — passou ') + moeda.format(Math.abs(diferenca) / 100);
+            status.className = 'text-[11px] font-bold text-amber-700 dark:text-amber-400';
+        }
+
+        var rotulo = painel.parentNode.querySelector('[data-rateio-manual-rotulo]');
+        if (rotulo) rotulo.textContent = partes.length ? 'Rateado (' + partes.length + ')' : 'Ratear';
+    }
+
+    function adicionarParte(painel, cidadeInicial) {
+        var fragmento = templateParte.content.cloneNode(true);
+        var parte = fragmento.querySelector('[data-rateio-manual-parte]');
+        if (cidadeInicial) parte.querySelector('[data-rateio-manual-cidade]').value = cidadeInicial;
+        parte.querySelector('[data-rateio-manual-excluir-parte]').addEventListener('click', function () {
+            if (partesDo(painel).length <= 2) return;
+            parte.remove();
+            atualizarPainel(painel);
+        });
+        parte.querySelectorAll('input').forEach(function (campo) {
+            campo.addEventListener('input', function () {
+                atualizarPainel(painel);
+                esconderErro(painel);
+            });
+        });
+        painel.querySelector('[data-rateio-manual-partes]').appendChild(fragmento);
+        if (window.lucide) lucide.createIcons();
+        atualizarPainel(painel);
+        return parte;
+    }
+
+    function esconderErro(painel) {
+        painel.querySelector('[data-rateio-manual-erro]').classList.add('hidden');
+    }
+
+    function mostrarErro(painel, mensagem) {
+        var erro = painel.querySelector('[data-rateio-manual-erro]');
+        erro.textContent = mensagem;
+        erro.classList.remove('hidden');
+    }
+
+    document.querySelectorAll('#modal-criar-lote [data-toggle-rateio-manual]').forEach(function (botao) {
+        var linha = botao.closest('[data-rateio-linha]');
+        var painel = linha && linha.querySelector('[data-rateio-manual-painel]');
+        if (!painel) return;
+
+        botao.addEventListener('click', function () {
+            if (!partesDo(painel).length) {
+                var primeira = adicionarParte(painel, painel.getAttribute('data-cidade-padrao'));
+                adicionarParte(painel, '');
+                painel.classList.remove('hidden');
+                primeira.querySelector('[data-rateio-manual-valor]').focus();
+                return;
+            }
+            painel.classList.toggle('hidden');
+        });
+
+        painel.querySelector('[data-rateio-manual-adicionar]').addEventListener('click', function () {
+            adicionarParte(painel, '').querySelector('[data-rateio-manual-cidade]').focus();
+        });
+
+        painel.querySelector('[data-rateio-manual-remover]').addEventListener('click', function () {
+            painel.querySelector('[data-rateio-manual-partes]').innerHTML = '';
+            esconderErro(painel);
+            painel.classList.add('hidden');
+            atualizarPainel(painel);
+            botao.focus();
+        });
+    });
+
+    function validarPainel(painel) {
+        var partes = partesDo(painel);
+        if (!partes.length) return null;
+        if (partes.length < 2) return 'Informe ao menos 2 partes.';
+        var soma = 0;
+        for (var i = 0; i < partes.length; i++) {
+            var cidade = partes[i].querySelector('[data-rateio-manual-cidade]').value.trim();
+            var centavos = emCentavos(partes[i].querySelector('[data-rateio-manual-valor]').value);
+            if (!cidade) return 'Informe a Cidade da parte ' + (i + 1) + '.';
+            if (/[\\\/:*?"<>|\[\]]/.test(cidade)) return 'A Cidade da parte ' + (i + 1) + ' tem caracteres inválidos.';
+            if (centavos === null || centavos <= 0) return 'O valor da parte ' + (i + 1) + ' deve ser maior que zero.';
+            soma += centavos;
+        }
+        var total = emCentavos(painel.getAttribute('data-valor-total'));
+        if (soma !== total) {
+            return 'A soma das partes (' + moeda.format(soma / 100) + ') tem que ser igual ao valor total (' +
+                moeda.format(total / 100) + ').';
+        }
+        return null;
+    }
+
+    if (formLote) {
+        formLote.addEventListener('submit', function (evento) {
+            var primeiroComErro = null;
+            document.querySelectorAll('#modal-criar-lote [data-rateio-manual-painel]').forEach(function (painel) {
+                var checkbox = painel.closest('[data-rateio-linha]').querySelector('.checkbox-lote-inep');
+                if (checkbox && !checkbox.checked) return;
+                var mensagem = validarPainel(painel);
+                if (!mensagem) return;
+                mostrarErro(painel, mensagem);
+                painel.classList.remove('hidden');
+                if (!primeiroComErro) primeiroComErro = painel;
+            });
+            if (!primeiroComErro) return;
+            evento.preventDefault();
+            if (busca && busca.value) {
+                busca.value = '';
+                filtrarPorInep();
+            }
+            primeiroComErro.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
+    }
 })();
 </script>

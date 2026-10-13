@@ -33,8 +33,10 @@
         {% endcomment %}
         <form id="form-baixar-planilhas-lotes" method="POST" action="{% url 'mip_lote_baixar_planilhas_zip' %}">
             {% csrf_token %}
-            <button type="submit" class="inline-flex items-center gap-1.5 px-4 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg">
-                <i data-lucide="download" class="w-4 h-4"></i> Baixar planilhas (.zip)
+            {# Pedido do usuário (2026-10-13): com LOTE marcado, baixa só os marcados; sem nenhum, todos os LOTEs em "Em Andamento MIP". #}
+            <button type="submit" title="Sem nenhum LOTE marcado, baixa todos os LOTEs em &quot;Em Andamento MIP&quot;; com LOTEs marcados, só os marcados"
+                    class="inline-flex items-center gap-1.5 px-4 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg">
+                <i data-lucide="download" class="w-4 h-4"></i> <span data-rotulo-baixar-zip>Baixar Em Andamento (.zip)</span>
             </button>
         </form>
         {% endif %}
@@ -152,7 +154,7 @@
                     data-lote-toggle title="Clique para ver os INEPs deste LOTE">
                     {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2" data-no-toggle>
-                        <input type="checkbox" name="lote_ids" value="{{ linha.lote.pk }}" form="form-baixar-planilhas-lotes"
+                        <input type="checkbox" name="lote_ids" value="{{ linha.lote.pk }}" form="form-baixar-planilhas-lotes" aria-label="Selecionar {{ linha.lote }}"
                                data-checkbox-lote data-valor="{{ linha.valor_total_lote_str }}"
                                data-incompleto="{% if linha.valor_total_lote_incompleto %}1{% else %}0{% endif %}"
                                class="w-3.5 h-3.5 cursor-pointer accent-pv-yellow">
@@ -336,6 +338,17 @@
                                                 <i data-lucide="upload" class="w-3 h-3"></i>No LOTE: R$ {{ item.valor_faturado_planilha|intcomma }} (planilha)
                                             </span>
                                             {% endif %}
+                                            {% if item.rateio_manual %}
+                                            {# Rateio manual feito ao criar o LOTE (pedido do usuário, 2026-10-13) — 1 planilha por parte. #}
+                                            <div class="mt-1 space-y-0.5" title="Rateio manual — cada parte gera uma planilha de faturamento própria">
+                                                <span class="flex items-center gap-1 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
+                                                    <i data-lucide="split" class="w-3 h-3"></i>Rateio manual ({{ item.rateio_manual|length }})
+                                                </span>
+                                                {% for parte in item.rateio_manual %}
+                                                <span class="block text-[10px] text-gray-600 dark:text-gray-400">{{ parte.cidade }}: R$ {{ parte.valor|intcomma }}</span>
+                                                {% endfor %}
+                                            </div>
+                                            {% endif %}
                                         </td>
                                         <td class="px-4 py-2">
                                             {% if item.valor_total_lado3 is not None %}
@@ -484,6 +497,18 @@ document.querySelectorAll('[data-inep-navegar]').forEach(function (linha) {
 // antes de "Baixar planilhas (.zip)".
 var selecionarTodosLote = document.querySelector('[data-selecionar-todos-lote]');
 var checkboxesLote = document.querySelectorAll('[data-checkbox-lote]');
+
+// Pedido do usuário (2026-10-13): o botão do .zip mostra o que vai baixar —
+// os marcados ou, sem nenhum marcado, todos os "Em Andamento MIP".
+var rotuloBaixarZip = document.querySelector('[data-rotulo-baixar-zip]');
+function atualizarRotuloBaixarZip() {
+    if (!rotuloBaixarZip) return;
+    var marcados = document.querySelectorAll('[data-checkbox-lote]:checked').length;
+    rotuloBaixarZip.textContent = marcados ? 'Baixar marcados (' + marcados + ') (.zip)' : 'Baixar Em Andamento (.zip)';
+}
+document.addEventListener('change', function (evento) {
+    if (evento.target.matches('[data-checkbox-lote], [data-selecionar-todos-lote]')) atualizarRotuloBaixarZip();
+});
 
 // Pedido do usuário (2026-09-30): troca de status em massa pelo próprio
 // menu "Mudar status" da linha — se o LOTE da linha está marcado junto com

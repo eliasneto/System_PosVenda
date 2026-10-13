@@ -3934,7 +3934,9 @@ class MipLoteInepViewTests(TestCase):
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
         self.assertContains(resp, reverse("mip_lote_baixar_planilhas_zip"))
-        self.assertContains(resp, "Baixar planilhas (.zip)")
+        # Revisto em 2026-10-13: sem nenhum marcado, o .zip leva todos os
+        # "Em Andamento MIP"; marcados, só eles.
+        self.assertContains(resp, "Baixar Em Andamento (.zip)")
         self.assertContains(
             resp,
             f'<input type="checkbox" name="lote_ids" value="{lote.pk}" form="form-baixar-planilhas-lotes"',
@@ -4044,7 +4046,9 @@ class MipLoteBotaoGridTests(TestCase):
     def test_sem_filtro_completo_nao_mostra_botao(self):
         self.client.force_login(self.usuario)
         resp = _get_grid_mip(self.client, {"estado": "GO"})
-        self.assertNotContains(resp, "Criar LOTE")
+        # "Criar LOTE em massa" (pedido do usuário, 2026-10-13) aparece sempre;
+        # o botão de LOTE de 1 cidade, não.
+        self.assertNotContains(resp, 'data-abrir-modal-email="modal-criar-lote"')
         self.assertContains(resp, "Preencha Estado e Município")
 
     def test_estado_e_municipio_sem_data_mostra_botao_habilitado(self):
@@ -4893,7 +4897,8 @@ class MipLoteBaixarPlanilhasZipViewTests(TestCase):
     """`mip_lote_baixar_planilhas_zip_view` — pedido do usuário
     (2026-09-15): marcar vários LOTEs na tela "Projeto > MIP (LOTE)" e
     baixar, num único .zip, 1 planilha de faturamento de implantação por
-    LOTE marcado."""
+    LOTE marcado. Revisto em 2026-10-13 (pedido do usuário): o .zip leva
+    os LOTEs marcados ou, sem nenhum marcado, todos os "Em Andamento MIP"."""
 
     def setUp(self):
         self.usuario = User.objects.create_user(username="analista-zip-lotes", password="senha-teste-123")
@@ -4923,8 +4928,8 @@ class MipLoteBaixarPlanilhasZipViewTests(TestCase):
         )
         self.lote2.escolas.add(self.escola2)
 
-        # LOTE de fora da seleção — usado pra confirmar que só os marcados
-        # entram no .zip.
+        # LOTE em outro status — usado pra confirmar que só os "Em
+        # Andamento MIP" entram no .zip.
         self.escola3 = Escola.objects.create(
             inep="10000078", nome="Escola ZIP Lote 3", estado="GO", municipio="Trindade",
             status_mip=Escola.AGUARDANDO_ENCERRAMENTO_LOTE,
@@ -4933,6 +4938,7 @@ class MipLoteBaixarPlanilhasZipViewTests(TestCase):
         self.lote3 = Lote.objects.create(
             estado="GO", municipio="Trindade",
             data_inicio=datetime.date(2026, 9, 1), data_fim=datetime.date(2026, 9, 30),
+            status=Lote.EM_FATURAMENTO,
         )
         self.lote3.escolas.add(self.escola3)
 
@@ -4948,19 +4954,17 @@ class MipLoteBaixarPlanilhasZipViewTests(TestCase):
         resp = self.client.get(reverse("mip_lote_baixar_planilhas_zip"))
         self.assertRedirects(resp, reverse("mip_lote_inep"))
 
-    def test_sem_selecionar_nenhum_mostra_erro_e_redireciona(self):
+    def test_sem_lote_em_andamento_mostra_erro_e_redireciona(self):
+        Lote.objects.update(status=Lote.FATURAMENTO_CONCLUIDO)
         self.client.force_login(self.usuario)
         resp = self.client.post(reverse("mip_lote_baixar_planilhas_zip"), {}, follow=True)
         self.assertRedirects(resp, reverse("mip_lote_inep"))
         mensagens = [str(m) for m in resp.context["messages"]]
-        self.assertTrue(any("Selecione ao menos um LOTE" in m for m in mensagens))
+        self.assertTrue(any("Nenhum LOTE em" in m for m in mensagens))
 
-    def test_baixa_zip_com_uma_planilha_por_lote_marcado(self):
+    def test_baixa_zip_com_todos_os_lotes_em_andamento_sem_marcar_nada(self):
         self.client.force_login(self.usuario)
-        resp = self.client.post(
-            reverse("mip_lote_baixar_planilhas_zip"),
-            {"lote_ids": [self.lote1.pk, self.lote2.pk]},
-        )
+        resp = self.client.post(reverse("mip_lote_baixar_planilhas_zip"), {})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp["Content-Type"], "application/zip")
         self.assertIn("attachment;", resp["Content-Disposition"])
@@ -4980,24 +4984,31 @@ class MipLoteBaixarPlanilhasZipViewTests(TestCase):
         )
         self.assertEqual(planilha2.worksheets[0].title, "Anápolis")
 
-    def test_nao_inclui_lote_nao_marcado(self):
+    def test_sem_marcar_nao_inclui_lote_de_outro_status(self):
         self.client.force_login(self.usuario)
-        resp = self.client.post(
-            reverse("mip_lote_baixar_planilhas_zip"), {"lote_ids": [self.lote1.pk]},
-        )
-        arquivo_zip = zipfile.ZipFile(io.BytesIO(resp.content))
-        nomes_no_zip = arquivo_zip.namelist()
-        self.assertEqual(len(nomes_no_zip), 1)
+        resp = self.client.post(reverse("mip_lote_baixar_planilhas_zip"), {})
+        nomes_no_zip = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
+        self.assertEqual(len(nomes_no_zip), 2)
         self.assertNotIn(nome_arquivo_planilha_faturamento_implantacao(self.lote3), nomes_no_zip)
 
-    def test_lote_marcado_sem_nenhum_inep_mostra_erro_e_redireciona(self):
-        self.lote2.escolas.clear()
+    def test_com_lotes_marcados_baixa_so_os_marcados_em_qualquer_status(self):
         self.client.force_login(self.usuario)
         resp = self.client.post(
-            reverse("mip_lote_baixar_planilhas_zip"),
-            {"lote_ids": [self.lote1.pk, self.lote2.pk]},
-            follow=True,
+            reverse("mip_lote_baixar_planilhas_zip"), {"lote_ids": [self.lote1.pk, self.lote3.pk]},
         )
+        nomes_no_zip = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
+        self.assertEqual(
+            sorted(nomes_no_zip),
+            sorted([
+                nome_arquivo_planilha_faturamento_implantacao(self.lote1),
+                nome_arquivo_planilha_faturamento_implantacao(self.lote3),
+            ]),
+        )
+
+    def test_lote_em_andamento_sem_nenhum_inep_mostra_erro_e_redireciona(self):
+        self.lote2.escolas.clear()
+        self.client.force_login(self.usuario)
+        resp = self.client.post(reverse("mip_lote_baixar_planilhas_zip"), {}, follow=True)
         self.assertRedirects(resp, reverse("mip_lote_inep"))
         mensagens = [str(m) for m in resp.context["messages"]]
         self.assertTrue(any(str(self.lote2) in m for m in mensagens))

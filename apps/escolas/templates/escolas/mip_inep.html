@@ -428,6 +428,66 @@
         Preencha Estado e Município acima (e clique em "Filtrar") para criar um LOTE com os INEPs elegíveis — Data inicial/final são opcionais.
     </div>
     {% endif %}
+    {# LOTE em massa (pedido do usuário, 2026-10-13): 1 LOTE por cidade com INEP elegível — prévia carregada por HTMX só ao clicar. #}
+    <div class="px-8 py-5 border-t border-gray-100 dark:border-gray-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-widest mb-1">Criar LOTEs em massa</p>
+            <p class="text-xs font-bold text-gray-600 dark:text-gray-300">
+                Separa automaticamente 1 LOTE por cidade com INEP elegível{% if estado_filtro %} em {{ estado_filtro }}{% endif %} — você revisa antes de criar.
+            </p>
+        </div>
+        <button type="button"
+                data-abrir-modal-email="modal-lotes-em-massa"
+                hx-get="{% url 'mip_lotes_em_massa_previa' %}?estado={{ estado_filtro|urlencode }}&data_inicial={{ data_inicial_validacao|date:'d/m/Y'|urlencode }}&data_final={{ data_final_validacao|date:'d/m/Y'|urlencode }}"
+                hx-target="#conteudo-lotes-em-massa"
+                hx-swap="innerHTML"
+                class="px-6 py-3 border-2 border-pv-black dark:border-pv-yellow text-pv-black dark:text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-pv-black hover:text-pv-yellow dark:hover:bg-pv-yellow dark:hover:text-pv-black transition flex items-center gap-2 whitespace-nowrap w-full sm:w-auto justify-center">
+            <i data-lucide="layers" class="w-4 h-4"></i> Criar LOTE em massa
+        </button>
+    </div>
+    <div id="modal-lotes-em-massa" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email>
+        <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
+        <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800 shrink-0">
+                <h2 class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Revisar LOTEs em massa</h2>
+                <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Fechar">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div id="conteudo-lotes-em-massa" class="flex flex-col min-h-0 flex-1">
+                <p class="px-6 py-8 text-xs text-gray-400 dark:text-gray-500 italic flex items-center gap-2">
+                    <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Separando os LOTEs por cidade…
+                </p>
+            </div>
+        </div>
+    </div>
+    <script>
+    // LOTE em massa: abrir/fechar a lista de INEPs de cada LOTE previsto e
+    // contador de marcados — delegado, porque o conteúdo chega por HTMX.
+    (function () {
+        var modal = document.getElementById('modal-lotes-em-massa');
+        if (!modal) return;
+        modal.addEventListener('click', function (evento) {
+            var botao = evento.target.closest('[data-toggle-lote-previsto]');
+            if (!botao) return;
+            var cartao = botao.closest('[data-lote-previsto]');
+            var lista = cartao.querySelector('[data-lote-previsto-ineps]');
+            var aberto = !lista.classList.contains('hidden');
+            lista.classList.toggle('hidden', aberto);
+            botao.setAttribute('aria-expanded', aberto ? 'false' : 'true');
+            var chevron = botao.querySelector('[data-lote-previsto-chevron]');
+            if (chevron) chevron.classList.toggle('rotate-180', !aberto);
+        });
+        modal.addEventListener('change', function (evento) {
+            if (!evento.target.classList.contains('checkbox-lote-em-massa')) return;
+            var marcados = modal.querySelectorAll('.checkbox-lote-em-massa:checked').length;
+            var contador = document.getElementById('contador-lotes-em-massa');
+            if (contador) contador.textContent = marcados;
+            var confirmar = document.getElementById('btn-confirmar-lotes-em-massa');
+            if (confirmar) confirmar.disabled = marcados === 0;
+        });
+    })();
+    </script>
     {% endif %}
 
     {% if page_obj.has_other_pages %}

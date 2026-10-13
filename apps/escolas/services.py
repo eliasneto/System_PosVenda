@@ -20,7 +20,7 @@ import tempfile
 import unicodedata
 import zipfile
 from collections import Counter
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import openpyxl
 from django.conf import settings
@@ -930,7 +930,7 @@ def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim, *, exig
     # Pedido do usuário (2026-10-13): INEP pausado no MIP não entra em LOTE.
     escolas = Escola.objects.annotate(data_ativacao_ri_atual=data_ativacao_ri_atual).filter(
         status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, estado=estado, municipio=municipio, pausado_mip=False,
-    )
+    ).exclude(lotes__isnull=False)  # nunca o mesmo INEP em 2 LOTEs
     if exigir_relatorio_eace_mip:
         # Pedido do usuário (2026-09-30): LOTE só com INEP que veio no
         # Relatório EACE (MIP) — mesmo critério do grid do MIP. A
@@ -1000,7 +1000,10 @@ def _registrar_log_campo_lote(ri, usuario, campo, valor_anterior, valor_novo):
 
 
 @transaction.atomic
-def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_ids=None, exigir_relatorio_eace_mip=True):
+def criar_lote_mip(
+    estado, municipio, data_inicio, data_fim, usuario, *, escola_ids=None, exigir_relatorio_eace_mip=True,
+    rateio_manual=None,
+):
     """Cria o `Lote` com os INEPs elegíveis (`escolas_elegiveis_lote_mip`,
     acima) do filtro Estado+Município (+ Data início/fim, quando
     informada) — chamada pelo botão "Criar LOTE" da tela "Projeto > MIP"
@@ -1037,7 +1040,12 @@ def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_
     informadas), quando nenhum INEP é elegível, ou quando `escola_ids` é
     informado mas nenhum dos IDs recebidos bate com um elegível de
     verdade (ex.: usuário desmarcou todos no modal) — quem chamar
-    converte em mensagem para o usuário."""
+    converte em mensagem para o usuário.
+
+    Rateio manual (pedido do usuário, 2026-10-13): `rateio_manual` =
+    `{escola_pk: [(cidade, valor), ...]}` vindo do botão "Ratear" do
+    modal — validado por `_validar_rateio_manual_lote` e gravado em
+    `Lote.rateio_manual`; erro de rateio também não cria nada."""
     estado = (estado or "").strip()
     municipio = (municipio or "").strip()
     if not estado or not municipio:
@@ -1063,12 +1071,138 @@ def criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario, *, escola_
     else:
         escolas = elegiveis
 
+    rateio_validado = _validar_rateio_manual_lote(escolas, rateio_manual or {})
+
     lote = Lote.objects.create(
         estado=estado, municipio=municipio, data_inicio=data_inicio, data_fim=data_fim, criado_por=usuario,
-        status=Lote.EM_ANDAMENTO,
+        status=Lote.EM_ANDAMENTO, rateio_manual=rateio_validado,
     )
     _colocar_escolas_no_lote(lote, escolas, usuario)
     return lote
+
+
+def lotes_mip_previstos_em_massa(data_inicio=None, data_fim=None, estado=None):
+    """LOTE em massa (pedido do usuário, 2026-10-13): 1 LOTE previsto por
+    Estado+Município que tenha INEP elegível (`escolas_elegiveis_lote_mip`,
+    mesma regra do "Criar LOTE" de 1 cidade). Respeita a Data inicial/final
+    e o Estado do filtro do grid, quando informados; o Município do filtro
+    não restringe (o objetivo é separar todas as cidades). Ordem
+    Estado/Município. Devolve lista de dicts `{"estado", "municipio",
+    "escolas", "valor_total"}`."""
+    candidatas = Escola.objects.filter(
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, pausado_mip=False, encontrado_relatorio_eace_mip=True,
+    ).exclude(estado="").exclude(municipio="").exclude(lotes__isnull=False)
+    if estado:
+        candidatas = candidatas.filter(estado=estado)
+    cidades = candidatas.order_by("estado", "municipio").values_list("estado", "municipio").distinct()
+
+    previstos = []
+    for estado_cidade, municipio in cidades:
+        escolas = escolas_elegiveis_lote_mip(estado_cidade, municipio, data_inicio, data_fim)
+        if not escolas:
+            continue
+        previstos.append(
+            {
+                "estado": estado_cidade,
+                "municipio": municipio,
+                "escolas": escolas,
+                "valor_total": sum((escola.valor_total_lote_mip for escola in escolas), Decimal("0.00")),
+            }
+        )
+    return previstos
+
+
+def criar_lotes_mip_em_massa(cidades, data_inicio, data_fim, usuario):
+    """Cria 1 LOTE por `(estado, municipio)` de `cidades` (as que o usuário
+    deixou marcadas no modal do LOTE em massa, pedido do usuário,
+    2026-10-13) — cada um com todos os INEPs elegíveis daquela cidade, pela
+    mesma `criar_lote_mip`. Cidade que deixou de ter elegível entre abrir o
+    modal e confirmar não trava as outras: vai para a lista de erros.
+    Devolve `(lotes_criados, erros)`."""
+    lotes_criados = []
+    erros = []
+    for estado, municipio in cidades:
+        try:
+            lotes_criados.append(criar_lote_mip(estado, municipio, data_inicio, data_fim, usuario))
+        except LoteMipError as erro:
+            erros.append(f"{municipio}/{estado}: {erro}")
+    return lotes_criados, erros
+
+
+def _converter_valor_rateio(valor):
+    """Aceita "1234.56" (campo numérico do modal) e "1.234,56" (digitado à
+    mão); `None` quando não é um número válido."""
+    texto = str(valor or "").strip().replace("R$", "").strip()
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    try:
+        convertido = Decimal(texto)
+    except (InvalidOperation, ValueError):
+        return None
+    if not convertido.is_finite():
+        return None
+    return convertido
+
+
+def _validar_rateio_manual_lote(escolas, rateio_manual):
+    """Rateio manual do LOTE (pedido do usuário, 2026-10-13): o Valor Total
+    (IXC) do INEP (`valor_total_lote_mip`, mesmo valor exibido no modal)
+    dividido em N partes de Cidade + valor — cada parte vira uma planilha de
+    faturamento própria. Regras: no mínimo 2 partes; toda parte com Cidade
+    e valor maior que zero, com no máximo 2 casas decimais; a soma das
+    partes nunca pode ser menor nem maior que o valor total do INEP; só
+    para INEP sem rateio automático por Cidade
+    (`escola_rateada_relatorio_eace_mip` — o automático continua valendo
+    para ele). Rateio de INEP que não está no LOTE (desmarcado no modal) é
+    ignorado. Devolve `{INEP: [{"cidade", "valor"}]}` pronto para
+    `Lote.rateio_manual`; levanta `LoteMipError` no primeiro problema."""
+    escolas_por_pk = {str(escola.pk): escola for escola in escolas}
+    validado = {}
+    for escola_pk, partes in rateio_manual.items():
+        escola = escolas_por_pk.get(str(escola_pk))
+        if escola is None or not partes:
+            continue
+        if escola_rateada_relatorio_eace_mip(escola):
+            raise LoteMipError(
+                f"INEP {escola.inep} já tem rateio automático por Cidade — não aceita rateio manual."
+            )
+        if len(partes) < 2:
+            raise LoteMipError(f"Rateio do INEP {escola.inep}: informe ao menos 2 partes.")
+
+        partes_validadas = []
+        soma = Decimal("0.00")
+        for numero, (cidade, valor) in enumerate(partes, start=1):
+            cidade = (cidade or "").strip()
+            if not cidade:
+                raise LoteMipError(f"Rateio do INEP {escola.inep}: informe a Cidade da parte {numero}.")
+            # A Cidade vira nome de arquivo e de aba da planilha.
+            if len(cidade) > 150 or _CARACTERES_INVALIDOS_ARQUIVO_IMPLANTACAO.search(cidade) or \
+                    _CARACTERES_INVALIDOS_ABA_EXCEL.search(cidade):
+                raise LoteMipError(
+                    f"Rateio do INEP {escola.inep}: a Cidade da parte {numero} é inválida "
+                    f"(máx. 150 caracteres, sem / \\ : * ? \" < > | [ ])."
+                )
+            valor_decimal = _converter_valor_rateio(valor)
+            if valor_decimal is None or valor_decimal <= 0:
+                raise LoteMipError(
+                    f"Rateio do INEP {escola.inep}: o valor da parte {numero} deve ser maior que zero."
+                )
+            if valor_decimal != valor_decimal.quantize(Decimal("0.01")):
+                raise LoteMipError(
+                    f"Rateio do INEP {escola.inep}: o valor da parte {numero} tem mais de 2 casas decimais."
+                )
+            valor_decimal = valor_decimal.quantize(Decimal("0.01"))
+            soma += valor_decimal
+            partes_validadas.append({"cidade": cidade, "valor": str(valor_decimal)})
+
+        valor_total = escola.valor_total_lote_mip
+        if soma != valor_total:
+            raise LoteMipError(
+                f"Rateio do INEP {escola.inep}: a soma das partes (R$ {soma}) tem que ser igual "
+                f"ao valor total do INEP (R$ {valor_total})."
+            )
+        validado[escola.inep] = partes_validadas
+    return validado
 
 
 def _colocar_escolas_no_lote(lote, escolas, usuario):
@@ -1153,11 +1287,15 @@ def escolas_no_grid_mip():
     """Quem aparece no grid do MIP (pedido do usuário, 2026-10-13): todo
     INEP que veio no Relatório EACE (MIP), em qualquer Status (MIP), mais
     os "Aguardando Validação EACE" que não vieram (bolinha vermelha) —
-    menos os retirados pelo X (`retirado_grid_mip`)."""
+    menos os retirados pelo X (`retirado_grid_mip`).
+
+    Pedido do usuário (2026-10-13): INEP que já está em algum LOTE some do
+    grid — o que sobra é o que ainda falta fazer. Desfazer o LOTE
+    (`desfazer_lote_mip`, que exclui o `Lote`) traz o INEP de volta."""
     return Escola.objects.filter(
         Q(encontrado_relatorio_eace_mip=True) | Q(status_mip=Escola.AGUARDANDO_VALIDACAO_EACE),
         retirado_grid_mip=False,
-    )
+    ).exclude(lotes__isnull=False)
 
 
 def retirar_do_grid_mip(escola_ids, usuario):
@@ -1749,6 +1887,17 @@ def _nome_arquivo_planilha_faturamento_implantacao_rateio(lote, cidade):
     return f"FATURAMENTO IMPLANTAÇÃO EACE - {cidade_limpa}-{lote.estado} - {lote} (RATEIO).xlsx"
 
 
+def _nome_arquivo_planilha_faturamento_implantacao_rateio_manual(lote, escola, cidade, numero, total_partes):
+    """Nome do .xlsx de 1 parte do rateio manual (pedido do usuário,
+    2026-10-13) — INEP e número da parte no nome, para 2 partes da mesma
+    Cidade nunca gerarem arquivos com o mesmo nome no .zip."""
+    cidade_limpa = _CARACTERES_INVALIDOS_ARQUIVO_IMPLANTACAO.sub("", cidade or "").strip()
+    return (
+        f"FATURAMENTO IMPLANTAÇÃO EACE - {cidade_limpa}-{lote.estado} - {lote} "
+        f"(RATEIO {escola.inep} {numero}-{total_partes}).xlsx"
+    )
+
+
 def gerar_planilha_faturamento_implantacao(estado, municipio, data_envio):
     """Planilha de faturamento de implantação (`doc/FATURAMENTO
     IMPLANTAÇÃO.xlsx`) pedida pelo usuário: 1 arquivo por Estado+Município
@@ -1897,6 +2046,11 @@ def planilhas_faturamento_implantacao_lote(lote, data_envio):
     Município do LOTE — nunca é descartado (CLAUDE.md §9: nunca perde
     valor lançado).
 
+    Rateio manual (pedido do usuário, 2026-10-13, `Lote.rateio_manual`):
+    cada parte do INEP vira 1 planilha só dela (Cidade + valor da parte),
+    no fim da lista — mesmo com Cidade repetida, nunca soma com outra
+    parte; o INEP não entra na planilha do Município do LOTE.
+
     Sem nenhum INEP rateado, devolve sempre 1 único item na lista — mesmo
     conteúdo de `gerar_planilha_faturamento_implantacao_lote`. Devolve
     lista de `(nome_arquivo, Workbook)`. Levanta
@@ -1916,7 +2070,21 @@ def planilhas_faturamento_implantacao_lote(lote, data_envio):
 
     contribuicoes_municipio_lote = []
     contribuicoes_por_cidade_extra = {}
+    planilhas_rateio_manual = []
     for escola in escolas:
+        partes_rateio_manual = (lote.rateio_manual or {}).get(escola.inep)
+        if partes_rateio_manual:
+            for numero, parte in enumerate(partes_rateio_manual, start=1):
+                workbook = _montar_planilha_faturamento_implantacao_de_contribuicoes(
+                    [(escola, Decimal(parte["valor"]))], estado=lote.estado, municipio=parte["cidade"],
+                    data_envio=data_envio,
+                )
+                nome_arquivo = _nome_arquivo_planilha_faturamento_implantacao_rateio_manual(
+                    lote, escola, parte["cidade"], numero, len(partes_rateio_manual)
+                )
+                planilhas_rateio_manual.append((nome_arquivo, workbook))
+            continue
+
         if not escola_rateada_relatorio_eace_mip(escola):
             ris_da_escola = list(escola.ris.all())
             ri_atual = ris_da_escola[0] if ris_da_escola else None
@@ -1944,19 +2112,25 @@ def planilhas_faturamento_implantacao_lote(lote, data_envio):
             )
             contribuicoes_municipio_lote.append((escola, valor_sem_cidade))
 
-    planilhas = [
-        (
-            nome_arquivo_planilha_faturamento_implantacao(lote),
-            _montar_planilha_faturamento_implantacao_de_contribuicoes(
-                contribuicoes_municipio_lote, estado=lote.estado, municipio=lote.municipio, data_envio=data_envio
-            ),
+    planilhas = []
+    # LOTE em que todo INEP foi rateado à mão não tem o que pôr na planilha
+    # do Município do LOTE — ela só sai vazia quando não há nenhuma outra.
+    if contribuicoes_municipio_lote or not planilhas_rateio_manual:
+        planilhas.append(
+            (
+                nome_arquivo_planilha_faturamento_implantacao(lote),
+                _montar_planilha_faturamento_implantacao_de_contribuicoes(
+                    contribuicoes_municipio_lote, estado=lote.estado, municipio=lote.municipio,
+                    data_envio=data_envio,
+                ),
+            )
         )
-    ]
     for cidade in sorted(contribuicoes_por_cidade_extra):
         workbook = _montar_planilha_faturamento_implantacao_de_contribuicoes(
             contribuicoes_por_cidade_extra[cidade], estado=lote.estado, municipio=cidade, data_envio=data_envio
         )
         planilhas.append((_nome_arquivo_planilha_faturamento_implantacao_rateio(lote, cidade), workbook))
+    planilhas.extend(planilhas_rateio_manual)
     return planilhas
 
 
@@ -2005,6 +2179,14 @@ def _montar_planilha_faturamento_implantacao_de_contribuicoes(contribuicoes, *, 
     data_vencimento = data_envio + datetime.timedelta(days=30)
     data_vencimento_str = data_vencimento.strftime("%d/%m/%Y")
 
+    # O modelo não vai pelo git (fica na pasta doc/ do servidor) — sem ele,
+    # mensagem clara na tela em vez de erro 500 (bug real no servidor EACE,
+    # 2026-10-13).
+    if not CAMINHO_PLANILHA_FATURAMENTO_IMPLANTACAO_MODELO.exists():
+        raise PlanilhaFaturamentoImplantacaoError(
+            "Planilha-modelo de faturamento de implantação não encontrada no servidor "
+            f"(doc/{CAMINHO_PLANILHA_FATURAMENTO_IMPLANTACAO_MODELO.name}) — avise o suporte."
+        )
     workbook = openpyxl.load_workbook(CAMINHO_PLANILHA_FATURAMENTO_IMPLANTACAO_MODELO)
     aba = workbook.worksheets[0]
     # Renomeado em 2 passos por uma peculiaridade do openpyxl: o setter de

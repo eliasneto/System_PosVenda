@@ -2,6 +2,7 @@ import datetime
 import io
 import zipfile
 from decimal import Decimal
+from itertools import zip_longest
 from urllib.parse import quote, urlencode
 
 # from django.conf import settings  # só usado por "remetente_lote" (e-mail do LOTE comentado, pedido do usuário, 2026-09-15)
@@ -37,10 +38,12 @@ from .services import (
     aplicar_status_lote_mip,
     aplicar_status_lotes_mip_em_massa,
     criar_lote_mip,
+    criar_lotes_mip_em_massa,
     desfazer_lote_mip,
     # enviar_email_lote, montar_assunto_email_lote, montar_corpo_email_lote — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.services`).
     escolas_com_lado3_preenchido_no_arquivo_ativo,
     escolas_elegiveis_lote_mip,
+    lotes_mip_previstos_em_massa,
     planilhas_faturamento_implantacao_lote,
     rateio_relatorio_eace_mip_da_escola,
     refletir_status_mip_no_ri,
@@ -527,6 +530,15 @@ def mip_lote_criar_view(request):
     data_inicial = _parse_data_filtro(request.POST.get("data_inicial"))
     data_final = _parse_data_filtro(request.POST.get("data_final"))
     escola_ids = request.POST.getlist("escola_ids")
+    # Rateio manual (pedido do usuário, 2026-10-13): partes do botão
+    # "Ratear" do modal, 1 par Cidade/valor por linha — validadas em
+    # `criar_lote_mip`.
+    rateio_manual = {}
+    for escola_id in escola_ids:
+        cidades = request.POST.getlist(f"rateio_cidade_{escola_id}")
+        valores = request.POST.getlist(f"rateio_valor_{escola_id}")
+        if cidades or valores:
+            rateio_manual[escola_id] = list(zip_longest(cidades, valores, fillvalue=""))
     # Filtros devolvidos pro grid em caso de erro — usuário não perde o
     # que já tinha escolhido (mesmos 4 campos, formato bruto do POST).
     filtros_originais = {
@@ -541,7 +553,10 @@ def mip_lote_criar_view(request):
     }
 
     try:
-        lote = criar_lote_mip(estado, municipio, data_inicial, data_final, request.user, escola_ids=escola_ids)
+        lote = criar_lote_mip(
+            estado, municipio, data_inicial, data_final, request.user,
+            escola_ids=escola_ids, rateio_manual=rateio_manual,
+        )
     except LoteMipError as erro:
         messages.error(request, str(erro))
         return redirect(f"{reverse('mip_inep')}?{urlencode(filtros_originais)}")
@@ -550,6 +565,61 @@ def mip_lote_criar_view(request):
         request,
         f'{lote} criado com {lote.escolas.count()} INEP(s) — Status (MIP) alterado para '
         '"Aguardando Encerramento LOTE".',
+    )
+    return redirect("mip_lote_inep")
+
+
+@login_required
+def mip_lotes_em_massa_previa_view(request):
+    """LOTE em massa (pedido do usuário, 2026-10-13): conteúdo do modal
+    "Criar LOTEs em massa", carregado por HTMX só quando o usuário clica —
+    1 LOTE previsto por cidade (`lotes_mip_previstos_em_massa`), com os
+    filtros de Estado e Data do grid. Visualizador é barrado pelo
+    `VisualizadorAccessMiddleware` (URL fora da lista de leitura)."""
+    data_inicial = _parse_data_filtro(request.GET.get("data_inicial"))
+    data_final = _parse_data_filtro(request.GET.get("data_final"))
+    if data_inicial and data_final and data_inicial > data_final:
+        data_inicial = data_final = None
+    estado = (request.GET.get("estado") or "").strip()
+    return render(
+        request,
+        "escolas/_lotes_em_massa_conteudo.html",
+        {
+            "lotes_previstos": lotes_mip_previstos_em_massa(data_inicial, data_final, estado),
+            "estado_filtro": estado,
+            "data_inicial": data_inicial,
+            "data_final": data_final,
+        },
+    )
+
+
+@login_required
+def mip_lotes_em_massa_criar_view(request):
+    """Confirma o modal do LOTE em massa (pedido do usuário, 2026-10-13):
+    cria 1 LOTE por cidade marcada (`cidades`, valor "UF|Município"). As
+    cidades desmarcadas não viram LOTE — seus INEPs continuam no MIP."""
+    if request.method != "POST":
+        return redirect("mip_inep")
+
+    data_inicial = _parse_data_filtro(request.POST.get("data_inicial"))
+    data_final = _parse_data_filtro(request.POST.get("data_final"))
+    cidades = []
+    for chave in request.POST.getlist("cidades"):
+        estado, separador, municipio = chave.partition("|")
+        if separador and estado.strip() and municipio.strip():
+            cidades.append((estado.strip(), municipio.strip()))
+    if not cidades:
+        messages.error(request, "Nenhum LOTE selecionado — marque ao menos 1 cidade.")
+        return redirect("mip_inep")
+
+    lotes_criados, erros = criar_lotes_mip_em_massa(cidades, data_inicial, data_final, request.user)
+    for erro in erros:
+        messages.error(request, erro)
+    if not lotes_criados:
+        return redirect("mip_inep")
+    messages.success(
+        request,
+        f"{len(lotes_criados)} LOTE(s) criado(s) em massa: {', '.join(str(lote) for lote in lotes_criados)}.",
     )
     return redirect("mip_lote_inep")
 
@@ -690,6 +760,10 @@ def mip_lote_inep_view(request):
                     "valor_total_lado3": valor_total_lado3,
                     "valor_no_lote": valor_faturado_planilha if valor_faturado_planilha is not None else valor_total_lado2,
                     "valor_faturado_planilha": valor_faturado_planilha,
+                    "rateio_manual": [
+                        {"cidade": parte["cidade"], "valor": Decimal(parte["valor"])}
+                        for parte in (registro_lote.rateio_manual or {}).get(escola.inep, [])
+                    ],
                     "valor_planilha_diverge_ixc": (
                         valor_faturado_planilha is not None and valor_faturado_planilha != valor_total_lado2
                     ),
@@ -919,16 +993,22 @@ def mip_lote_baixar_planilhas_zip_view(request):
     RN a formalizar (pedido do usuário, 2026-09-24): LOTE com algum INEP
     rateado entra neste .zip com mais de 1 arquivo (1 por Cidade,
     `planilhas_faturamento_implantacao_lote`), em vez de só 1 — mesmo
-    critério do "Baixar planilha" individual."""
+    critério do "Baixar planilha" individual.
+
+    Pedido do usuário (2026-10-13): com LOTE marcado, baixa só os marcados
+    (pontual); sem nenhum marcado, baixa todos os LOTEs em "Em Andamento
+    MIP"."""
     if request.method != "POST":
         return redirect("mip_lote_inep")
 
-    lote_ids = request.POST.getlist("lote_ids")
-    if not lote_ids:
-        messages.error(request, "Selecione ao menos um LOTE para baixar.")
-        return redirect("mip_lote_inep")
-
-    lotes = list(Lote.objects.filter(pk__in=lote_ids))
+    lote_ids = [pk for pk in request.POST.getlist("lote_ids") if str(pk).isdigit()]
+    if lote_ids:
+        lotes = list(Lote.objects.filter(pk__in=lote_ids).order_by("pk"))
+    else:
+        lotes = list(Lote.objects.filter(status=Lote.EM_ANDAMENTO).order_by("pk"))
+        if not lotes:
+            messages.error(request, 'Nenhum LOTE em "Em Andamento MIP" para baixar.')
+            return redirect("mip_lote_inep")
 
     zip_stream = io.BytesIO()
     with zipfile.ZipFile(zip_stream, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:

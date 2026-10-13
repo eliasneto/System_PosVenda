@@ -8,6 +8,8 @@ urlpatterns = [
     path("mip/pausar/", views.mip_pausar_view, name="mip_pausar"),
     path("mip/lote/", views.mip_lote_inep_view, name="mip_lote_inep"),
     path("mip/lote/criar/", views.mip_lote_criar_view, name="mip_lote_criar"),
+    path("mip/lote/em-massa/previa/", views.mip_lotes_em_massa_previa_view, name="mip_lotes_em_massa_previa"),
+    path("mip/lote/em-massa/criar/", views.mip_lotes_em_massa_criar_view, name="mip_lotes_em_massa_criar"),
     # e-mail do LOTE comentado (pedido do usuário, 2026-09-15) — ver apps.escolas.views.mip_lote_enviar_email_view
     # path("mip/lote/<int:pk>/enviar-email/", views.mip_lote_enviar_email_view, name="mip_lote_enviar_email"),
     path(
