@@ -2713,7 +2713,7 @@ _CABECALHO_RELATORIO_EACE_MIP = [
 ]
 
 
-def _xlsx_relatorio_eace_mip_com_linhas(linhas, nome="relatorio.xlsx"):
+def _xlsx_relatorio_eace_mip_com_linhas(linhas, nome="relatorio.xlsx", cabecalho=None):
     """.xlsx com linhas de dados reais (RelatorioEaceMipSincronizarTodasViewTests)
     — cada linha é uma tupla na ordem de `_CABECALHO_RELATORIO_EACE_MIP`
     (Projeto, Cod Fornecedor, Descrição do Item, Qtde Produto, Valor Unit
@@ -2721,7 +2721,7 @@ def _xlsx_relatorio_eace_mip_com_linhas(linhas, nome="relatorio.xlsx"):
     workbook = openpyxl.Workbook()
     planilha = workbook.active
     planilha.title = "_Base contrato_taxa_instalação"
-    planilha.append(_CABECALHO_RELATORIO_EACE_MIP)
+    planilha.append(cabecalho or _CABECALHO_RELATORIO_EACE_MIP)
     for linha in linhas:
         planilha.append(list(linha))
     buffer = io.BytesIO()
@@ -2789,6 +2789,21 @@ class RelatorioEaceMipSincronizarTodasViewTests(TestCase):
         resp = self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"), follow=True)
         self.assertContains(resp, "Nenhum Relatório EACE (MIP) ativo")
         self.assertEqual(EscolaItemRelatorioEaceMip.objects.count(), 0)
+
+    def test_coluna_municipio_vale_como_cidade(self):
+        """Pedido do usuário (2026-10-13): a "Base contrato" da MEGA traz
+        "Municipio" no lugar de "CIDADE" — o upload aceita e já sincroniza
+        a cidade do item a partir dela."""
+        cabecalho = _CABECALHO_RELATORIO_EACE_MIP[:-1] + ["Municipio"]
+        arquivo = _xlsx_relatorio_eace_mip_com_linhas([
+            ("53004230", "19001", "Kit Cobertura Wi-Fi - 2 Access Points - Serv - MEGA - SE", 1,
+             "15728.61", "19/08/2026", "SP", "Atibaia"),
+        ], cabecalho=cabecalho)
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse("relatorio_eace_mip"), {"arquivo": arquivo}, follow=True)
+        self.assertContains(resp, "importado e sincronizado")
+        item = EscolaItemRelatorioEaceMip.objects.get(escola=self.escola)
+        self.assertEqual(item.cidade, "Atibaia")
 
     def test_sincroniza_cria_item_do_lado3_kit(self):
         self._ativar_planilha([

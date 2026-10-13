@@ -45,14 +45,21 @@ class RelatorioEaceMipSincronizacaoError(Exception):
     mensagem para o usuário."""
 
 
+_SINONIMOS_CABECALHO_MIP = {"MUNICIPIO": "CIDADE", "MUNICÍPIO": "CIDADE"}
+
+
 def _normalizar_cabecalho(valor):
     """Mesma normalização de `importar_nova_base_eace` — maiúsculas, sem
     quebra de linha/espaço duplicado — para comparar cabeçalhos de coluna
     sem depender de formatação exata. Compartilhada com o upload
     (`apps.escolas.forms.PlanilhaRelatorioEaceMipUploadForm`), que valida
-    o mesmo critério na hora de aceitar o arquivo."""
-    texto = (str(valor) if valor is not None else "").strip().upper()
-    return " ".join(texto.split())
+    o mesmo critério na hora de aceitar o arquivo.
+
+    Pedido do usuário (2026-10-13): "Municipio"/"Município" vale como a
+    coluna "CIDADE" (`_SINONIMOS_CABECALHO_MIP`) — a "Base contrato" da
+    MEGA vem com esse nome."""
+    texto = " ".join((str(valor) if valor is not None else "").strip().upper().split())
+    return _SINONIMOS_CABECALHO_MIP.get(texto, texto)
 
 
 def aba_relatorio_eace_mip_com_colunas(workbook):
