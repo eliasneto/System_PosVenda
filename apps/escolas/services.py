@@ -630,6 +630,10 @@ def sincronizar_relatorio_eace_mip_de_todas_as_escolas(sobrepor=True, usuario=No
         )
 
     linhas_por_inep = _agrupar_linhas_relatorio_eace_mip_por_inep(planilha)
+    # Pedido do usuário (2026-10-13): planilha nova (1ª sincronização do
+    # arquivo) recomeça o grid do MIP — todo INEP retirado pelo X volta e
+    # todo INEP pausado é retomado; quem aparece segue `escolas_no_grid_mip`.
+    planilha_nova = not planilha.sincronizacao_confirmada
     # Catálogo não é pré-carregado aqui de propósito: mesmo perfil de
     # consulta do Sincronizador do RI (`casar_planilha_eace_com_catalogo`
     # consulta `KitPadrao.objects` por linha) — "mesmas regras de
@@ -645,10 +649,21 @@ def sincronizar_relatorio_eace_mip_de_todas_as_escolas(sobrepor=True, usuario=No
         if escola.encontrado_relatorio_eace_mip != encontrado:
             escola.encontrado_relatorio_eace_mip = encontrado
             campos_alterados.append("encontrado_relatorio_eace_mip")
-        if encontrado and escola.retirado_grid_mip:
+        logs_grid = []
+        if escola.retirado_grid_mip and (encontrado or planilha_nova):
             # Retirado pelo X volta ao grid quando vem numa nova sincronização.
             escola.retirado_grid_mip = False
             campos_alterados.append("retirado_grid_mip")
+            logs_grid.append(("Grid do MIP", "Retirado da lista", VOLTOU_AO_GRID_MIP))
+        if planilha_nova and escola.pausado_mip:
+            escola.pausado_mip = False
+            campos_alterados.append("pausado_mip")
+            logs_grid.append(("Pausa no MIP", "Pausado", RETOMADO_PLANILHA_NOVA_MIP))
+        if logs_grid:
+            ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+            if ri_atual:
+                for campo, valor_anterior, valor_novo in logs_grid:
+                    _registrar_log_campo_lote(ri_atual, usuario, campo, valor_anterior, valor_novo)
         if encontrado:
             cod_fornecedor = _texto_cod_fornecedor(linhas[0]["cod_fornecedor"])
             if cod_fornecedor and escola.cod_fornecedor != cod_fornecedor:
@@ -1121,7 +1136,9 @@ def desfazer_lote_mip(lote, usuario):
     lote.delete()
 
 
-RETIRADO_DO_GRID_MIP = "Retirado da lista (volta se vier numa nova sincronização do Relatório EACE (MIP))"
+RETIRADO_DO_GRID_MIP = "Retirado da lista (volta na próxima planilha do Relatório EACE (MIP))"
+VOLTOU_AO_GRID_MIP = "Na lista (nova sincronização do Relatório EACE (MIP))"
+RETOMADO_PLANILHA_NOVA_MIP = "Ativo (planilha nova do Relatório EACE (MIP))"
 
 
 @transaction.atomic
@@ -1141,7 +1158,7 @@ def retirar_do_grid_mip(escola_ids, usuario):
     sobraram (não foram para LOTE) — marca `retirado_grid_mip` e desmarca
     "veio no Relatório EACE (MIP)" (`encontrado_relatorio_eace_mip`), sem
     mexer em nenhum outro dado; o INEP volta sozinho quando aparecer numa
-    nova sincronização. Só age sobre quem está de fato no grid
+    nova sincronização ou na 1ª sincronização de uma planilha nova. Só age sobre quem está de fato no grid
     (`escolas_no_grid_mip`) e grava 1 entrada no histórico de cada um.
     Devolve quantos foram retirados."""
     escolas = list(escolas_no_grid_mip().filter(pk__in=[pk for pk in escola_ids if str(pk).isdigit()]))

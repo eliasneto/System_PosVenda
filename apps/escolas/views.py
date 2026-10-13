@@ -1459,7 +1459,26 @@ def relatorio_eace_mip_view(request):
         upload_form = PlanilhaRelatorioEaceMipUploadForm(request.POST, request.FILES)
         if upload_form.is_valid():
             PlanilhaRelatorioEaceMip.substituir(upload_form.cleaned_data["arquivo"], request.user)
-            messages.success(request, "Relatório EACE (MIP) importado com sucesso.")
+            # Pedido do usuário (2026-10-13): planilha nova já atualiza o
+            # grid do MIP no upload. Com INEP de Lado 3 já preenchido, a
+            # sincronização espera a escolha Sobrepor/Só os vazios na tela.
+            if escolas_com_lado3_preenchido_no_arquivo_ativo():
+                messages.warning(
+                    request,
+                    "Relatório EACE (MIP) importado. Escolha abaixo se sobrepõe os dados já lançados "
+                    "para concluir a sincronização e atualizar o grid do MIP.",
+                )
+                return redirect("relatorio_eace_mip")
+            try:
+                resultado = sincronizar_relatorio_eace_mip_de_todas_as_escolas(usuario=request.user)
+            except RelatorioEaceMipSincronizacaoError as erro:
+                messages.error(request, str(erro))
+                return redirect("relatorio_eace_mip")
+            messages.success(
+                request,
+                "Relatório EACE (MIP) importado e sincronizado: "
+                f"{resultado['escolas_atualizadas']} INEP(s) atualizado(s). Grid do MIP atualizado.",
+            )
             return redirect("relatorio_eace_mip")
         mensagens_erro = [erro for erros in upload_form.errors.values() for erro in erros]
         messages.error(request, "Não foi possível importar: " + " ".join(mensagens_erro))

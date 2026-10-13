@@ -12,16 +12,17 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from apps.escolas.models import Escola, EscolaItemRelatorioEaceMip, Lote
+from apps.escolas.models import Escola, EscolaItemRelatorioEaceMip, Lote, PlanilhaRelatorioEaceMip
 from apps.escolas.services import (
     MOTIVO_IMPORTACAO_PAUSADO,
     _normalizar_texto_cidade,
     criar_lote_mip,
     escolas_elegiveis_lote_mip,
     importar_lotes_mip_em_massa,
+    sincronizar_relatorio_eace_mip_de_todas_as_escolas,
     valor_total_lotes_mip_por_status,
 )
-from apps.escolas.tests import _criar_escola_elegivel_lote
+from apps.escolas.tests import _criar_escola_elegivel_lote, _xlsx_relatorio_eace_mip
 from apps.ri.models import KitPadrao, Ri, RiHistorico, RiItemIxc
 
 User = get_user_model()
@@ -739,3 +740,78 @@ class PausarInepMipTests(TestCase):
         self._pausar(self.escola1)
         self.escola1.refresh_from_db()
         self.assertFalse(self.escola1.pausado_mip)
+
+
+_MEDIA_ROOT_TESTE_PLANILHA_NOVA_MIP = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_PLANILHA_NOVA_MIP)
+class PlanilhaNovaRecomecaGridMipTests(TestCase):
+    """Pedido do usuário (2026-10-13): importar uma planilha nova do
+    Relatório EACE (MIP) já sincroniza e recomeça o grid do MIP — os INEPs
+    retirados pelo X voltam e os pausados são retomados."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_PLANILHA_NOVA_MIP, ignore_errors=True)
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-planilha-nova", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        self.retirada, self.ri_retirada = _criar_escola_elegivel_lote("27000001")
+        self.pausada, self.ri_pausada = _criar_escola_elegivel_lote("27000002")
+        self.client.force_login(self.admin)
+        self.client.post(reverse("mip_retirar_grid"), {"escola_ids": [self.retirada.pk]})
+        self.client.post(reverse("mip_pausar"), {"escola_ids": [self.pausada.pk], "acao": "pausar"})
+
+    def _upload(self):
+        return self.client.post(reverse("relatorio_eace_mip"), {"arquivo": _xlsx_relatorio_eace_mip()})
+
+    def _ineps_no_grid(self):
+        resposta = self.client.get(reverse("mip_inep"))
+        return {linha["escola"].inep for linha in resposta.context["page_obj"]}
+
+    def test_upload_sincroniza_e_recomeca_o_grid(self):
+        self.assertEqual(self._ineps_no_grid(), {"27000002"})
+        resposta = self._upload()
+        self.assertRedirects(resposta, reverse("relatorio_eace_mip"), fetch_redirect_response=False)
+        self.assertTrue(PlanilhaRelatorioEaceMip.ativa().sincronizacao_confirmada)
+        self.retirada.refresh_from_db()
+        self.pausada.refresh_from_db()
+        self.assertFalse(self.retirada.retirado_grid_mip)
+        self.assertFalse(self.pausada.pausado_mip)
+        self.assertEqual(self._ineps_no_grid(), {"27000001", "27000002"})
+        self.assertEqual(len(escolas_elegiveis_lote_mip("GO", "Abadiânia", None, None, exigir_relatorio_eace_mip=False)), 2)
+        historico = RiHistorico.objects.filter(ri=self.ri_pausada, campo="Pausa no MIP").latest("pk")
+        self.assertEqual((historico.valor_anterior, historico.autor), ("Pausado", self.admin))
+        self.assertTrue(
+            RiHistorico.objects.filter(ri=self.ri_retirada, campo="Grid do MIP", valor_anterior="Retirado da lista").exists()
+        )
+
+    def test_ressincronizar_a_mesma_planilha_nao_recomeca(self):
+        self._upload()
+        self.client.post(reverse("mip_retirar_grid"), {"escola_ids": [self.retirada.pk]})
+        self.client.post(reverse("mip_pausar"), {"escola_ids": [self.pausada.pk], "acao": "pausar"})
+        sincronizar_relatorio_eace_mip_de_todas_as_escolas(usuario=self.admin)
+        self.retirada.refresh_from_db()
+        self.pausada.refresh_from_db()
+        self.assertTrue(self.retirada.retirado_grid_mip)
+        self.assertTrue(self.pausada.pausado_mip)
+
+    def test_upload_com_lado3_preenchido_espera_escolha_de_sobrepor(self):
+        with patch("apps.escolas.views.escolas_com_lado3_preenchido_no_arquivo_ativo", return_value=2):
+            self._upload()
+        self.assertFalse(PlanilhaRelatorioEaceMip.ativa().sincronizacao_confirmada)
+        self.pausada.refresh_from_db()
+        self.assertTrue(self.pausada.pausado_mip)
+        self.client.post(reverse("relatorio_eace_mip_sincronizar_todas"), {"sobrepor": "0"})
+        self.pausada.refresh_from_db()
+        self.retirada.refresh_from_db()
+        self.assertFalse(self.pausada.pausado_mip)
+        self.assertFalse(self.retirada.retirado_grid_mip)
