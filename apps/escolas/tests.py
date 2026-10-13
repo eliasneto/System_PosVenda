@@ -494,35 +494,74 @@ class MipInepStatusFiltroTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="analista", password="senha-teste-123")
 
-    def test_mostra_so_aguardando_validacao_eace(self):
-        em_andamento = Escola.objects.create(inep="10000001", nome="Escola Andamento")
-        Ri.objects.create(escola=em_andamento, status=Ri.ANDAMENTO)
-        em_andamento.status_mip = Escola.EM_ANDAMENTO
-        em_andamento.save()
+    def test_mostra_todo_inep_da_planilha_com_status_mip(self):
+        """Pedido do usuário (2026-10-13, revê a RN-104): o grid lista
+        todo INEP que veio na planilha, em qualquer Status (MIP), com a
+        coluna Status (MIP); quem não veio na planilha continua fora."""
+        em_andamento = Escola.objects.create(
+            inep="10000001", nome="Escola Andamento", status_mip=Escola.EM_ANDAMENTO,
+            encontrado_relatorio_eace_mip=True,
+        )
+        aguardando = Escola.objects.create(
+            inep="10000002", nome="Escola Validacao", status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+            encontrado_relatorio_eace_mip=True,
+        )
+        concluido = Escola.objects.create(
+            inep="10000003", nome="Escola Concluida", status_mip=Escola.FATURAMENTO_CONCLUIDO,
+            encontrado_relatorio_eace_mip=True,
+        )
+        fora_da_planilha = Escola.objects.create(
+            inep="10000006", nome="Escola Fora", status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+            encontrado_relatorio_eace_mip=False,
+        )
 
-        aguardando = Escola.objects.create(inep="10000002", nome="Escola Validacao")
-        Ri.objects.create(escola=aguardando, status=Ri.AGUARDANDO_VALIDACAO_EACE)
-
-        concluido = Escola.objects.create(inep="10000003", nome="Escola Concluida")
-        Ri.objects.create(escola=concluido, status=Ri.FATURAMENTO_CONCLUIDO)
+        fora_sem_status = Escola.objects.create(
+            inep="10000007", nome="Escola Fora Sem Status", status_mip=Escola.EM_ANDAMENTO,
+            encontrado_relatorio_eace_mip=False,
+        )
 
         self.client.force_login(self.user)
-        resp = _get_grid_mip(self.client)
-        self.assertNotContains(resp, em_andamento.inep)
-        self.assertContains(resp, aguardando.inep)
-        self.assertNotContains(resp, concluido.inep)
+        resp = self.client.get(reverse("mip_inep"))
+        linhas = {linha["escola"].inep: linha for linha in resp.context["page_obj"]}
+        # "Aguardando Validação EACE" que não veio na planilha também aparece (vermelho).
+        self.assertEqual(set(linhas), {em_andamento.inep, aguardando.inep, concluido.inep, fora_da_planilha.inep})
+        self.assertNotIn(fora_sem_status.inep, linhas)
+        self.assertEqual(linhas[fora_da_planilha.inep]["status_planilha_mip"], "vermelho")
+        self.assertContains(resp, "<th class=\"px-4 py-2\">Status (MIP)</th>", html=False)
+        self.assertContains(resp, "Em Andamento MIP")
+        self.assertContains(resp, "Processo Concluído")
 
-        # Nenhum dos 3 nunca sai do Grid de Equipamentos (RI) — RN-104 só
-        # mexe na visibilidade do MIP.
-        resp_ri = self.client.get(reverse("grid_inep"))
-        self.assertContains(resp_ri, em_andamento.inep)
-        self.assertContains(resp_ri, aguardando.inep)
-        self.assertContains(resp_ri, concluido.inep)
+    def test_filtro_por_status_mip(self):
+        Escola.objects.create(
+            inep="10000011", nome="Escola A", status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
+            encontrado_relatorio_eace_mip=True,
+        )
+        Escola.objects.create(
+            inep="10000012", nome="Escola B", status_mip=Escola.FATURAMENTO_CONCLUIDO,
+            encontrado_relatorio_eace_mip=True,
+        )
+        Escola.objects.create(inep="10000013", nome="Escola C", encontrado_relatorio_eace_mip=True)
+
+        self.client.force_login(self.user)
+
+        def ineps(**params):
+            resp = self.client.get(reverse("mip_inep"), params)
+            return {linha["escola"].inep for linha in resp.context["page_obj"]}
+
+        self.assertEqual(ineps(status_mip=Escola.FATURAMENTO_CONCLUIDO), {"10000012"})
+        self.assertEqual(ineps(status_mip="sem"), {"10000013"})
+        # Valor fora das opções (URL montada à mão) é ignorado, sem erro.
+        self.assertEqual(ineps(status_mip="xyz"), {"10000011", "10000012", "10000013"})
+        resp = self.client.get(reverse("mip_inep"))
+        self.assertEqual(
+            [valor for valor, _ in resp.context["status_mip_opcoes"]],
+            [Escola.AGUARDANDO_VALIDACAO_EACE, Escola.FATURAMENTO_CONCLUIDO, "sem"],
+        )
 
     def test_sem_handoff_nao_aparece_no_mip(self):
-        """RN-104: sem handoff (`status_mip` `None`), o INEP não aparece
-        no grid do MIP — continua acessível direto por `/mip/<inep>/` e
-        sempre visível no Grid de Equipamentos."""
+        """Sem handoff (`status_mip` `None`) e sem ter vindo na planilha,
+        o INEP não aparece no grid do MIP — continua acessível direto por
+        `/mip/<inep>/` e sempre visível no Grid de Equipamentos."""
         escola = Escola.objects.create(inep="10000004", nome="Escola Sem Handoff")
         Ri.objects.create(escola=escola, status=Ri.IMPLANTACAO_EACE)
 
@@ -932,13 +971,13 @@ class MipStatusPlanilhaMipTests(TestCase):
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "vermelho")
 
-    def test_bug_35583972_fora_da_ultima_sincronizacao_nao_aparece_no_grid(self):
+    def test_bug_35583972_fora_da_ultima_sincronizacao_aparece_vermelho(self):
         """Caso real reportado pelo usuário (INEP 35583972): a última
         sincronização não trouxe o INEP de novo (`encontrado_relatorio_
         eace_mip=False`), mas ele já tinha item lançado de uma rodada
-        anterior. Antes aparecia com bolinha verde; pedido do usuário
-        (2026-09-30): o grid do MIP só mostra INEP que veio no Relatório
-        EACE (MIP) — este deixa de aparecer."""
+        anterior. Pedido do usuário (2026-10-13): "Aguardando Validação
+        EACE" que não veio na planilha aparece no grid com bolinha
+        vermelha, mesmo com dado de antes."""
         escola = Escola.objects.create(
             inep="35583972", nome="Escola Bug Bolinha", lote=9, encontrado_relatorio_eace_mip=False,
         )
@@ -948,7 +987,10 @@ class MipStatusPlanilhaMipTests(TestCase):
         )
         self.client.force_login(self.user)
         resp = _get_grid_mip(self.client)
-        self.assertEqual(len(resp.context["page_obj"]), 0)
+        linhas = list(resp.context["page_obj"])
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["status_planilha_mip"], "vermelho")
+        self.assertContains(resp, "Não veio no Relatório EACE (MIP).")
 
     def test_encontrado_na_ultima_sincronizacao_mas_sem_item_lancado_mostra_vermelha(self):
         """Simétrico ao teste acima: `encontrado_relatorio_eace_mip=True`
@@ -976,10 +1018,11 @@ class MipStatusPlanilhaMipTests(TestCase):
         linha = resp.context["page_obj"][0]
         self.assertEqual(linha["status_planilha_mip"], "vermelho")
 
-    def test_lista_fora_da_validacao_eace_nao_aparece_mais(self):
+    def test_inep_da_planilha_fora_da_validacao_eace_aparece_no_grid(self):
         """Pedido do usuário (2026-09-30): a lista separada "Fora da
-        Validação EACE" saiu da tela — INEP encontrado na planilha mas fora
-        de "Aguardando Validação EACE" não aparece em lugar nenhum do grid."""
+        Validação EACE" saiu da tela. Revisto em 2026-10-13: INEP
+        encontrado na planilha aparece no próprio grid, em qualquer Status
+        (MIP) — aqui sem Status (MIP) ainda."""
         escola = Escola.objects.create(
             inep="10000063", nome="Escola Fora Validacao", estado="SP", municipio="Campinas", lote=9,
             encontrado_relatorio_eace_mip=True,
@@ -987,9 +1030,10 @@ class MipStatusPlanilhaMipTests(TestCase):
         Ri.objects.create(escola=escola, status=Ri.ANDAMENTO)
         self.client.force_login(self.user)
         resp = _get_grid_mip(self.client)
-        self.assertEqual(resp.context["page_obj"].paginator.count, 0)
+        self.assertEqual(resp.context["page_obj"].paginator.count, 1)
         self.assertNotContains(resp, "Fora da Validação EACE")
-        self.assertNotContains(resp, escola.inep)
+        self.assertContains(resp, escola.inep)
+        self.assertContains(resp, "Sem Status (MIP)")
 
 
 class MipDivergenciaValorServicoTests(TestCase):

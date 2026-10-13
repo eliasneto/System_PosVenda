@@ -27,7 +27,7 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 # from django.core.mail import EmailMessage  # e-mail do LOTE comentado (pedido do usuario, 2026-09-15)
 from django.db import transaction
-from django.db.models import DateField, OuterRef, Prefetch, Subquery
+from django.db.models import DateField, OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
 
 from apps.auditoria.models import Auditoria
@@ -645,6 +645,10 @@ def sincronizar_relatorio_eace_mip_de_todas_as_escolas(sobrepor=True, usuario=No
         if escola.encontrado_relatorio_eace_mip != encontrado:
             escola.encontrado_relatorio_eace_mip = encontrado
             campos_alterados.append("encontrado_relatorio_eace_mip")
+        if encontrado and escola.retirado_grid_mip:
+            # Retirado pelo X volta ao grid quando vem numa nova sincronização.
+            escola.retirado_grid_mip = False
+            campos_alterados.append("retirado_grid_mip")
         if encontrado:
             cod_fornecedor = _texto_cod_fornecedor(linhas[0]["cod_fornecedor"])
             if cod_fornecedor and escola.cod_fornecedor != cod_fornecedor:
@@ -901,8 +905,9 @@ def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim, *, exig
 
     ri_atual_qs = Ri.objects.filter(escola=OuterRef("pk")).order_by("-criado_em")
     data_ativacao_ri_atual = Subquery(ri_atual_qs.values("data_ativacao")[:1], output_field=DateField())
+    # Pedido do usuário (2026-10-13): INEP pausado no MIP não entra em LOTE.
     escolas = Escola.objects.annotate(data_ativacao_ri_atual=data_ativacao_ri_atual).filter(
-        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, estado=estado, municipio=municipio,
+        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, estado=estado, municipio=municipio, pausado_mip=False,
     )
     if exigir_relatorio_eace_mip:
         # Pedido do usuário (2026-09-30): LOTE só com INEP que veio no
@@ -1120,27 +1125,56 @@ RETIRADO_DO_GRID_MIP = "Retirado da lista (volta se vier numa nova sincronizaç�
 
 
 @transaction.atomic
+def escolas_no_grid_mip():
+    """Quem aparece no grid do MIP (pedido do usuário, 2026-10-13): todo
+    INEP que veio no Relatório EACE (MIP), em qualquer Status (MIP), mais
+    os "Aguardando Validação EACE" que não vieram (bolinha vermelha) —
+    menos os retirados pelo X (`retirado_grid_mip`)."""
+    return Escola.objects.filter(
+        Q(encontrado_relatorio_eace_mip=True) | Q(status_mip=Escola.AGUARDANDO_VALIDACAO_EACE),
+        retirado_grid_mip=False,
+    )
+
+
 def retirar_do_grid_mip(escola_ids, usuario):
     """Pedido do usuário (2026-09-30): tira do grid do MIP os INEPs que
-    sobraram (não foram para LOTE) — só desmarca "veio no Relatório EACE
-    (MIP)" (`encontrado_relatorio_eace_mip`), sem mexer em nenhum outro
-    dado; o INEP volta sozinho quando aparecer numa nova sincronização.
-    Só age sobre quem está de fato no grid (Aguardando Validação EACE e
-    marcado como encontrado) e grava 1 entrada no histórico de cada um.
+    sobraram (não foram para LOTE) — marca `retirado_grid_mip` e desmarca
+    "veio no Relatório EACE (MIP)" (`encontrado_relatorio_eace_mip`), sem
+    mexer em nenhum outro dado; o INEP volta sozinho quando aparecer numa
+    nova sincronização. Só age sobre quem está de fato no grid
+    (`escolas_no_grid_mip`) e grava 1 entrada no histórico de cada um.
     Devolve quantos foram retirados."""
-    escolas = list(
-        Escola.objects.filter(
-            pk__in=[pk for pk in escola_ids if str(pk).isdigit()],
-            status_mip=Escola.AGUARDANDO_VALIDACAO_EACE,
-            encontrado_relatorio_eace_mip=True,
-        )
-    )
+    escolas = list(escolas_no_grid_mip().filter(pk__in=[pk for pk in escola_ids if str(pk).isdigit()]))
     for escola in escolas:
         escola.encontrado_relatorio_eace_mip = False
-        escola.save(update_fields=["encontrado_relatorio_eace_mip"])
+        escola.retirado_grid_mip = True
+        escola.save(update_fields=["encontrado_relatorio_eace_mip", "retirado_grid_mip"])
         ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
         if ri_atual:
             _registrar_log_campo_lote(ri_atual, usuario, "Grid do MIP", "Na lista", RETIRADO_DO_GRID_MIP)
+    return len(escolas)
+
+
+def alternar_pausa_mip(escola_ids, pausar, usuario):
+    """Pedido do usuário (2026-10-13): "Pausar" deixa o INEP no grid do MIP
+    mas fora da criação de LOTE (`escolas_elegiveis_lote_mip`) até
+    "Retomar". Só age sobre quem está no grid e ainda não está no estado
+    pedido; grava 1 entrada no histórico de cada um. Devolve quantos
+    mudaram."""
+    escolas = list(
+        escolas_no_grid_mip().filter(
+            pk__in=[pk for pk in escola_ids if str(pk).isdigit()], pausado_mip=not pausar,
+        )
+    )
+    for escola in escolas:
+        escola.pausado_mip = pausar
+        escola.save(update_fields=["pausado_mip"])
+        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if ri_atual:
+            _registrar_log_campo_lote(
+                ri_atual, usuario, "Pausa no MIP",
+                "Ativo" if pausar else "Pausado", "Pausado" if pausar else "Ativo",
+            )
     return len(escolas)
 
 
@@ -1212,6 +1246,8 @@ MOTIVO_IMPORTACAO_JA_EM_LOTE = "ja_em_lote"
 MOTIVO_IMPORTACAO_NAO_CADASTRADO = "nao_cadastrado"
 MOTIVO_IMPORTACAO_STATUS = "status_mip_nao_elegivel"
 MOTIVO_IMPORTACAO_VALOR = "valor_divergente"
+# Pedido do usuário (2026-10-13): INEP pausado no MIP não entra em LOTE.
+MOTIVO_IMPORTACAO_PAUSADO = "pausado_mip"
 # Pedido do usuário (2026-10-07): com `incluir_divergentes`, o INEP que
 # ficaria de fora (Status (MIP) não elegível ou valores não batendo) entra
 # no LOTE mesmo assim, valendo o valor faturado na planilha — o Lado IXC
@@ -1324,6 +1360,9 @@ def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo, inclu
         if lotes_existentes:
             registro["motivo"] = MOTIVO_IMPORTACAO_JA_EM_LOTE
             registro["lote"] = ", ".join(str(lote) for lote in lotes_existentes)
+            continue
+        if escola.pausado_mip:
+            registro["motivo"] = MOTIVO_IMPORTACAO_PAUSADO
             continue
         total_ixc, total_eace = _totais_lote_mip(escola, catalogo_kits)
         registro["total_ixc"], registro["total_eace"] = total_ixc, total_eace

@@ -15,6 +15,7 @@ from apps.escolas.services import (
     MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA,
     MOTIVO_IMPORTACAO_JA_EM_LOTE,
     MOTIVO_IMPORTACAO_NAO_CADASTRADO,
+    MOTIVO_IMPORTACAO_PAUSADO,
     MOTIVO_IMPORTACAO_STATUS,
     MOTIVO_IMPORTACAO_VALOR,
     _normalizar_cabecalho,
@@ -30,6 +31,7 @@ ROTULOS_MOTIVO = {
     MOTIVO_IMPORTACAO_INCLUIDO_VALOR_PLANILHA: "Incluído em LOTE com o valor da planilha (IXC diverge ou Status (MIP) fora da regra)",
     MOTIVO_IMPORTACAO_JA_EM_LOTE: "Já estava em LOTE (não mexido)",
     MOTIVO_IMPORTACAO_NAO_CADASTRADO: "INEP não cadastrado no sistema",
+    MOTIVO_IMPORTACAO_PAUSADO: "INEP pausado no MIP",
     MOTIVO_IMPORTACAO_STATUS: 'Status (MIP) diferente de "Aguardando Validação EACE"',
     MOTIVO_IMPORTACAO_VALOR: "Valor da planilha, IXC e EACE não batem",
 }

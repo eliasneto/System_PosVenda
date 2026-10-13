@@ -106,6 +106,12 @@ class Escola(models.Model):
         blank=True,
         default=None,
     )
+    # Pedido do usuário (2026-10-13): "Retirar da lista" (X) tira o INEP do
+    # grid do MIP até ele vir numa nova sincronização do Relatório EACE (MIP);
+    # "Pausar" deixa o INEP no grid, mas fora da criação de LOTE, até
+    # retomarem.
+    retirado_grid_mip = models.BooleanField("Retirado do grid do MIP", default=False)
+    pausado_mip = models.BooleanField("Pausado no MIP", default=False)
     status_mip = models.CharField(
         "Status (MIP)",
         max_length=30,

@@ -44,6 +44,8 @@ from .services import (
     planilhas_faturamento_implantacao_lote,
     rateio_relatorio_eace_mip_da_escola,
     refletir_status_mip_no_ri,
+    alternar_pausa_mip,
+    escolas_no_grid_mip,
     retirar_do_grid_mip,
     sincronizar_notas_fiscais_mip_lote_em_andamento,
     sincronizar_relatorio_eace_mip_de_todas_as_escolas,
@@ -54,6 +56,9 @@ from .services import (
 # panel.html`), reaproveitado aqui sem importar o módulo de views do RI só
 # por essa constante.
 HISTORICO_ITENS_POR_PAGINA = 10
+
+# Valor do filtro "Status (MIP)" do grid do MIP para INEP ainda sem Status (MIP).
+STATUS_MIP_FILTRO_SEM = "sem"
 
 
 @login_required
@@ -207,19 +212,30 @@ def mip_inep_view(request):
     # business_rules.md; desfaz a RN-103, 2026-09-16, a pedido do
     # usuário): o grid volta a exigir `Escola.status_mip ==
     # "Aguardando Validação EACE"` — não mostra mais toda Escola
-    # cadastrada. Sem filtro/coluna "Status" aqui: como só existe esse
-    # único valor na lista, mostrá-lo em toda linha não agregaria nada
-    # (mesmo raciocínio da RN-074 original, antes da RN-092 introduzir o
-    # campo `status_mip` com mais valores). O Grid de Equipamentos
+    # cadastrada (revisto em 2026-10-13, abaixo: qualquer Status (MIP),
+    # desde que o INEP tenha vindo na planilha). O Grid de Equipamentos
     # (`ri.views.grid_inep_view`) continua mostrando toda Escola sempre —
     # RN-104 não mexe nele.
     ri_atual_qs = Ri.objects.filter(escola=OuterRef("pk")).order_by("-criado_em")
     # Pedido do usuário (2026-09-30): só entra no MIP o INEP que veio no
     # Relatório EACE (MIP) — apareceu na planilha ativa na última
     # sincronização (`Escola.encontrado_relatorio_eace_mip`, RN-081).
-    escolas = Escola.objects.filter(
-        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, encontrado_relatorio_eace_mip=True,
-    )
+    # Pedido do usuário (2026-10-13, revê a RN-104 neste ponto): o grid
+    # lista todo INEP que veio na planilha, em qualquer Status (MIP), mais
+    # os "Aguardando Validação EACE" que não vieram (bolinha vermelha) —
+    # `escolas_no_grid_mip`. Coluna e filtro (`?status_mip=`) de Status
+    # (MIP); "sem" = INEP ainda sem Status (MIP). Criar LOTE continua com
+    # a regra própria (`escolas_elegiveis_lote_mip`).
+    escolas = escolas_no_grid_mip()
+    status_mip_filtro = (request.GET.get("status_mip") or "").strip()
+    status_presentes = set(escolas.values_list("status_mip", flat=True).distinct())
+    status_mip_opcoes = [
+        (valor, rotulo) for valor, rotulo in Escola.STATUS_MIP_CHOICES if valor in status_presentes
+    ]
+    if None in status_presentes or "" in status_presentes:
+        status_mip_opcoes.append((STATUS_MIP_FILTRO_SEM, "Sem Status (MIP)"))
+    if status_mip_filtro not in {valor for valor, _ in status_mip_opcoes}:
+        status_mip_filtro = ""
 
     # RN-079 (a criar): opções do filtro Estado — só os estados que já
     # têm pelo menos 1 INEP na base do grid ("Validação EACE"), calculado
@@ -250,6 +266,10 @@ def mip_inep_view(request):
         escolas = escolas.filter(estado=estado_filtro)
         if municipio_filtro:
             escolas = escolas.filter(municipio=municipio_filtro)
+    if status_mip_filtro == STATUS_MIP_FILTRO_SEM:
+        escolas = escolas.filter(Q(status_mip__isnull=True) | Q(status_mip=""))
+    elif status_mip_filtro:
+        escolas = escolas.filter(status_mip=status_mip_filtro)
 
     if data_inicial_validacao or data_final_validacao:
         # RN-075 (revista em 2026-09-09): Data de Ativação (`Ri.
@@ -345,7 +365,10 @@ def mip_inep_view(request):
         # destaque no próprio valor (`valor_total_diverge`, logo abaixo),
         # não mais pela bolinha; o usuário confirmou que esse destaque já
         # é suficiente ("isso o sistema já faz hoje").
-        status_planilha_mip = "verde" if valor_total_lado3 is not None else "vermelho"
+        # Pedido do usuário (2026-10-13): INEP que não veio no Relatório
+        # EACE (MIP) fica sempre vermelho, mesmo com dado de antes.
+        veio_na_planilha = escola.encontrado_relatorio_eace_mip is True
+        status_planilha_mip = "verde" if veio_na_planilha and valor_total_lado3 is not None else "vermelho"
         # RN-077 (a criar): destaque em amarelo do valor do Lado 3 quando
         # os dois totais são conhecidos e diferem — sem um dos dois lados
         # ter total (nenhum item lançado ainda), não há o que comparar
@@ -375,6 +398,7 @@ def mip_inep_view(request):
                 "valor_total_lado3_incompleto": valor_total_lado3_incompleto,
                 "valor_total_diverge": valor_total_diverge,
                 "status_planilha_mip": status_planilha_mip,
+                "veio_na_planilha": veio_na_planilha,
                 "divergencia_aberta": divergencia["diverge"],
                 "itens_ixc_divergentes_pks": divergencia["itens_ixc_divergentes_pks"],
                 "itens_mip_divergentes_pks": divergencia["itens_mip_divergentes_pks"],
@@ -449,6 +473,8 @@ def mip_inep_view(request):
         {
             "page_obj": page_obj,
             "total_inep": total_inep,
+            "status_mip_filtro": status_mip_filtro,
+            "status_mip_opcoes": status_mip_opcoes,
             "total_divergencia": total_divergencia,
             "divergencia_filtro": divergencia_filtro,
             "planilha_ativa": planilha_ativa,
@@ -1049,6 +1075,26 @@ def mip_retirar_grid_view(request):
         messages.success(request, f"{retirados} INEP(s) retirado(s) do grid do MIP.")
     else:
         messages.error(request, "Nenhum INEP selecionado para retirar do grid.")
+    return redirect(next_url)
+
+
+@login_required
+def mip_pausar_view(request):
+    """Pedido do usuário (2026-10-13): botão "Pausar"/"Retomar" do grid do
+    MIP — INEP pausado continua na lista, mas fica fora da criação de LOTE.
+    Regra em `apps.escolas.services.alternar_pausa_mip`."""
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("mip_inep")
+    if request.method != "POST":
+        return redirect(next_url)
+
+    pausar = request.POST.get("acao") == "pausar"
+    alterados = alternar_pausa_mip(request.POST.getlist("escola_ids"), pausar, request.user)
+    if alterados:
+        messages.success(request, f"{alterados} INEP(s) {'pausado(s)' if pausar else 'retomado(s)'} no MIP.")
+    else:
+        messages.error(request, "Nenhum INEP selecionado para pausar ou retomar.")
     return redirect(next_url)
 
 

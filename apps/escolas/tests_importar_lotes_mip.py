@@ -13,7 +13,14 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.escolas.models import Escola, EscolaItemRelatorioEaceMip, Lote
-from apps.escolas.services import _normalizar_texto_cidade, criar_lote_mip, valor_total_lotes_mip_por_status
+from apps.escolas.services import (
+    MOTIVO_IMPORTACAO_PAUSADO,
+    _normalizar_texto_cidade,
+    criar_lote_mip,
+    escolas_elegiveis_lote_mip,
+    importar_lotes_mip_em_massa,
+    valor_total_lotes_mip_por_status,
+)
 from apps.escolas.tests import _criar_escola_elegivel_lote
 from apps.ri.models import KitPadrao, Ri, RiHistorico, RiItemIxc
 
@@ -443,11 +450,13 @@ class MipSoComInepDoRelatorioEaceTests(TestCase):
         Escola.objects.filter(pk=self.fora.pk).update(encontrado_relatorio_eace_mip=False)
         Escola.objects.filter(pk=self.nunca_sincronizado.pk).update(encontrado_relatorio_eace_mip=None)
 
-    def test_grid_mostra_so_inep_da_planilha(self):
+    def test_grid_mostra_aguardando_fora_da_planilha_em_vermelho(self):
+        """Pedido do usuário (2026-10-13): "Aguardando Validação EACE" que
+        não veio na planilha aparece no grid, com bolinha vermelha."""
         self.client.force_login(self.usuario)
         resposta = self.client.get(reverse("mip_inep"))
-        ineps = {linha["escola"].inep for linha in resposta.context["page_obj"]}
-        self.assertEqual(ineps, {"24000001"})
+        bolinhas = {linha["escola"].inep: linha["status_planilha_mip"] for linha in resposta.context["page_obj"]}
+        self.assertEqual(bolinhas, {"24000001": "verde", "24000002": "vermelho", "24000003": "vermelho"})
 
     def test_criar_lote_so_com_inep_da_planilha(self):
         lote = criar_lote_mip("GO", "Abadiânia", None, None, self.usuario)
@@ -507,11 +516,30 @@ class RetirarDoGridMipTests(TestCase):
         self.assertNotIn(self.escola1, lote.escolas.all())
 
     def test_inep_fora_do_grid_nao_e_alterado(self):
-        Escola.objects.filter(pk=self.escola3.pk).update(status_mip=Escola.EM_ANDAMENTO)
+        Escola.objects.filter(pk=self.escola3.pk).update(
+            encontrado_relatorio_eace_mip=None, status_mip=Escola.EM_ANDAMENTO,
+        )
         self.client.post(reverse("mip_retirar_grid"), {"escola_ids": [self.escola3.pk, "abc"]})
         self.escola3.refresh_from_db()
-        self.assertTrue(self.escola3.encontrado_relatorio_eace_mip)
+        self.assertIsNone(self.escola3.encontrado_relatorio_eace_mip)
+        self.assertFalse(self.escola3.retirado_grid_mip)
         self.assertFalse(RiHistorico.objects.filter(campo="Grid do MIP").exists())
+
+    def test_retira_inep_em_qualquer_status_mip(self):
+        """Pedido do usuário (2026-10-13): o grid lista todo Status (MIP),
+        então "Retirar da lista" vale para qualquer um deles."""
+        Escola.objects.filter(pk=self.escola3.pk).update(status_mip=Escola.FATURAMENTO_CONCLUIDO)
+        self.client.post(reverse("mip_retirar_grid"), {"escola_ids": [self.escola3.pk]})
+        self.escola3.refresh_from_db()
+        self.assertFalse(self.escola3.encontrado_relatorio_eace_mip)
+        self.assertEqual(self.escola3.status_mip, Escola.FATURAMENTO_CONCLUIDO)
+
+    def test_retirado_em_aguardando_nao_volta_vermelho(self):
+        self.client.post(reverse("mip_retirar_grid"), {"escola_ids": [self.escola1.pk]})
+        self.escola1.refresh_from_db()
+        self.assertTrue(self.escola1.retirado_grid_mip)
+        self.assertEqual(self.escola1.status_mip, Escola.AGUARDANDO_VALIDACAO_EACE)
+        self.assertNotIn("25000001", self._ineps_no_grid())
 
     def test_get_nao_altera_nada(self):
         self.client.get(reverse("mip_retirar_grid"))
@@ -649,3 +677,65 @@ class DashboardFaturamentoMipTests(TestCase):
         resposta = self.client.get(reverse("dashboard_faturamento_mip"))
         self.assertEqual(resposta.status_code, 200)
         self.assertContains(resposta, "não encontrada")
+
+
+class PausarInepMipTests(TestCase):
+    """Pedido do usuário (2026-10-13): "Pausar" deixa o INEP no grid do MIP,
+    mas fora da criação de LOTE, até "Retomar"."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="analista-pausar", password="senha-teste-123")
+        KitPadrao.objects.create(
+            descricao="Kit Cobertura Wi-Fi - 2 Access Points", lote=9,
+            valor_equipamento="1000.00", valor_servico="300.00",
+        )
+        self.escola1, self.ri1 = _criar_escola_elegivel_lote("26000001")
+        self.escola2, _ = _criar_escola_elegivel_lote("26000002")
+        self.client.force_login(self.usuario)
+
+    def _pausar(self, escola, acao="pausar"):
+        return self.client.post(reverse("mip_pausar"), {"escola_ids": [escola.pk], "acao": acao})
+
+    def test_pausado_continua_no_grid_com_selo(self):
+        resposta = self._pausar(self.escola1)
+        self.assertRedirects(resposta, reverse("mip_inep"), fetch_redirect_response=False)
+        html = self.client.get(reverse("mip_inep"))
+        self.assertContains(html, "26000001")
+        self.assertContains(html, 'title="Retomar"')
+        historico = RiHistorico.objects.get(ri=self.ri1, campo="Pausa no MIP")
+        self.assertEqual((historico.valor_anterior, historico.valor_novo), ("Ativo", "Pausado"))
+
+    def test_pausado_nao_entra_no_lote(self):
+        self._pausar(self.escola1)
+        self.assertEqual(
+            [escola.inep for escola in escolas_elegiveis_lote_mip("GO", "Abadiânia", None, None)], ["26000002"],
+        )
+        lote = criar_lote_mip(
+            "GO", "Abadiânia", None, None, self.usuario, escola_ids=[self.escola1.pk, self.escola2.pk],
+        )
+        self.assertEqual(list(lote.escolas.all()), [self.escola2])
+
+    def test_retomar_volta_a_ser_elegivel(self):
+        self._pausar(self.escola1)
+        self._pausar(self.escola1, acao="retomar")
+        self.escola1.refresh_from_db()
+        self.assertFalse(self.escola1.pausado_mip)
+        self.assertEqual(len(escolas_elegiveis_lote_mip("GO", "Abadiânia", None, None)), 2)
+
+    def test_importacao_em_massa_pula_pausado(self):
+        self._pausar(self.escola1)
+        resultado = importar_lotes_mip_em_massa(
+            {"26000001": [{"valor_liberado": Decimal("300.00")}]}, self.usuario,
+            nome_arquivo="base.xlsx", incluir_divergentes=True,
+        )
+        self.assertEqual(resultado["ineps"][0]["motivo"], MOTIVO_IMPORTACAO_PAUSADO)
+        self.assertEqual(resultado["lotes"], [])
+
+    def test_visualizador_nao_pausa(self):
+        visualizador = User.objects.create_user(
+            username="visualizador-pausar", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        self.client.force_login(visualizador)
+        self._pausar(self.escola1)
+        self.escola1.refresh_from_db()
+        self.assertFalse(self.escola1.pausado_mip)

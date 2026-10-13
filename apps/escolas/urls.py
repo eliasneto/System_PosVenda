@@ -5,6 +5,7 @@ from . import views, views_rpa_mip_lote, views_validacao_nf_mip
 urlpatterns = [
     path("mip/", views.mip_inep_view, name="mip_inep"),
     path("mip/retirar-do-grid/", views.mip_retirar_grid_view, name="mip_retirar_grid"),
+    path("mip/pausar/", views.mip_pausar_view, name="mip_pausar"),
     path("mip/lote/", views.mip_lote_inep_view, name="mip_lote_inep"),
     path("mip/lote/criar/", views.mip_lote_criar_view, name="mip_lote_criar"),
     # e-mail do LOTE comentado (pedido do usuário, 2026-09-15) — ver apps.escolas.views.mip_lote_enviar_email_view
