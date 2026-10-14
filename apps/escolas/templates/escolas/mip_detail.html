@@ -61,6 +61,10 @@
                  sem formulário, o valor aparece como texto simples. -->
             {% if request.user.is_visualizador %}
             <p class="text-sm font-black italic text-pv-yellow">{{ escola.get_status_mip_display }}</p>
+            {% elif lote_do_inep %}
+            {# Pedido do usuário (2026-10-14): INEP em LOTE só muda de status pelo LOTE. #}
+            <p class="text-sm font-black italic text-pv-yellow">{{ escola.get_status_mip_display }}</p>
+            <a href="{% url 'mip_lote_inep' %}?inep={{ escola.inep }}" class="text-[10px] font-bold text-gray-400 hover:text-pv-yellow underline decoration-dotted underline-offset-2">Altere pelo {{ lote_do_inep }}</a>
             {% elif escola.status_mip == 'faturamento_concluido' and not request.user.is_administrador %}
             {# Pedido do usuário (2026-09-25): "Processo Concluído" só o Administrador altera. #}
             <p class="text-sm font-black italic text-pv-yellow" title="Só o Administrador pode alterar a partir de &quot;Processo Concluído&quot;">{{ escola.get_status_mip_display }}</p>

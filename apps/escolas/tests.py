@@ -5128,6 +5128,17 @@ class MipLoteStatusEmMassaViewTests(TestCase):
         mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
         self.assertTrue(any("não foram alterados" in m for m in mensagens))
 
+    def test_administrador_altera_lote_ja_concluido(self):
+        self.lotes[0].status = Lote.FATURAMENTO_CONCLUIDO
+        self.lotes[0].save()
+        admin = User.objects.create_user(
+            username="admin-status-massa", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.client.force_login(admin)
+        self._post(self.lotes[:1], Lote.EM_ANDAMENTO)
+        self.lotes[0].refresh_from_db()
+        self.assertEqual(self.lotes[0].status, Lote.EM_ANDAMENTO)
+
     def test_sem_status_ou_sem_selecao_nao_altera_nada(self):
         self.client.force_login(self.usuario)
         self._post(self.lotes, "")
@@ -5228,6 +5239,50 @@ class MipLoteStatusUpdateViewTests(TestCase):
         )
         self.lote.refresh_from_db()
         self.assertEqual(self.lote.status, Lote.FATURAMENTO_CONCLUIDO)
+
+    def test_administrador_reabre_lote_em_processo_concluido_com_os_ineps(self):
+        """Pedido do usuário (2026-10-14): só o Administrador tira o LOTE
+        de "Processo Concluído", e os INEPs vão junto."""
+        self.client.force_login(self.usuario)
+        self.client.post(
+            reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": Lote.FATURAMENTO_CONCLUIDO},
+        )
+        admin = User.objects.create_user(
+            username="admin-reabre-lote", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.client.force_login(admin)
+        self.assertContains(self.client.get(reverse("mip_lote_inep")), f'id="status-menu-{self.lote.pk}"')
+        self.client.post(reverse("mip_lote_status_update", kwargs={"pk": self.lote.pk}), {"status": Lote.EM_ANDAMENTO})
+        self.lote.refresh_from_db()
+        self.assertEqual(self.lote.status, Lote.EM_ANDAMENTO)
+        self.assertEqual(
+            set(self.lote.escolas.values_list("status_mip", flat=True)), {Escola.EM_ANDAMENTO},
+        )
+
+    def test_analista_nao_ve_o_menu_de_lote_em_processo_concluido(self):
+        self.lote.status = Lote.FATURAMENTO_CONCLUIDO
+        self.lote.save()
+        self.client.force_login(self.usuario)
+        self.assertNotContains(self.client.get(reverse("mip_lote_inep")), f'id="status-menu-{self.lote.pk}"')
+
+    def test_ineps_do_lote_nao_mudam_de_status_pelo_detalhe_do_mip(self):
+        """Pedido do usuário (2026-10-14): INEP em LOTE só muda pelo LOTE -
+        trocar só o INEP deixava o LOTE com outro status."""
+        admin = User.objects.create_user(
+            username="admin-inep-lote", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.client.force_login(admin)
+        resp = self.client.post(
+            reverse("mip_status_update", kwargs={"inep": self.escola1.inep}),
+            {"status_mip": Escola.FATURAMENTO_CONCLUIDO},
+        )
+        self.escola1.refresh_from_db()
+        self.assertEqual(self.escola1.status_mip, Escola.EM_ANDAMENTO)
+        mensagens = [str(m) for m in get_messages(resp.wsgi_request)]
+        self.assertTrue(any(f"O INEP está no {self.lote}" in m for m in mensagens))
+        resp = self.client.get(reverse("mip_detail", kwargs={"inep": self.escola1.inep}))
+        self.assertContains(resp, f"Altere pelo {self.lote}")
+        self.assertNotContains(resp, 'name="status_mip"')
 
     def test_disponivel_direto_de_aguardando_encerramento(self):
         """Pedido do usuário (2026-09-15): sem o envio de e-mail, o campo

@@ -1088,10 +1088,12 @@ def mip_lote_status_update_view(request, pk):
     if novo_status not in (Lote.EM_ANDAMENTO, Lote.EM_FATURAMENTO, Lote.FATURAMENTO_CONCLUIDO):
         messages.error(request, "Status inválido.")
         return redirect(next_url)
-    if lote.status == Lote.FATURAMENTO_CONCLUIDO:
+    if lote.status == Lote.FATURAMENTO_CONCLUIDO and not request.user.is_administrador:
+        # Pedido do usuário (2026-10-14): só o Administrador reabre um LOTE
+        # em "Processo Concluído" - mesmo critério do Status (MIP) do INEP.
         messages.error(
             request,
-            f'{lote} já está em "Processo Concluído" — não é mais possível trocar o status.',
+            f'{lote} já está em "Processo Concluído" — só o Administrador pode trocar o status.',
         )
         return redirect(next_url)
 
@@ -1132,7 +1134,7 @@ def mip_lote_status_em_massa_view(request):
     if pulados:
         messages.error(
             request,
-            f'{len(pulados)} LOTE(s) já em "Processo Concluído" não foram alterados: '
+            f'{len(pulados)} LOTE(s) já em "Processo Concluído" não foram alterados (só o Administrador pode): '
             + ", ".join(str(lote) for lote in pulados) + ".",
         )
     return redirect(next_url)
@@ -1375,6 +1377,7 @@ def mip_detail_view(request, inep):
             "historico_form": historico_form,
             "historico": historico_page_obj,
             "status_mip_opcoes": status_mip_opcoes_editavel,
+            "lote_do_inep": escola.lotes.order_by("-criado_em").first(),
             "somente_servico_editavel": somente_servico_editavel,
             "produto_servico_formset": produto_servico_formset,
         },
@@ -1407,6 +1410,13 @@ def mip_status_update_view(request, inep):
         messages.error(request, "Status inválido.")
         return redirect("mip_detail", inep=inep)
     if novo_status == escola.status_mip:
+        return redirect("mip_detail", inep=inep)
+    lote = escola.lotes.order_by("-criado_em").first()
+    if lote:
+        # Pedido do usuário (2026-10-14): INEP em LOTE só muda de status
+        # pelo LOTE (`mip_lote_status_update_view`), que leva todos os
+        # INEPs junto - trocar só o INEP deixava o LOTE com outro status.
+        messages.error(request, f"O INEP está no {lote} — altere o status pela tela MIP (LOTE).")
         return redirect("mip_detail", inep=inep)
     if escola.status_mip == Escola.FATURAMENTO_CONCLUIDO and not request.user.is_administrador:
         # Pedido do usuário (2026-09-25): com "Processo Concluído", só o

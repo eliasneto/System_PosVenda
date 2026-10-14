@@ -18,7 +18,7 @@ try:
 except ImportError:
     rarfile = None
 
-from .models import PlanilhaRelatorioEaceMip
+from .models import BoletimBdo, PlanilhaRelatorioEaceMip
 from .services import aba_relatorio_eace_mip_com_colunas, contar_notas_fiscais_rar, contar_notas_fiscais_zip
 
 
@@ -187,3 +187,47 @@ class PlanilhaRelatorioEaceMipUploadForm(forms.Form):
 
     # def clean_para(self):
         # return _limpar_lista_emails_lote(self.cleaned_data.get("para"))
+
+
+class PlanilhaBdoUploadForm(forms.Form):
+    """Projeto > BDO (pedido do usuário, 2026-10-14): planilha FR_XXXX do
+    Boletim de desempenho. A leitura já valida as colunas e as linhas -
+    `cleaned_data["boletins"]` vai pronto para `importar_planilha_bdo`."""
+
+    tipo = forms.ChoiceField(
+        label="Tipo do Boletim",
+        choices=[("", "Selecione RE ou RI")] + BoletimBdo.TIPO_CHOICES,
+        error_messages={"required": "Informe se o Boletim é RE ou RI."},
+    )
+    mes_referencia = forms.DateField(
+        label="Mês de referência",
+        input_formats=["%Y-%m"],
+        widget=forms.DateInput(attrs={"type": "month"}, format="%Y-%m"),
+        error_messages={
+            "required": "Informe o mês de referência da planilha.",
+            "invalid": "Informe o mês de referência no formato mês/ano.",
+        },
+    )
+    arquivo = forms.FileField(
+        label="Arquivo (.xlsx)",
+        widget=forms.ClearableFileInput(attrs={"class": "sr-only", "accept": ".xlsx"}),
+    )
+
+    def clean_arquivo(self):
+        from .bdo import PlanilhaBdoError, ler_planilha_bdo
+
+        arquivo = self.cleaned_data["arquivo"]
+        if not arquivo.name.lower().endswith(".xlsx"):
+            raise forms.ValidationError("Envie um arquivo .xlsx.")
+        try:
+            self.cleaned_data["boletins"] = ler_planilha_bdo(arquivo)
+        except PlanilhaBdoError as erro:
+            raise forms.ValidationError(str(erro))
+        return arquivo
+
+
+class MesReferenciaBdoForm(forms.Form):
+    """Mês de referência de um Boletim já importado (pedido do usuário,
+    2026-10-14), mesmo campo da importação."""
+
+    mes_referencia = PlanilhaBdoUploadForm.base_fields["mes_referencia"]

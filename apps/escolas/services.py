@@ -1379,12 +1379,12 @@ def aplicar_status_lote_mip(lote, novo_status, usuario):
 def aplicar_status_lotes_mip_em_massa(lote_ids, novo_status, usuario):
     """Pedido do usuário (2026-09-30): troca o Status de N LOTEs de uma vez
     em "Projeto > MIP (LOTE)" — mesma `aplicar_status_lote_mip` de cada
-    LOTE, tudo ou nada. LOTE já em "Processo Concluído" é pulado (mesma
-    trava da troca individual, `mip_lote_status_update_view`). Devolve
-    `(alterados, pulados)`."""
+    LOTE, tudo ou nada. LOTE já em "Processo Concluído" é pulado, exceto
+    para o Administrador (mesma trava da troca individual,
+    `mip_lote_status_update_view`). Devolve `(alterados, pulados)`."""
     alterados, pulados = [], []
     for lote in Lote.objects.filter(pk__in=lote_ids).order_by("pk"):
-        if lote.status == Lote.FATURAMENTO_CONCLUIDO:
+        if lote.status == Lote.FATURAMENTO_CONCLUIDO and not usuario.is_administrador:
             pulados.append(lote)
             continue
         aplicar_status_lote_mip(lote, novo_status, usuario)

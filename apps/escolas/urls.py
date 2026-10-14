@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views, views_rpa_mip_lote, views_validacao_nf_mip
+from . import views, views_bdo, views_rpa_mip_lote, views_validacao_nf_mip
 
 urlpatterns = [
     path("mip/", views.mip_inep_view, name="mip_inep"),
@@ -40,6 +40,8 @@ urlpatterns = [
         views.mip_lote_notas_fiscais_upload_view,
         name="mip_lote_notas_fiscais_upload",
     ),
+    path("bdo/", views_bdo.bdo_view, name="bdo"),
+    path("bdo/recebiveis/", views_bdo.bdo_recebiveis_view, name="bdo_recebiveis"),
     path("validacao-mip-nf/", views_validacao_nf_mip.validacao_nf_mip_view, name="validacao_nf_mip"),
     path(
         "validacao-mip-nf/rodar/",
@@ -62,6 +64,11 @@ urlpatterns = [
         "mip/lado-ixc/<int:item_pk>/excluir/",
         views.mip_item_ixc_delete_view,
         name="mip_item_ixc_delete",
+    ),
+    path("administrador/relatorio-bdo/", views_bdo.relatorio_bdo_view, name="relatorio_bdo"),
+    path(
+        "administrador/relatorio-bdo/<int:pk>/mes-referencia/", views_bdo.bdo_mes_referencia_view,
+        name="bdo_mes_referencia",
     ),
     path(
         "administrador/relatorio-eace-mip/",

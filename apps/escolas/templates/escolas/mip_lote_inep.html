@@ -222,7 +222,7 @@
                                     <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Notas Fiscais (.zip/.rar)</span>
                                 </div>
                                 {% endif %}
-                                {% if linha.lote.status != 'faturamento_concluido' %}
+                                {% if linha.lote.status != 'faturamento_concluido' or request.user.is_administrador %}
                                 {# Correção (2026-09-24; bug real reportado pelo usuário: menu abria cortado/fora do lugar) — o `<details>`/`<summary>` com o menu em `position: absolute` foi trocado por um botão + painel próprio em `position: fixed`, posicionado via JS (`posicionarMenuDeStatus`, script no fim do arquivo) e renderizado FORA do container "overflow-x-auto contain-layout" da tabela (mesmo motivo documentado acima para os modais de e-mail, FEAT-045: `contain: layout` faz o ancestral virar containing block também de `position: fixed`, e o `overflow-x-auto` corta qualquer coisa que escape verticalmente das bordas dele — por isso o menu antigo, apesar de posicionado certinho em relação ao ícone, ficava cortado/invisível pra LOTEs perto do topo ou fim da lista). O painel de verdade fica no 2º laço, logo depois do fechamento desse container. #}
                                 <div class="relative">
                                     <button type="button" data-status-menu-toggle="{{ linha.lote.pk }}" title="Mudar status"
@@ -420,7 +420,7 @@
 {# Correção (2026-09-24; bug real reportado pelo usuário: menu "Mudar status" abria cortado/fora do lugar) — painel de cada LOTE fica FORA dos containers com "overflow-x-auto"/"overflow-hidden" da tabela acima (mesmo motivo do comentário logo abaixo, sobre os modais de e-mail): script no fim do arquivo posiciona cada um em `position: fixed`, calculado a partir do botão que abre, e mostra só 1 por vez. 2º laço só para renderizar os painéis — nenhuma consulta nova (mesmo `linhas_lote` já calculado na view). #}
 {% if not request.user.is_visualizador %}
 {% for linha in linhas_lote %}
-{% if linha.lote.status != 'faturamento_concluido' %}
+{% if linha.lote.status != 'faturamento_concluido' or request.user.is_administrador %}
 <form method="POST" action="{% url 'mip_lote_status_update' pk=linha.lote.pk %}"
       id="status-menu-{{ linha.lote.pk }}" data-status-menu
       class="hidden fixed z-30 w-40 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg overflow-hidden flex flex-col">

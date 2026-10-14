@@ -330,10 +330,7 @@ def anexar_pdf_mip(
                 pagina = atual["pagina"]
 
                 todos_os_cards = listar_cards_municipio(pagina)
-                cards = [
-                    card for card in todos_os_cards
-                    if not municipio or mesmo_municipio(card["municipio"], municipio)
-                ]
+                cards = cards_do_municipio(todos_os_cards, municipio)
                 if not cards:
                     resultado = falhar("municipio_nao_encontrado", pedido=pedido)
                     resultado.cards_encontrados = todos_os_cards
@@ -682,6 +679,27 @@ normalizar_municipio = normalizar_texto
 
 def mesmo_municipio(nome_portal: str, nome_informado: str) -> bool:
     return bool(nome_portal) and normalizar_municipio(nome_portal) == normalizar_municipio(nome_informado)
+
+
+def municipio_principal(nome_informado: str) -> str:
+    """Nome sem o número do rateio no final: "São Paulo1" e "São Paulo 2"
+    viram "SAO PAULO" (normalizado). Sem número, devolve o próprio nome."""
+    return re.sub(r"\s*\d+$", "", normalizar_municipio(nome_informado))
+
+
+def cards_do_municipio(cards: list[dict], municipio: str) -> list[dict]:
+    """Cards do `municipio` informado (todos, sem municipio). Pedido do
+    usuário (2026-10-14): o rateio manual do LOTE gera uma NF por parte
+    com o nome "São Paulo", "São Paulo1"...; quando o portal não tem card
+    com o nome exato, vale o card do município principal ("São Paulo") e
+    o valor do PDF escolhe qual (`localizar_card_pendente`)."""
+    if not municipio:
+        return list(cards)
+    exatos = [card for card in cards if mesmo_municipio(card["municipio"], municipio)]
+    principal = municipio_principal(municipio)
+    if exatos or principal == normalizar_municipio(municipio):
+        return exatos
+    return [card for card in cards if card["municipio"] and normalizar_municipio(card["municipio"]) == principal]
 
 
 def status_pendente(status: str) -> bool:

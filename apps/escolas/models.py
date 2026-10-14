@@ -86,6 +86,14 @@ class Escola(models.Model):
         ),
     )
     velocidade_dl_minima = models.CharField("Velocidade mínima", max_length=50, blank=True)
+    # Pedido do usuário (2026-10-14): assinatura mensal do RE da escola, só
+    # para conferência no grid do BDO. Varia por escola (não só por Lote e
+    # velocidade), por isso fica aqui e não no `KitPadrao` - a manutenção
+    # mensal do RI vem do `KitPadrao` (LPU). Gravado pelo comando
+    # `importar_assinatura_re` (aba FATURAMENTO BDO do CONSOLIDADO EACE).
+    valor_assinatura_re = models.DecimalField(
+        "Assinatura mensal RE", max_digits=14, decimal_places=2, null=True, blank=True,
+    )
     status_conexao = models.CharField(
         "Status de conexão",
         max_length=25,
@@ -838,3 +846,79 @@ class LogRpaEaceMip(models.Model):
         if self.motivo_erro == "documento_ja_enviado" and self.status_portal:
             return f"O card do município no portal está \"{self.status_portal}\" (NF já enviada)."
         return mensagem_motivo(self.motivo_erro) if self.motivo_erro else ""
+
+
+class BoletimBdo(models.Model):
+    """Projeto > BDO (pedido do usuário, 2026-10-14): um Boletim de
+    desempenho importado da planilha FR_XXXX que o cliente envia todo mês
+    (faturamento das manutenções de RI e RE). Cada Boletim é independente
+    e um número já importado é recusado (`apps.escolas.bdo.importar_planilha_bdo`)."""
+
+    TIPO_RE = "RE"
+    TIPO_RI = "RI"
+    TIPO_CHOICES = [(TIPO_RE, "RE"), (TIPO_RI, "RI")]
+
+    numero = models.CharField("Boletim de desempenho", max_length=30, unique=True)
+    # Escolhido na importação (pedido do usuário, 2026-10-14); vazio só no
+    # Boletim importado antes do campo existir.
+    tipo = models.CharField("Tipo", max_length=2, choices=TIPO_CHOICES, blank=True)
+    # Mês a que a planilha se refere, gravado no dia 1 (pedido do usuário,
+    # 2026-10-14): obrigatório na importação, vazio só no Boletim importado
+    # antes do campo existir - editável em "Administrador > Relatório BDO".
+    mes_referencia = models.DateField("Mês de referência", null=True, blank=True)
+    arquivo_nome = models.CharField("Arquivo", max_length=255, blank=True)
+    importado_em = models.DateTimeField("Importado em", auto_now=True)
+    importado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+
+    class Meta:
+        ordering = ["-importado_em"]
+        verbose_name = "Boletim BDO"
+        verbose_name_plural = "Boletins BDO"
+
+    def __str__(self):
+        return self.numero
+
+
+class MunicipioBdo(models.Model):
+    """Uma linha da planilha FR_XXXX: os valores são do município inteiro
+    naquele Boletim, não de cada INEP. Os 4 valores de composição aceitam
+    vazio só por causa do Boletim importado antes deles existirem."""
+
+    boletim = models.ForeignKey(BoletimBdo, on_delete=models.CASCADE, related_name="municipios")
+    municipio = models.CharField("Município", max_length=120)
+    uf = models.CharField("UF", max_length=2)
+    valor_servicos = models.DecimalField("Valor serviços", max_digits=14, decimal_places=2, null=True, blank=True)
+    valor_creditos = models.DecimalField("Valor créditos", max_digits=14, decimal_places=2, null=True, blank=True)
+    valor_descontos = models.DecimalField("Valor descontos", max_digits=14, decimal_places=2, null=True, blank=True)
+    valor_descontos_proporcionais = models.DecimalField(
+        "Valor descontos proporcionais", max_digits=14, decimal_places=2, null=True, blank=True,
+    )
+    valor_total = models.DecimalField("Valor total", max_digits=14, decimal_places=2)
+
+    CAMPOS_VALORES = (
+        "valor_servicos", "valor_creditos", "valor_descontos", "valor_descontos_proporcionais", "valor_total",
+    )
+
+    class Meta:
+        ordering = ["uf", "municipio"]
+
+    def __str__(self):
+        return f"{self.municipio}/{self.uf}"
+
+    @property
+    def valores_em_ordem(self):
+        """Os 5 valores na ordem das colunas do grid do BDO."""
+        return [getattr(self, campo) for campo in self.CAMPOS_VALORES]
+
+
+class InepBdo(models.Model):
+    municipio_bdo = models.ForeignKey(MunicipioBdo, on_delete=models.CASCADE, related_name="ineps")
+    inep = models.CharField("INEP", max_length=20, db_index=True)
+
+    class Meta:
+        ordering = ["inep"]
+
+    def __str__(self):
+        return self.inep

@@ -11,9 +11,11 @@ from django.test import SimpleTestCase
 from apps.integracoes.eace.config import ConfigEace
 from apps.integracoes.eace.rpa_mip import (
     anexar_pdf_mip,
+    cards_do_municipio,
     interpretar_card_municipio,
     localizar_card_pendente,
     mesmo_municipio,
+    municipio_principal,
     posicao_do_pedido,
     posicao_maior_pedido,
 )
@@ -91,6 +93,37 @@ class MesmoMunicipioTests(SimpleTestCase):
 
     def test_nome_vazio_no_portal_nunca_bate(self):
         self.assertFalse(mesmo_municipio("", ""))
+
+
+class CardsDoMunicipioTests(SimpleTestCase):
+    """Pedido do usuário (2026-10-14): NF do rateio manual com "São Paulo1"
+    vai para o card "São Paulo" quando o portal não tem "São Paulo1"."""
+
+    def test_municipio_principal_tira_o_numero_do_rateio(self):
+        self.assertEqual(municipio_principal("São Paulo1"), "SAO PAULO")
+        self.assertEqual(municipio_principal("São Paulo 2"), "SAO PAULO")
+        self.assertEqual(municipio_principal("São Paulo"), "SAO PAULO")
+
+    def test_sem_card_com_o_nome_do_rateio_usa_o_municipio_principal(self):
+        cards = [_card("São Paulo", valor="100,00", posicao=0), _card("Campinas", posicao=1)]
+        self.assertEqual(cards_do_municipio(cards, "São Paulo1"), cards[:1])
+
+    def test_card_com_o_nome_exato_tem_preferencia(self):
+        cards = [_card("São Paulo", posicao=0), _card("SAO PAULO1", posicao=1)]
+        self.assertEqual(cards_do_municipio(cards, "São Paulo1"), cards[1:])
+
+    def test_valor_escolhe_entre_os_cards_do_municipio_principal(self):
+        cards = [_card("São Paulo", valor="100,00", posicao=0), _card("SAO PAULO", valor="250,00", posicao=1)]
+        card, motivo = localizar_card_pendente(cards_do_municipio(cards, "São Paulo1"), "250,00")
+        self.assertIsNone(motivo)
+        self.assertEqual(card["posicao"], 1)
+
+    def test_nome_sem_numero_nao_procura_outro_municipio(self):
+        self.assertEqual(cards_do_municipio([_card("São Paulo")], "Campinas"), [])
+
+    def test_sem_municipio_traz_todos(self):
+        cards = [_card("São Paulo"), _card("Campinas", posicao=1)]
+        self.assertEqual(cards_do_municipio(cards, ""), cards)
 
 
 class LocalizarCardPendenteTests(SimpleTestCase):

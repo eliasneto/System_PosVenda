@@ -1,0 +1,330 @@
+{% extends "core/base.html" %}
+{% load humanize %}
+
+{% block title %}Gerenciador Pós Venda | BDO{% endblock %}
+
+{% comment %}
+Pedido do usuário (2026-10-14): "Projeto > BDO" - grid da planilha FR_XXXX
+do Boletim de desempenho (INEP, Município, UF, Valor total, Boletim). O
+Valor total é do município: no grid "Por INEP" ele se repete em cada INEP
+do município; "Por Município"/"Por UF" mostram a quantidade de INEPs e o
+valor sem duplicar, sempre dentro de cada Boletim - cada Boletim é
+independente e o mesmo município aparece uma vez em cada um. Os cards do
+topo seguem os filtros.
+{% endcomment %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li class="text-gray-900 dark:text-gray-100">Projeto</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            BDO
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+            Faturamento mensal das manutenções de RI e RE{% if boletim %} — Boletim {{ boletim.numero }}{% elif boletins %} — todos os Boletins{% endif %}
+        </p>
+    </div>
+
+    {% if boletins %}
+    <div class="grid grid-cols-3 sm:flex gap-3">
+        <div class="bg-pv-black px-5 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Boletins</p>
+            <p class="text-xl font-black italic text-pv-yellow">{{ total_boletins|intcomma }}</p>
+        </div>
+        <div class="bg-pv-black px-5 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">INEPs</p>
+            <p class="text-xl font-black italic text-pv-yellow">{{ total_ineps|intcomma }}</p>
+        </div>
+        <div class="bg-pv-black px-5 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Municípios</p>
+            <p class="text-xl font-black italic text-pv-yellow">{{ total_municipios|intcomma }}</p>
+        </div>
+        <div class="col-span-3 bg-pv-black px-5 py-3 rounded-2xl shadow-lg text-white">
+            <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Valor total</p>
+            <p class="text-xl font-black italic text-pv-yellow whitespace-nowrap">R$ {{ valor_total|intcomma }}</p>
+        </div>
+        <button type="button" data-abrir-modal-email="modal-recebiveis"
+                class="col-span-3 px-5 py-3 border-2 border-pv-black dark:border-pv-yellow text-pv-black dark:text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-pv-black hover:text-pv-yellow dark:hover:bg-pv-yellow dark:hover:text-pv-black focus-visible:ring-2 focus-visible:ring-amber-400 outline-none transition flex items-center justify-center gap-2 whitespace-nowrap">
+            <i data-lucide="wallet" class="w-4 h-4" aria-hidden="true"></i> Recebíveis
+        </button>
+    </div>
+    {% endif %}
+</div>
+
+{% if boletins %}
+{# Pedido do usuário (2026-10-14): modal "Recebíveis" - só montagem e conferência, nada é gravado. #}
+<div id="modal-recebiveis" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email role="dialog" aria-modal="true" aria-labelledby="titulo-recebiveis">
+    <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
+    <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+        <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800 shrink-0">
+            <div>
+                <h2 id="titulo-recebiveis" class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Recebíveis</h2>
+                <p class="text-[11px] text-gray-500 dark:text-gray-400">Escolha os Boletins e retire os municípios que não entram.</p>
+            </div>
+            <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Fechar">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+        {% include "escolas/_bdo_recebiveis.html" %}
+    </div>
+</div>
+{% endif %}
+
+{% if not boletins %}
+<div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 px-6 py-16 text-center">
+    <i data-lucide="file-spreadsheet" class="w-10 h-10 mx-auto text-gray-400 dark:text-gray-600" aria-hidden="true"></i>
+    <p class="mt-4 text-base font-black text-gray-900 dark:text-gray-100 uppercase tracking-wide">Nenhum Boletim importado</p>
+    <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+        {% if user.is_administrador %}Importe a planilha FR_XXXX em <a href="{% url 'relatorio_bdo' %}" class="font-bold text-amber-600 dark:text-pv-yellow hover:underline">Administrador &gt; Relatório BDO</a>.{% else %}Peça a um Administrador para importar a planilha FR_XXXX do Boletim.{% endif %}
+    </p>
+</div>
+{% else %}
+
+<form method="GET" class="bg-white dark:bg-gray-900 p-4 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-4 flex flex-col lg:flex-row lg:items-end gap-3">
+    <input type="hidden" name="agrupar" value="{{ agrupar }}">
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="bdo-boletim" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Boletim</label>
+        <select id="bdo-boletim" name="boletim" data-recarrega-municipios
+                class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-800 dark:text-gray-100 uppercase">
+            <option value="">Todos os Boletins</option>
+            {% for item in boletins %}
+            <option value="{{ item.numero }}" {% if boletim and item.pk == boletim.pk %}selected{% endif %}>{{ item.numero }}{% if item.tipo %} — {{ item.tipo }}{% endif %}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="flex flex-col gap-1.5 w-full lg:flex-1 lg:min-w-[10rem]">
+        <label for="bdo-inep" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">INEP</label>
+        <div class="relative">
+            <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 dark:text-gray-600"></i>
+            <input id="bdo-inep" type="text" name="inep" value="{{ inep_filtro }}" placeholder="Buscar por INEP..." inputmode="numeric"
+                   class="w-full pl-12 pr-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500">
+        </div>
+    </div>
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="bdo-uf" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">UF</label>
+        <select id="bdo-uf" name="uf" data-recarrega-municipios
+                class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-800 dark:text-gray-100 uppercase">
+            <option value="">Todas as UFs</option>
+            {% for uf in ufs %}
+            <option value="{{ uf }}" {% if uf == uf_filtro %}selected{% endif %}>{{ uf }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="flex flex-col gap-1.5 w-full lg:flex-1 lg:min-w-[10rem]">
+        <label for="bdo-municipio" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Município</label>
+        <select id="bdo-municipio" name="municipio"
+                class="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-800 dark:text-gray-100 uppercase">
+            <option value="">Todos os municípios</option>
+            {% for nome in nomes_municipios %}
+            <option value="{{ nome }}" {% if nome == municipio_filtro %}selected{% endif %}>{{ nome }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="bdo-data-inicial" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider whitespace-nowrap">Ativação de</label>
+        <input id="bdo-data-inicial" type="text" inputmode="numeric" name="data_inicial" data-mascara-data
+               placeholder="dd/mm/aaaa" maxlength="10" autocomplete="off" value="{{ data_inicial|date:'d/m/Y' }}"
+               class="lg:w-32 px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500">
+    </div>
+    <div class="flex flex-col gap-1.5 w-full lg:w-auto">
+        <label for="bdo-data-final" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider whitespace-nowrap">Ativação até</label>
+        <input id="bdo-data-final" type="text" inputmode="numeric" name="data_final" data-mascara-data
+               placeholder="dd/mm/aaaa" maxlength="10" autocomplete="off" value="{{ data_final|date:'d/m/Y' }}"
+               class="lg:w-32 px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500">
+    </div>
+    <div class="flex gap-2 w-full lg:w-auto">
+        <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
+            Filtrar
+        </button>
+        {% if filtros_ativos %}
+        <a href="{% url 'bdo' %}?agrupar={{ agrupar }}" class="px-4 py-3 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-2xl hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 dark:hover:text-red-400 transition flex items-center justify-center" title="Limpar filtro" aria-label="Limpar filtro">
+            <i data-lucide="x" class="w-5 h-5"></i>
+        </a>
+        {% endif %}
+    </div>
+</form>
+
+<div class="flex flex-wrap items-center gap-3 mb-4">
+    <span class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Agrupar</span>
+    <div class="inline-flex p-1 bg-gray-100 dark:bg-gray-800 rounded-2xl" role="group" aria-label="Agrupar o grid">
+        {% for valor, rotulo in agrupamentos %}
+        <a href="?{{ querystring_filtros }}&agrupar={{ valor }}"
+           class="px-4 py-2 rounded-xl text-[11px] font-black uppercase transition {% if agrupar == valor %}bg-pv-black text-pv-yellow shadow{% else %}text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100{% endif %}"
+           {% if agrupar == valor %}aria-current="true"{% endif %}>{{ rotulo }}</a>
+        {% endfor %}
+    </div>
+    {% if agrupar == "inep" %}
+    <span class="text-[11px] text-gray-500 dark:text-gray-400">Os valores são do município no Boletim e se repetem em cada INEP dele.</span>
+    {% endif %}
+</div>
+
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="overflow-x-auto">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    {% if agrupar == "inep" %}
+                    <th class="px-4 py-2">INEP</th>
+                    <th class="px-4 py-2">Município</th>
+                    <th class="px-4 py-2">UF</th>
+                    <th class="px-4 py-2 whitespace-nowrap">Data de ativação</th>
+                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Dias cobrados no mês de referência do Boletim: ativado antes do mês, 30; ativado no mês, da Data de Ativação até o dia 30 (no dia 31, vai para o mês seguinte); ativado depois do mês, vazio. Boletim sem mês de referência: da Data de Ativação até o dia 30">Dias proporcionais</th>
+                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Só para conferência: no Boletim RE, a assinatura mensal do RE da escola; no RI, a manutenção mensal do LPU no Lote da escola">Valor assinatura</th>
+                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor assinatura × Dias proporcionais ÷ 30">Valor proporcional</th>
+                    {% elif agrupar == "municipio" %}
+                    <th class="px-4 py-2">Município</th>
+                    <th class="px-4 py-2">UF</th>
+                    <th class="px-4 py-2 text-right">INEPs</th>
+                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor bruto: soma do valor proporcional dos INEPs do município no Boletim, sem outros descontos. Confere com Valor serviços − Valor descontos proporcionais">Total Howbe</th>
+                    {% else %}
+                    <th class="px-4 py-2">UF</th>
+                    <th class="px-4 py-2 text-right">Municípios</th>
+                    <th class="px-4 py-2 text-right">INEPs</th>
+                    {% endif %}
+                    <th class="px-4 py-2 text-right">Valor serviços</th>
+                    <th class="px-4 py-2 text-right">Valor créditos</th>
+                    <th class="px-4 py-2 text-right">Valor descontos</th>
+                    <th class="px-4 py-2 text-right">Valor descontos proporcionais</th>
+                    <th class="px-4 py-2 text-right">Valor total</th>
+                    <th class="px-4 py-2">Boletim de desempenho</th>
+                    <th class="px-4 py-2">Tipo</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-800">
+                {% for linha in page_obj %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                    {% if agrupar == "inep" %}
+                    {% with valores=linha.municipio_bdo %}
+                    <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.inep }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold uppercase">{{ valores.municipio }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ valores.uf }}</span></td>
+                    <td class="px-4 py-2 whitespace-nowrap"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_ativacao|date:"d/m/Y"|default:"—" }}</span></td>
+                    <td class="px-4 py-2 text-right"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.dias_proporcionais is None %}—{% else %}{{ linha.dias_proporcionais }}{% endif %}</span></td>
+                    <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-bold text-gray-600 dark:text-gray-400">{% if linha.valor_assinatura is None %}—{% else %}R$ {{ linha.valor_assinatura|intcomma }}{% endif %}</span></td>
+                    <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.valor_proporcional is None %}—{% else %}R$ {{ linha.valor_proporcional|intcomma }}{% endif %}</span></td>
+                    {% include "escolas/_bdo_valores.html" with valores=valores.valores_em_ordem %}
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ valores.boletim.numero }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ valores.boletim.tipo|default:"—" }}</span></td>
+                    {% endwith %}
+                    {% elif agrupar == "municipio" %}
+                    <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100 uppercase">{{ linha.municipio }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.uf }}</span></td>
+                    <td class="px-4 py-2 text-right">
+                        <a href="?boletim={{ linha.boletim|urlencode }}&uf={{ linha.uf|urlencode }}&municipio={{ linha.municipio|urlencode }}&agrupar=inep"
+                           class="text-[11px] font-black text-gray-900 dark:text-gray-100 underline decoration-dotted underline-offset-2 hover:text-amber-600 dark:hover:text-pv-yellow"
+                           title="Ver os INEPs de {{ linha.municipio }} no Boletim {{ linha.boletim }}">{{ linha.quantidade_ineps }}</a>
+                    </td>
+                    <td class="px-4 py-2 text-right whitespace-nowrap">
+                        <span class="text-[11px] font-black {% if linha.diferenca_howbe == 0 and not linha.ineps_sem_valor_howbe %}text-emerald-700 dark:text-emerald-400{% else %}text-gray-900 dark:text-gray-100{% endif %}">{% if linha.total_howbe is None %}—{% else %}R$ {{ linha.total_howbe|intcomma }}{% endif %}</span>
+                        {% if linha.diferenca_howbe %}<span class="block text-[10px] font-bold text-red-600 dark:text-red-400" title="Total Howbe − (Valor serviços − Valor descontos proporcionais da planilha R$ {{ linha.valor_conferencia_howbe|intcomma }})">Dif. R$ {{ linha.diferenca_howbe|intcomma }}</span>{% endif %}
+                        {% if linha.ineps_sem_valor_howbe %}<span class="block text-[10px] font-bold text-amber-600 dark:text-amber-400" title="INEPs sem valor assinatura, sem data de ativação ou ativados depois do mês de referência ficam fora da soma">{{ linha.ineps_sem_valor_howbe }} INEP(s) sem valor</span>{% endif %}
+                    </td>
+                    {% include "escolas/_bdo_valores.html" with valores=linha.valores_em_ordem %}
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.boletim }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.tipo|default:"—" }}</span></td>
+                    {% else %}
+                    <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.uf }}</span></td>
+                    <td class="px-4 py-2 text-right">
+                        <a href="?boletim={{ linha.boletim|urlencode }}&uf={{ linha.uf|urlencode }}&agrupar=municipio"
+                           class="text-[11px] font-black text-gray-900 dark:text-gray-100 underline decoration-dotted underline-offset-2 hover:text-amber-600 dark:hover:text-pv-yellow"
+                           title="Ver os municípios de {{ linha.uf }} no Boletim {{ linha.boletim }}">{{ linha.quantidade_municipios }}</a>
+                    </td>
+                    <td class="px-4 py-2 text-right"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.quantidade_ineps|intcomma }}</span></td>
+                    {% include "escolas/_bdo_valores.html" with valores=linha.valores_em_ordem %}
+                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.boletim }}</span></td>
+                    <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.tipo|default:"—" }}</span></td>
+                    {% endif %}
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="14" class="px-6 py-12 text-center text-sm text-gray-500 dark:text-gray-400">Nenhum resultado para os filtros escolhidos.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if page_obj.has_other_pages %}
+    <div class="bg-gray-50/50 dark:bg-gray-800/40 px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest">
+            Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}
+        </span>
+        <div class="flex gap-2">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}&{{ querystring_paginacao }}" aria-label="Página anterior" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}&{{ querystring_paginacao }}" aria-label="Próxima página" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm text-gray-600 dark:text-gray-300">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<script>
+// Boletim e UF mudam a lista de municípios (só os que estão no grid):
+// recarrega o filtro na hora, sem o município escolhido antes.
+document.querySelectorAll('select[data-recarrega-municipios]').forEach(function (select) {
+    select.addEventListener('change', function () {
+        var municipio = document.getElementById('bdo-municipio');
+        if (municipio) municipio.value = '';
+        select.form.submit();
+    });
+});
+
+// Recebíveis: a busca filtra a lista de Boletins só na tela. O formulário
+// volta inteiro do servidor a cada Boletim marcado, então o texto da busca
+// e a rolagem da lista são reaplicados depois da troca.
+(function () {
+    var busca = '', rolagem = 0;
+    function filtrar(form) {
+        var campo = form.querySelector('[data-busca-boletim]');
+        if (!campo) return;
+        campo.value = busca;
+        var termo = busca.trim().toLowerCase(), visiveis = 0;
+        form.querySelectorAll('[data-boletim-item]').forEach(function (item) {
+            var mostra = item.getAttribute('data-boletim-item').toLowerCase().indexOf(termo) !== -1;
+            item.classList.toggle('hidden', !mostra);
+            if (mostra) visiveis++;
+        });
+        form.querySelector('[data-boletim-vazio]').classList.toggle('hidden', visiveis > 0);
+    }
+    document.addEventListener('change', function (evento) {
+        if (evento.target.matches('[data-busca-boletim]')) evento.stopPropagation();
+    }, true);
+    document.body.addEventListener('input', function (evento) {
+        if (!evento.target.matches('[data-busca-boletim]')) return;
+        busca = evento.target.value;
+        filtrar(evento.target.form);
+    });
+    document.body.addEventListener('htmx:beforeRequest', function (evento) {
+        var lista = evento.detail.elt.id === 'form-recebiveis' && evento.detail.elt.querySelector('[data-lista-boletins]');
+        if (lista) rolagem = lista.scrollTop;
+    });
+    document.body.addEventListener('htmx:afterSwap', function () {
+        var form = document.getElementById('form-recebiveis');
+        if (!form) return;
+        filtrar(form);
+        form.querySelector('[data-lista-boletins]').scrollTop = rolagem;
+    });
+})();
+
+// Máscara "dd/mm/aaaa" dos filtros de Data de Ativação, mesmo padrão do MIP.
+document.querySelectorAll('input[data-mascara-data]').forEach(function (input) {
+    input.addEventListener('input', function () {
+        var digitos = input.value.replace(/\D/g, '').slice(0, 8);
+        var partes = [digitos.slice(0, 2), digitos.slice(2, 4), digitos.slice(4, 8)].filter(Boolean);
+        input.value = partes.join('/');
+    });
+});
+</script>
+{% endblock %}

@@ -65,6 +65,24 @@ Esperado: commit novo no topo, `login 200`, todos os containers `Up`
 (`db` healthy), `0` migrações pendentes, worker mostrando
 `Fila vazia - nada para processar.` (ou processando algo).
 
+## Pendências do próximo deploy
+
+Rodar depois do passo 5 e apagar o item daqui quando estiver feito.
+
+- **Assinatura RE do grid do BDO (2026-10-14).** O deploy cria a coluna
+  `valor_assinatura_re` (migration `escolas.0034`, o `migrate` do passo 4 já
+  aplica). Sem a migration, a tela `/bdo/` dá erro 1054 "Unknown column".
+  Depois do deploy, é preciso carregar os valores, senão a coluna "Valor
+  assinatura" fica vazia nos Boletins RE. A planilha não está no servidor:
+  1. Copiar `doc/CONSOLIDADO EACE Atualizado.xlsx` para
+     `/home/Sistem_PosVenda/backups_banco/` (WinSCP ou `scp`).
+  2. Rodar:
+     ```bash
+     python scripts/ssh_eace.py "cd /home/Sistem_PosVenda && C='docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml' && \$C cp 'backups_banco/CONSOLIDADO EACE Atualizado.xlsx' web:/tmp/consolidado.xlsx < /dev/null && \$C exec -T web python manage.py importar_assinatura_re /tmp/consolidado.xlsx"
+     ```
+     Esperado: `Assinatura RE: N escola(s) atualizada(s), ...`. Rodar de
+     novo é seguro: o valor da planilha substitui o gravado.
+
 ## Alarmes falsos já conhecidos
 
 - **Erro "Table ... doesn't exist" / "Unknown column" no log do `web`

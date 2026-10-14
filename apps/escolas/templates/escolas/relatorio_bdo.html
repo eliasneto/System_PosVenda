@@ -1,0 +1,176 @@
+{% extends "core/base.html" %}
+{% load humanize %}
+
+{% block title %}Gerenciador Pós Venda | Relatório BDO{% endblock %}
+
+{% comment %}
+Pedido do usuário (2026-10-14): importação da planilha FR_XXXX do BDO em
+"Administrador > Relatório BDO", mesmo layout das demais importações
+(`escolas/relatorio_eace_mip.html`). Cada Boletim é independente: nada é
+sobreposto e um Boletim já importado é recusado. O grid fica em
+"Projeto > BDO".
+{% endcomment %}
+
+{% block content %}
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+    <div>
+        <nav class="flex mb-2" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">
+                <li>Administrador</li>
+                <li>/</li>
+                <li class="text-gray-900 dark:text-gray-100">Relatório BDO</li>
+            </ol>
+        </nav>
+        <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
+            Relatório BDO
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
+            Planilha FR_XXXX do Boletim de desempenho — cada Boletim é independente
+        </p>
+    </div>
+</div>
+
+<div class="space-y-6 min-w-0">
+    <div class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm">
+        <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100 mb-1">Enviar arquivo</h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            Arquivo <span class="font-bold">.xlsx</span> (FR_XXXX) com as colunas Boletim de desempenho, Município,
+            UF, Valor serviços, Valor créditos, Valor descontos, Valor descontos proporcionais, Valor total e INEPs.
+            Informe se o Boletim é RE ou RI e o mês a que a planilha se refere. Cada Boletim fica separado dos anteriores; um Boletim já importado é recusado.
+        </p>
+        <form method="POST" enctype="multipart/form-data" class="space-y-4">
+            {% csrf_token %}
+            <div class="flex flex-col gap-1.5 max-w-xs">
+                <label for="{{ form.tipo.id_for_label }}" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Tipo do Boletim</label>
+                <select id="{{ form.tipo.id_for_label }}" name="{{ form.tipo.html_name }}" required
+                        class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-800 dark:text-gray-100 uppercase">
+                    {% for valor, rotulo in form.fields.tipo.choices %}
+                    <option value="{{ valor }}" {% if form.tipo.value == valor %}selected{% endif %}>{{ rotulo }}</option>
+                    {% endfor %}
+                </select>
+                {% if form.tipo.errors %}
+                <p class="text-xs font-bold text-red-500">{{ form.tipo.errors.0 }}</p>
+                {% endif %}
+            </div>
+            <div class="flex flex-col gap-1.5 max-w-xs">
+                <label for="{{ form.mes_referencia.id_for_label }}" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Mês de referência</label>
+                <input type="month" id="{{ form.mes_referencia.id_for_label }}" name="{{ form.mes_referencia.html_name }}" required
+                       value="{{ form.mes_referencia.value|default_if_none:''|stringformat:'s'|slice:':7' }}"
+                       class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-bold text-xs text-gray-800 dark:text-gray-100">
+                {% if form.mes_referencia.errors %}
+                <p class="text-xs font-bold text-red-500">{{ form.mes_referencia.errors.0 }}</p>
+                {% endif %}
+            </div>
+            <div>
+                <!-- Input nativo (form.arquivo) fica sr-only — "CHOOSE
+                     FILE"/"No file chosen" é texto do navegador, não dá
+                     para traduzir por CSS. O rótulo abaixo aciona o
+                     input pelo `for`; o span mostra o nome em português. -->
+                <label for="{{ form.arquivo.id_for_label }}" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase text-[10px] rounded-lg cursor-pointer hover:bg-gray-800 transition">
+                    Escolher arquivo
+                </label>
+                <span id="nome-arquivo-relatorio-bdo" class="ml-3 text-xs font-bold text-gray-500 dark:text-gray-400 align-middle">Nenhum arquivo selecionado</span>
+                {{ form.arquivo }}
+                {% if form.arquivo.errors %}
+                <p class="text-xs font-bold text-red-500 mt-2">{{ form.arquivo.errors.0 }}</p>
+                {% endif %}
+            </div>
+            <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg inline-flex items-center gap-2">
+                <i data-lucide="upload" class="w-4 h-4"></i>
+                Importar
+            </button>
+        </form>
+        <script>
+            (function () {
+                var input = document.getElementById("{{ form.arquivo.id_for_label }}");
+                var nome = document.getElementById("nome-arquivo-relatorio-bdo");
+                if (input && nome) {
+                    input.addEventListener("change", function () {
+                        nome.textContent = input.files.length ? input.files[0].name : "Nenhum arquivo selecionado";
+                    });
+                }
+                // O aviso nativo de campo obrigatório sai no idioma do navegador.
+                var tipo = document.getElementById("{{ form.tipo.id_for_label }}");
+                if (tipo) {
+                    tipo.addEventListener("invalid", function () {
+                        tipo.setCustomValidity("Informe se o Boletim é RE ou RI.");
+                    });
+                    tipo.addEventListener("change", function () {
+                        tipo.setCustomValidity("");
+                    });
+                }
+            })();
+        </script>
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col min-w-0">
+        <div class="px-6 pt-6 pb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 class="text-sm font-black uppercase italic text-gray-900 dark:text-gray-100">Boletins importados</h2>
+            <div class="inline-flex p-1 bg-gray-100 dark:bg-gray-800 rounded-2xl" role="group" aria-label="Filtrar por tipo">
+                <a href="{% url 'relatorio_bdo' %}"
+                   class="px-4 py-2 rounded-xl text-[11px] font-black uppercase transition {% if not tipo_filtro %}bg-pv-black text-pv-yellow shadow{% else %}text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100{% endif %}"
+                   {% if not tipo_filtro %}aria-current="true"{% endif %}>RE e RI</a>
+                {% for valor, rotulo in tipos %}
+                <a href="?tipo={{ valor }}"
+                   class="px-4 py-2 rounded-xl text-[11px] font-black uppercase transition {% if tipo_filtro == valor %}bg-pv-black text-pv-yellow shadow{% else %}text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100{% endif %}"
+                   {% if tipo_filtro == valor %}aria-current="true"{% endif %}>{{ rotulo }}</a>
+                {% endfor %}
+            </div>
+        </div>
+        {% if boletins %}
+        {# `relative`: segura o "Ações" sr-only (absoluto) dentro da rolagem da tabela - sem ele a página inteira rola na horizontal no celular. #}
+        <div class="relative overflow-x-auto">
+            <table class="min-w-full text-left border-collapse">
+                <thead>
+                    <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-y border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                        <th class="px-4 py-2">Boletim de desempenho</th>
+                        <th class="px-4 py-2">Tipo</th>
+                        <th class="px-4 py-2 whitespace-nowrap">Mês de referência</th>
+                        <th class="px-4 py-2">Arquivo</th>
+                        <th class="px-4 py-2 text-right">Municípios</th>
+                        <th class="px-4 py-2 text-right">INEPs</th>
+                        <th class="px-4 py-2 text-right">Valor total</th>
+                        <th class="px-4 py-2">Enviado por</th>
+                        <th class="px-4 py-2">Enviado em</th>
+                        <th class="px-4 py-2"><span class="sr-only">Ações</span></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200 dark:divide-gray-800">
+                    {% for boletim in boletins %}
+                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                        <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ boletim.numero }}</span></td>
+                        <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ boletim.tipo|default:"—" }}</span></td>
+                        <td class="px-4 py-2 whitespace-nowrap">
+                            <form method="POST" action="{% url 'bdo_mes_referencia' boletim.pk %}" class="flex items-center gap-1.5">
+                                {% csrf_token %}
+                                <label for="mes-referencia-{{ boletim.pk }}" class="sr-only">Mês de referência do Boletim {{ boletim.numero }}</label>
+                                <input type="month" id="mes-referencia-{{ boletim.pk }}" name="mes_referencia" required
+                                       value="{{ boletim.mes_referencia|date:'Y-m' }}"
+                                       class="px-2 py-1 bg-gray-50 dark:bg-gray-800 border {% if boletim.mes_referencia %}border-transparent{% else %}border-amber-400{% endif %} rounded-lg outline-none focus:ring-2 focus:ring-amber-400 font-bold text-[11px] text-gray-800 dark:text-gray-100">
+                                <button type="submit" class="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-gray-100" title="Salvar o mês de referência" aria-label="Salvar o mês de referência do Boletim {{ boletim.numero }}">
+                                    <i data-lucide="check" class="w-3.5 h-3.5" aria-hidden="true"></i>
+                                </button>
+                            </form>
+                        </td>
+                        <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ boletim.arquivo_nome|default:"—" }}</span></td>
+                        <td class="px-4 py-2 text-right"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ boletim.quantidade_municipios|intcomma }}</span></td>
+                        <td class="px-4 py-2 text-right"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ boletim.quantidade_ineps|intcomma }}</span></td>
+                        <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">R$ {{ boletim.valor_total|intcomma }}</span></td>
+                        <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ boletim.importado_por.username|default:"—" }}</span></td>
+                        <td class="px-4 py-2 whitespace-nowrap"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ boletim.importado_em|date:"d/m/Y H:i" }}</span></td>
+                        <td class="px-4 py-2 text-right whitespace-nowrap">
+                            <a href="{% url 'bdo' %}?boletim={{ boletim.numero|urlencode }}" class="inline-flex items-center gap-1 text-[11px] font-black uppercase text-amber-600 dark:text-pv-yellow hover:underline">
+                                Ver no BDO <i data-lucide="arrow-right" class="w-3.5 h-3.5" aria-hidden="true"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="px-6 pb-6 text-sm text-gray-500 dark:text-gray-400">{% if tipo_filtro %}Nenhum Boletim {{ tipo_filtro }} importado.{% else %}Nenhuma planilha enviada ainda.{% endif %}</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
