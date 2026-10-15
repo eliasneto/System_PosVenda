@@ -836,8 +836,11 @@ class LogRpaEaceMip(models.Model):
     def ja_estava_no_portal(self):
         """Pedido do usuário (2026-09-29): "documento já enviado" (card do
         município não está mais Pendente) conta como enviado - o ícone
-        fica desabilitado como no Sucesso, tentar de novo nunca daria certo."""
-        return self.resultado == self.ERRO and self.motivo_erro == "documento_ja_enviado"
+        fica desabilitado como no Sucesso, tentar de novo nunca daria certo.
+        Só com o status do card lido: vazio foi o RPA que não leu o status
+        (pedido 533, 2026-10-14, portal sem a linha "Status:") - pode
+        tentar de novo."""
+        return self.resultado == self.ERRO and self.motivo_erro == "documento_ja_enviado" and bool(self.status_portal)
 
     @property
     def motivo_erro_legivel(self):

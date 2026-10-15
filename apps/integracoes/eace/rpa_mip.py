@@ -154,8 +154,15 @@ ETAPAS_RPA_MIP = (
 # "Aprovado" (o portal muda sozinho). So "Pendente" aceita o PDF; os
 # outros dois contam como ja enviado - e sao o sinal de que o upload
 # funcionou. Comparados sem acento/maiuscula (`normalizar_texto`).
+#
+# Card sem a linha "Status:" (execucao real, pedido 533, 2026-10-14: o
+# portal tirou o status do card): o arquivo anexado decide - sem PDF no
+# campo "Arquivo da Nota Fiscal" e "Pendente", com PDF e "NF anexada", que
+# conta como enviado (`interpretar_card_municipio`).
+STATUS_PENDENTE = "Pendente"
+STATUS_NF_ANEXADA = "NF anexada"
 STATUS_PENDENTES = frozenset({"PENDENTE"})
-STATUS_ENVIADOS = frozenset({"AGUARDANDO APROVACAO", "APROVADO"})
+STATUS_ENVIADOS = frozenset({"AGUARDANDO APROVACAO", "APROVADO", "NF ANEXADA"})
 
 
 class ProgressoRpaMip:
@@ -644,6 +651,7 @@ _RE_MUNICIPIO = re.compile(r"Munic[ií]pio:\s*([^/\n]*)(?:/([^\n]*))?")
 _RE_IBGE = re.compile(r"Cod\.\s*IBGE:[ \t]*(\d*)")
 _RE_STATUS = re.compile(r"Status:[ \t]*([^\n]+)")
 _RE_VALOR = re.compile(r"Valor total a ser emitido:\s*R\$\s*([\d.,]+)")
+_RE_PDF_ANEXADO = re.compile(r"\S\.pdf\b", re.IGNORECASE)
 
 
 def interpretar_card_municipio(texto: str) -> dict:
@@ -653,6 +661,10 @@ def interpretar_card_municipio(texto: str) -> dict:
         Cod. IBGE: 3510104
         Status: Aprovado
         Valor total a ser emitido: R$ 16.109,00
+
+    Sem a linha "Status:" (layout do pedido 533), o status sai do arquivo
+    anexado no card: `STATUS_NF_ANEXADA` com o nome de um PDF, senao
+    `STATUS_PENDENTE`.
     """
     municipio = _RE_MUNICIPIO.search(texto)
     ibge = _RE_IBGE.search(texto)
@@ -662,7 +674,9 @@ def interpretar_card_municipio(texto: str) -> dict:
         "municipio": municipio.group(1).strip() if municipio else "",
         "uf": (municipio.group(2) or "").strip() if municipio else "",
         "ibge": ibge.group(1) if ibge else "",
-        "status": status.group(1).strip() if status else "",
+        "status": status.group(1).strip() if status else (
+            STATUS_NF_ANEXADA if _RE_PDF_ANEXADO.search(texto) else STATUS_PENDENTE
+        ),
         "valor": valor.group(1) if valor else "",
     }
 

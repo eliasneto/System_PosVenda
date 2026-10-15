@@ -662,3 +662,29 @@ class RelatorioFaturamentoEaceMateriaisForm(forms.Form):
         if data_inicio and data_fim and data_inicio > data_fim:
             raise forms.ValidationError("A Data início não pode ser depois da Data fim.")
         return cleaned
+
+
+class RelatorioFaturamentoEaceMateriaisNovoForm(RelatorioFaturamentoEaceMateriaisForm):
+    """Relatório "(NOVO)" - mesmo período, com Hora início/Hora fim
+    opcionais (pedido do usuário, 2026-10-15) para quebrar o relatório
+    dentro do mesmo dia: o período vai de Data início + Hora início até
+    Data fim + Hora fim (minuto inclusive). Sem hora, vale o dia inteiro."""
+
+    hora_inicio = forms.TimeField(
+        label="Hora início",
+        required=False,
+        widget=forms.TimeInput(format="%H:%M", attrs={"class": CAMPO_TEXTO, "type": "time"}),
+    )
+    hora_fim = forms.TimeField(
+        label="Hora fim",
+        required=False,
+        widget=forms.TimeInput(format="%H:%M", attrs={"class": CAMPO_TEXTO, "type": "time"}),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        data_inicio, data_fim = cleaned.get("data_inicio"), cleaned.get("data_fim")
+        hora_inicio, hora_fim = cleaned.get("hora_inicio"), cleaned.get("hora_fim")
+        if data_inicio and data_inicio == data_fim and hora_inicio and hora_fim and hora_inicio > hora_fim:
+            raise forms.ValidationError("No mesmo dia, a Hora início não pode ser depois da Hora fim.")
+        return cleaned

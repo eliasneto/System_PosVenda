@@ -18,6 +18,8 @@ from apps.integracoes.eace.rpa_mip import (
     municipio_principal,
     posicao_do_pedido,
     posicao_maior_pedido,
+    status_enviado,
+    status_pendente,
 )
 from apps.integracoes.eace.tests import _gerar_pdf_nota_fiscal
 
@@ -80,6 +82,27 @@ class InterpretarCardMunicipioTests(SimpleTestCase):
         self.assertEqual(card["ibge"], "3510104")
         self.assertEqual(card["status"], "Pendente")
         self.assertEqual(card["valor"], "2.282,27")
+
+    def test_card_sem_linha_de_status_e_sem_pdf_e_pendente(self):
+        """Layout do pedido 533 (2026-10-14): o card não tem mais "Status:"."""
+        texto = (
+            "Município: Caldas Novas/\nFR:\nCod. IBGE: \nValor total a ser emitido: R$ 26.804,37\n"
+            "Arquivo da Nota Fiscal\nEscolha seu arquivo\nBuscar"
+        )
+        card = interpretar_card_municipio(texto)
+        self.assertEqual(card["status"], "Pendente")
+        self.assertTrue(status_pendente(card["status"]))
+        self.assertEqual(card["valor"], "26.804,37")
+
+    def test_card_sem_linha_de_status_com_pdf_anexado_conta_como_enviado(self):
+        texto = (
+            "Município: Sucupira/\nFR:\nCod. IBGE: 1720853\nValor total a ser emitido: R$ 15.483,97\n"
+            "723_14-10-2026_NOME_MEGA\nINFRA.pdf\nArquivo da Nota Fiscal"
+        )
+        card = interpretar_card_municipio(texto)
+        self.assertEqual(card["status"], "NF anexada")
+        self.assertFalse(status_pendente(card["status"]))
+        self.assertTrue(status_enviado(card["status"]))
 
 
 class MesmoMunicipioTests(SimpleTestCase):

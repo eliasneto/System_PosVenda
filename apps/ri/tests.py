@@ -2,7 +2,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from email.message import EmailMessage as MensagemEmailMime
 from io import BytesIO, StringIO
@@ -9250,6 +9250,70 @@ class RelatorioFaturamentoEaceMateriaisNovoViewTests(TestCase):
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar"))
         self.assertEqual(resp.status_code, 400)
+
+    def _segundo_ri_no_mesmo_dia(self):
+        """RI do setUp às 00:00 de 15/08; este às 14:30 do mesmo dia."""
+        escola = Escola.objects.create(inep="60000032", nome="Escola Tarde", estado="PE")
+        ri = Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        RiItemRelatorioEace.objects.create(
+            ri=ri, descricao_item="Nobreak", quantidade=1, valor_unitario="700.00",
+            nota_fiscal="2002", num_osp="9002",
+        )
+        _marcar_transicao_aguardando_validacao_eace(ri, date(2026, 8, 15))
+        RiHistorico.objects.filter(ri=ri, tipo=RiHistorico.LOG_STATUS).update(
+            criado_em=timezone.make_aware(datetime(2026, 8, 15, 14, 30, 45)),
+        )
+
+    def test_hora_inicio_e_fim_quebram_o_relatorio_no_mesmo_dia(self):
+        self._segundo_ri_no_mesmo_dia()
+        self.client.force_login(self.admin)
+        url = reverse("relatorio_faturamento_eace_materiais_novo")
+        dia = {"data_inicio": "2026-08-15", "data_fim": "2026-08-15"}
+
+        resp = self.client.get(url, dia)
+        self.assertEqual({linha["inep"] for linha in resp.context["linhas"]}, {"60000031", "60000032"})
+
+        resp = self.client.get(url, {**dia, "hora_inicio": "00:00", "hora_fim": "14:29"})
+        self.assertEqual([linha["inep"] for linha in resp.context["linhas"]], ["60000031"])
+
+        resp = self.client.get(url, {**dia, "hora_inicio": "14:30", "hora_fim": "14:30"})
+        self.assertEqual([linha["inep"] for linha in resp.context["linhas"]], ["60000032"])  # minuto inclusive
+        self.assertContains(resp, "15/08/2026 14:30")
+        self.assertContains(resp, "&hora_inicio=14:30&hora_fim=14:30")
+
+        resp = self.client.get(url, {**dia, "hora_inicio": "14:00"})
+        self.assertEqual([linha["inep"] for linha in resp.context["linhas"]], ["60000032"])
+
+        resp = self.client.get(url, {**dia, "hora_fim": "13:00"})
+        self.assertEqual([linha["inep"] for linha in resp.context["linhas"]], ["60000031"])
+
+    def test_hora_vale_no_primeiro_e_no_ultimo_dia_do_periodo(self):
+        self._segundo_ri_no_mesmo_dia()
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo"), {
+            "data_inicio": "2026-08-14", "data_fim": "2026-08-15", "hora_inicio": "18:00", "hora_fim": "10:00",
+        })
+        self.assertEqual([linha["inep"] for linha in resp.context["linhas"]], ["60000031"])
+
+    def test_hora_inicio_depois_da_hora_fim_no_mesmo_dia_e_recusada(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo"), {
+            "data_inicio": "2026-08-15", "data_fim": "2026-08-15", "hora_inicio": "15:00", "hora_fim": "14:00",
+        })
+        self.assertIsNone(resp.context["linhas"])
+        self.assertContains(resp, "No mesmo dia, a Hora início não pode ser depois da Hora fim.")
+
+    def test_exportar_respeita_a_hora_e_poe_no_nome_do_arquivo(self):
+        self._segundo_ri_no_mesmo_dia()
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar"), {
+            "data_inicio": "2026-08-15", "data_fim": "2026-08-15", "hora_inicio": "14:00", "hora_fim": "15:00",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("15-08-2026 14h00 a 15-08-2026 15h00", resp["Content-Disposition"])
+        aba = openpyxl.load_workbook(BytesIO(resp.content))["CONSOLIDADO"]
+        self.assertEqual(aba["A3"].value, "60000032")
+        self.assertEqual(aba["A4"].value, "TOTAL DO PERÍODO")  # só o INEP das 14:30 antes do total
 
     def test_analista_nao_exporta(self):
         self.client.force_login(self.analista)

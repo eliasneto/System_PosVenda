@@ -28,6 +28,7 @@ from apps.escolas.rpa_mip_lote import logs_mip_para_fila
 from .forms import (
     PlanilhaEaceUploadForm,
     RelatorioFaturamentoEaceMateriaisForm,
+    RelatorioFaturamentoEaceMateriaisNovoForm,
     RiDataAtivacaoForm,
     RiEmailFinanceiroForm,
     RiHistoricoForm,
@@ -2431,19 +2432,21 @@ def relatorio_faturamento_eace_materiais_exportar_arquivos_view(request):
 @login_required
 def relatorio_faturamento_eace_materiais_novo_view(request):
     """Card "Faturamento EACE Materiais (NOVO)" — mesmo formulário de
-    período (Data início/Data fim, GET) do relatório original, tabela
+    período (Data início/Data fim, GET) do relatório original, mais Hora
+    início/Hora fim opcionais (pedido do usuário, 2026-10-15), tabela
     resumida em INEP/NF/VALOR/Nº OSP (pedido do usuário, 2026-09-22). Ação
     restrita a Administrador, mesmo critério das demais telas
     administrativas (RN-004)."""
     if not request.user.is_administrador:
         return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
 
-    form = RelatorioFaturamentoEaceMateriaisForm(request.GET or None)
+    form = RelatorioFaturamentoEaceMateriaisNovoForm(request.GET or None)
     linhas = None
     total_valor = None
     if form.is_bound and form.is_valid():
         linhas = montar_relatorio_faturamento_eace_materiais_novo(
-            form.cleaned_data["data_inicio"], form.cleaned_data["data_fim"]
+            form.cleaned_data["data_inicio"], form.cleaned_data["data_fim"],
+            form.cleaned_data["hora_inicio"], form.cleaned_data["hora_fim"],
         )
         total_valor = sum((linha["valor"] for linha in linhas), Decimal("0"))
 
@@ -2463,20 +2466,24 @@ def relatorio_faturamento_eace_materiais_novo_exportar_view(request):
     if not request.user.is_administrador:
         return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
 
-    form = RelatorioFaturamentoEaceMateriaisForm(request.GET or None)
+    form = RelatorioFaturamentoEaceMateriaisNovoForm(request.GET or None)
     if not form.is_valid():
         return HttpResponseBadRequest("Informe Data início e Data fim válidas.")
 
     data_inicio = form.cleaned_data["data_inicio"]
     data_fim = form.cleaned_data["data_fim"]
-    linhas = montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim)
+    hora_inicio = form.cleaned_data["hora_inicio"]
+    hora_fim = form.cleaned_data["hora_fim"]
+    linhas = montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio, hora_fim)
     conteudo = gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas)
 
     resposta = HttpResponse(
         conteudo,
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    nome_arquivo = f"FATURAMENTO EACE MATERIAIS (NOVO) - {data_inicio:%d-%m-%Y} a {data_fim:%d-%m-%Y}.xlsx"
+    inicio = f"{data_inicio:%d-%m-%Y}" + (f" {hora_inicio:%Hh%M}" if hora_inicio else "")
+    fim = f"{data_fim:%d-%m-%Y}" + (f" {hora_fim:%Hh%M}" if hora_fim else "")
+    nome_arquivo = f"FATURAMENTO EACE MATERIAIS (NOVO) - {inicio} a {fim}.xlsx"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
     return resposta
 

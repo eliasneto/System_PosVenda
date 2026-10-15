@@ -145,6 +145,17 @@ class EnfileirarRpaMipLoteTests(BaseLoteComNf):
             enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         self.assertEqual(LogRpaEaceMip.objects.count(), 1)
 
+    def test_documento_ja_enviado_sem_status_lido_permite_de_novo(self):
+        """Pedido 533 (2026-10-14): o RPA não leu o status do card e deu
+        "NF já enviada" sem anexar nada - o LOTE não pode ficar travado."""
+        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        LogRpaEaceMip.objects.filter(pk=log.pk).update(
+            resultado=LogRpaEaceMip.ERRO, motivo_erro="documento_ja_enviado", status_portal="",
+        )
+        self.assertFalse(LogRpaEaceMip.objects.get(pk=log.pk).ja_estava_no_portal)
+        enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        self.assertEqual(LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count(), 1)
+
     def test_recusa_sem_nf_comum(self):
         self.escola_b.notas_fiscais_mip.all().delete()
         with self.assertRaisesMessage(EnvioRpaMipRecusado, "sem Nota Fiscal"):

@@ -11,7 +11,7 @@ import os
 import re
 import zipfile
 from collections import OrderedDict, defaultdict
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from datetime import timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 from email import message_from_bytes, policy
@@ -3722,12 +3722,26 @@ def _resolver_notas_fiscais_por_item_lpu(ri, catalogo):
     return resolvidos
 
 
-def _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
+def _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim, hora_inicio=None, hora_fim=None):
     """RI e data da transição para "Aguardando validação EACE" (RN-082) no
     período [`data_inicio`, `data_fim`] — mesma seleção usada pelo
     relatório "Faturamento EACE Materiais" original e pela versão "(NOVO)"
     (`montar_relatorio_faturamento_eace_materiais_novo`), 1 fonte só para
-    garantir que os 2 relatórios sempre listem os mesmos RI."""
+    garantir que os 2 relatórios sempre listem os mesmos RI.
+
+    `hora_inicio`/`hora_fim` (opcionais, só o "(NOVO)" usa - pedido do
+    usuário, 2026-10-15): o período passa a ir de `data_inicio` +
+    `hora_inicio` até `data_fim` + `hora_fim`, com o minuto da Hora fim
+    inclusive, no fuso do sistema."""
+    if hora_inicio or hora_fim:
+        inicio = timezone.make_aware(datetime.combine(data_inicio, hora_inicio or time.min))
+        fim = (
+            timezone.make_aware(datetime.combine(data_fim, hora_fim)) + timedelta(minutes=1) if hora_fim
+            else timezone.make_aware(datetime.combine(data_fim + timedelta(days=1), time.min))
+        )
+        filtro_periodo = {"criado_em__gte": inicio, "criado_em__lt": fim}
+    else:
+        filtro_periodo = {"criado_em__date__gte": data_inicio, "criado_em__date__lte": data_fim}
     transicoes_no_periodo = (
         RiHistorico.objects.filter(
             tipo=RiHistorico.LOG_STATUS,
@@ -3738,8 +3752,7 @@ def _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
             # reabertura de RI já concluído ("Faturamento Concluído" →
             # "Aguardando validação EACE"), que não é um envio novo.
             valor_anterior=_LABEL_RESPOSTA_FINANCEIRO,
-            criado_em__date__gte=data_inicio,
-            criado_em__date__lte=data_fim,
+            **filtro_periodo,
         )
         .values("ri_id")
         .annotate(data_transicao=Max("criado_em"))
@@ -3890,13 +3903,16 @@ def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
 # (Quantidade × Valor Unitário, já resolvido pelo catálogo no lançamento —
 # RN-018), não a soma "Equipamentos R$" do RI inteiro do relatório
 # original (que usa o Lado IXC).
-def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim):
+def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio=None, hora_fim=None):
     """FEAT-XXX: linhas do relatório "Faturamento EACE Materiais (NOVO)"
     para o período [`data_inicio`, `data_fim`] (ambos `date`, inclusive) —
     1 linha por item do Lado Relatório EACE (3º lado) de cada RI que
     entrou em "Aguardando validação EACE" nesse período (mesma seleção do
-    relatório original, RN-082)."""
-    ris, data_transicao_por_ri = _ris_relatorio_faturamento_eace_materiais(data_inicio, data_fim)
+    relatório original, RN-082). `hora_inicio`/`hora_fim`: ver
+    `_ris_relatorio_faturamento_eace_materiais`."""
+    ris, data_transicao_por_ri = _ris_relatorio_faturamento_eace_materiais(
+        data_inicio, data_fim, hora_inicio, hora_fim,
+    )
     if not ris:
         return []
 
