@@ -915,6 +915,9 @@ class BoletimBdo(models.Model):
     # antes do campo existir - editável em "Administrador > Relatório BDO".
     mes_referencia = models.DateField("Mês de referência", null=True, blank=True)
     arquivo_nome = models.CharField("Arquivo", max_length=255, blank=True)
+    # Planilha Pro rata do cliente enviada para o Boletim (pedido do usuário,
+    # 2026-10-15) - vazio enquanto não foi enviada.
+    pro_rata_arquivo = models.CharField("Arquivo Pro rata", max_length=255, blank=True)
     importado_em = models.DateTimeField("Importado em", auto_now=True)
     importado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
@@ -964,9 +967,81 @@ class MunicipioBdo(models.Model):
 class InepBdo(models.Model):
     municipio_bdo = models.ForeignKey(MunicipioBdo, on_delete=models.CASCADE, related_name="ineps")
     inep = models.CharField("INEP", max_length=20, db_index=True)
+    # "Ativado em" da planilha Pro rata do cliente para este Boletim
+    # (pedido do usuário, 2026-10-15): só conferência com a Data de
+    # Ativação do sistema. Vazio sem Pro rata ou INEP fora dela.
+    ativado_em_cliente = models.DateField("Ativado em (cliente)", null=True, blank=True)
+    # "Dias Descontados" e "Valor" (o desconto) da mesma Pro rata (pedido do
+    # usuário, 2026-10-15), para conferir com o desconto do sistema.
+    dias_descontados_cliente = models.PositiveSmallIntegerField("Dias descontados (cliente)", null=True, blank=True)
+    valor_desconto_cliente = models.DecimalField(
+        "Desconto (cliente)", max_digits=14, decimal_places=2, null=True, blank=True,
+    )
+    # Status da divergência de data ou valor do INEP no Boletim (pedido do
+    # usuário, 2026-10-15): Aprovado ou Contestado; vazio = pendente, só
+    # até o primeiro status ou quando o reenvio da Pro rata muda o dado do
+    # cliente. Histórico em `LogStatusDivergenciaBdo`.
+    STATUS_APROVADO = "APROVADO"
+    STATUS_CONTESTADO = "CONTESTADO"
+    STATUS_DIVERGENCIA_CHOICES = [
+        (STATUS_APROVADO, "Aprovado"),
+        (STATUS_CONTESTADO, "Contestado"),
+    ]
+    status_divergencia = models.CharField(
+        "Status da divergência", max_length=12, choices=STATUS_DIVERGENCIA_CHOICES, blank=True,
+    )
+    status_divergencia_em = models.DateTimeField("Status da divergência em", null=True, blank=True)
+    status_divergencia_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
 
     class Meta:
         ordering = ["inep"]
 
     def __str__(self):
         return self.inep
+
+
+class LogStatusDivergenciaBdo(models.Model):
+    """Log do status da divergência de um INEP no BDO (pedido do usuário,
+    2026-10-15): cada troca de status (um a um ou em massa) e o status
+    retirado pelo reenvio da Pro rata, com as datas e valores comparados
+    naquele momento. Guarda Boletim e INEP em texto para o log ficar mesmo
+    sem o `InepBdo`."""
+
+    ACAO_ALTERADO = "ALTERADO"
+    ACAO_RETIRADO_PRO_RATA = "RETIRADO_PRO_RATA"
+    ACAO_CHOICES = [
+        (ACAO_ALTERADO, "Status alterado"),
+        (ACAO_RETIRADO_PRO_RATA, "Status retirado pelo reenvio da Pro rata"),
+    ]
+
+    inep_bdo = models.ForeignKey(
+        InepBdo, on_delete=models.SET_NULL, null=True, blank=True, related_name="logs_status_divergencia",
+    )
+    boletim = models.CharField("Boletim de desempenho", max_length=30)
+    inep = models.CharField("INEP", max_length=20, db_index=True)
+    acao = models.CharField("Ação", max_length=20, choices=ACAO_CHOICES)
+    status_anterior = models.CharField(
+        "Status anterior", max_length=12, choices=InepBdo.STATUS_DIVERGENCIA_CHOICES, blank=True,
+    )
+    status = models.CharField("Status", max_length=12, choices=InepBdo.STATUS_DIVERGENCIA_CHOICES, blank=True)
+    em_massa = models.BooleanField("Em massa", default=False)
+    data_ativacao = models.DateField("Data de ativação", null=True, blank=True)
+    ativado_em_cliente = models.DateField("Ativado em (cliente)", null=True, blank=True)
+    valor_desconto_sistema = models.DecimalField(
+        "Desconto (sistema)", max_digits=14, decimal_places=2, null=True, blank=True,
+    )
+    valor_desconto_cliente = models.DecimalField(
+        "Desconto (cliente)", max_digits=14, decimal_places=2, null=True, blank=True,
+    )
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    criado_em = models.DateTimeField("Em", auto_now_add=True)
+
+    class Meta:
+        ordering = ["-criado_em", "-pk"]
+        verbose_name = "Log de status de divergência BDO"
+        verbose_name_plural = "Logs de status de divergência BDO"
+
+    def __str__(self):
+        return f"{self.boletim}/{self.inep} {self.status_anterior or '-'} -> {self.status or '-'}"

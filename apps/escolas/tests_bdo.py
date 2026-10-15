@@ -12,9 +12,10 @@ from django.test import TestCase
 from django.urls import reverse
 
 from apps.escolas.bdo import (
-    PlanilhaBdoError, dias_no_mes_referencia, dias_proporcionais, importar_planilha_bdo, ler_planilha_bdo, valor_proporcional,
+    PlanilhaBdoError, dias_no_mes_referencia, dias_proporcionais, importar_planilha_bdo, importar_pro_rata, ler_planilha_bdo,
+    ler_planilha_pro_rata, valor_proporcional,
 )
-from apps.escolas.models import BoletimBdo, Escola, InepBdo, MunicipioBdo
+from apps.escolas.models import BoletimBdo, Escola, InepBdo, LogStatusDivergenciaBdo, MunicipioBdo
 from apps.ri.models import KitPadrao, Ri
 
 User = get_user_model()
@@ -324,7 +325,7 @@ class BdoViewTests(TestCase):
         escola = Escola.objects.create(inep=inep, nome=f"Escola {inep}", lote=lote, valor_assinatura_re=assinatura_re)
         Ri.objects.create(escola=escola, data_ativacao=data_ativacao)
 
-    def test_valor_proporcional_por_inep_e_total_howbe_por_municipio(self):
+    def test_valor_proporcional_por_inep_e_total_mega_por_municipio(self):
         KitPadrao.objects.create(
             descricao="Manutenção de Rede Interna (serviços, materiais e equipamentos)", lote=11,
             unidade="Escola/Mês", valor_servico=Decimal("365.62"),
@@ -345,15 +346,15 @@ class BdoViewTests(TestCase):
         resp = self.client.get(reverse("bdo"), {"agrupar": "municipio"})
         linhas = {linha["municipio"]: linha for linha in resp.context["page_obj"]}
         # 50028340 sem escola: fica fora da soma e é sinalizado
-        self.assertEqual(linhas["CAMPO GRANDE"]["total_howbe"], Decimal("901.86"))
-        self.assertEqual(linhas["CAMPO GRANDE"]["ineps_sem_valor_howbe"], 1)
-        self.assertEqual(linhas["BRASÍLIA"]["total_howbe"], Decimal("487.50"))
-        self.assertEqual(linhas["BRASÍLIA"]["ineps_sem_valor_howbe"], 0)
-        self.assertIsNone(linhas["AMERICANA"]["total_howbe"])
-        self.assertContains(resp, "Total Howbe")
+        self.assertEqual(linhas["CAMPO GRANDE"]["total_mega"], Decimal("901.86"))
+        self.assertEqual(linhas["CAMPO GRANDE"]["ineps_sem_valor_mega"], 1)
+        self.assertEqual(linhas["BRASÍLIA"]["total_mega"], Decimal("487.50"))
+        self.assertEqual(linhas["BRASÍLIA"]["ineps_sem_valor_mega"], 0)
+        self.assertIsNone(linhas["AMERICANA"]["total_mega"])
+        self.assertContains(resp, "Total MEGA")
         self.assertContains(resp, "1 INEP(s) sem valor")
 
-    def test_total_howbe_com_mes_de_referencia_cobra_cheio_quem_ativou_antes(self):
+    def test_total_mega_com_mes_de_referencia_cobra_cheio_quem_ativou_antes(self):
         self._escola_ri("35058592", None, datetime.date(2026, 7, 20), assinatura_re=Decimal("600.00"))  # cheio
         self._escola_ri("35011006", None, datetime.date(2026, 9, 25), assinatura_re=Decimal("300.00"))  # 5 dias
         self._escola_ri("35022222", None, datetime.date(2026, 10, 2), assinatura_re=Decimal("900.00"))  # depois
@@ -365,14 +366,14 @@ class BdoViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("bdo"), {"agrupar": "municipio"})
         linha = resp.context["page_obj"][0]
-        self.assertEqual(linha["total_howbe"], Decimal("650.00"))
-        self.assertEqual(linha["ineps_sem_valor_howbe"], 1)
-        self.assertEqual(linha["diferenca_howbe"], Decimal("650.00"))  # planilha sem serviços
+        self.assertEqual(linha["total_mega"], Decimal("650.00"))
+        self.assertEqual(linha["ineps_sem_valor_mega"], 1)
+        self.assertEqual(linha["diferenca_mega"], Decimal("650.00"))  # planilha sem serviços
         resp = self.client.get(reverse("bdo"))
         dias = {linha.inep: linha.dias_proporcionais for linha in resp.context["page_obj"]}
         self.assertEqual(dias, {"35058592": 30, "35011006": 5, "35022222": None})
 
-    def test_total_howbe_confere_com_servicos_menos_descontos_proporcionais(self):
+    def test_total_mega_confere_com_servicos_menos_descontos_proporcionais(self):
         self._escola_ri("35058592", None, datetime.date(2026, 7, 20), assinatura_re=Decimal("600.00"))  # cheio
         self._escola_ri("35011006", None, datetime.date(2026, 9, 25), assinatura_re=Decimal("300.00"))  # 50,00
         importar_planilha_bdo(
@@ -385,16 +386,16 @@ class BdoViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("bdo"), {"agrupar": "municipio"})
         linha = resp.context["page_obj"][0]
-        self.assertEqual(linha["total_howbe"], Decimal("650.00"))
-        self.assertEqual(linha["valor_conferencia_howbe"], Decimal("650.00"))
-        self.assertEqual(linha["diferenca_howbe"], Decimal("0.00"))
+        self.assertEqual(linha["total_mega"], Decimal("650.00"))
+        self.assertEqual(linha["valor_conferencia_mega"], Decimal("650.00"))
+        self.assertEqual(linha["diferenca_mega"], Decimal("0.00"))
         self.assertNotContains(resp, "Dif. R$")
         MunicipioBdo.objects.update(valor_descontos_proporcionais=Decimal("240.00"))
         resp = self.client.get(reverse("bdo"), {"agrupar": "municipio"})
-        self.assertEqual(resp.context["page_obj"][0]["diferenca_howbe"], Decimal("-10.00"))
+        self.assertEqual(resp.context["page_obj"][0]["diferenca_mega"], Decimal("-10.00"))
         self.assertContains(resp, "Dif. R$ -10,00")
 
-    def test_total_howbe_usa_o_tipo_de_cada_boletim_e_segue_o_filtro_de_inep(self):
+    def test_total_mega_usa_o_tipo_de_cada_boletim_e_segue_o_filtro_de_inep(self):
         self._escola_ri("35058592", None, datetime.date(2026, 9, 20), assinatura_re=Decimal("600.00"))
         self._escola_ri("35011006", None, datetime.date(2026, 9, 25), assinatura_re=Decimal("300.00"))
         importar_planilha_bdo(
@@ -404,9 +405,9 @@ class BdoViewTests(TestCase):
         self.client.force_login(self.analista)
         resp = self.client.get(reverse("bdo"), {"agrupar": "municipio"})
         linha = resp.context["page_obj"][0]
-        self.assertEqual(linha["total_howbe"], Decimal("250.00"))  # 200,00 + 50,00
+        self.assertEqual(linha["total_mega"], Decimal("250.00"))  # 200,00 + 50,00
         resp = self.client.get(reverse("bdo"), {"agrupar": "municipio", "inep": "35011006"})
-        self.assertEqual(resp.context["page_obj"][0]["total_howbe"], Decimal("50.00"))
+        self.assertEqual(resp.context["page_obj"][0]["total_mega"], Decimal("50.00"))
 
     def test_agrupar_por_uf_soma_cada_municipio_uma_vez(self):
         self._importar()
@@ -418,6 +419,23 @@ class BdoViewTests(TestCase):
         self.assertEqual(linhas["SP"]["valor_total"], Decimal("327.81"))
         self.assertEqual(linhas["DF"]["valor_total"], Decimal("31183.68"))
 
+    def test_valor_total_com_filtro_de_inep_ou_data_e_rateado_pelos_ineps_filtrados(self):
+        """Pedido do usuário (2026-10-15): o valor é do município, então com
+        filtro de INEP ou de data entra só a parte dos INEPs filtrados."""
+        escola = Escola.objects.create(inep="50031287", nome="Campo Grande", estado="MS", municipio="Campo Grande")
+        Ri.objects.create(escola=escola, data_ativacao=datetime.date(2026, 9, 10))
+        self._importar()
+        self.client.force_login(self.analista)
+        self.assertEqual(self.client.get(reverse("bdo")).context["valor_total"], Decimal("32605.94"))
+        resp = self.client.get(reverse("bdo"), {"inep": "50031287"})
+        self.assertEqual(resp.context["valor_total"], Decimal("273.61"))  # 1.094,45 ÷ 4 INEPs
+        resp = self.client.get(reverse("bdo"), {"inep": "5300"})
+        self.assertEqual(resp.context["valor_total"], Decimal("31183.68"))  # os 2 INEPs de Brasília
+        resp = self.client.get(reverse("bdo"), {"data_inicial": "01/09/2026", "data_final": "30/09/2026"})
+        self.assertEqual(resp.context["valor_total"], Decimal("273.61"))
+        resp = self.client.get(reverse("bdo"), {"uf": "SP"})
+        self.assertEqual(resp.context["valor_total"], Decimal("327.81"))  # sem filtro de INEP: município inteiro
+
     def test_filtros_de_uf_municipio_e_inep(self):
         self._importar()
         self.client.force_login(self.analista)
@@ -427,7 +445,7 @@ class BdoViewTests(TestCase):
         self.assertEqual(resp.context["total_ineps"], 4)
         resp = self.client.get(reverse("bdo"), {"inep": "53002814"})
         self.assertEqual(resp.context["total_ineps"], 1)
-        self.assertEqual(resp.context["valor_total"], Decimal("31183.68"))
+        self.assertEqual(resp.context["valor_total"], Decimal("15591.84"))  # rateio: 1 dos 2 INEPs de Brasília
 
     def test_lista_de_municipios_segue_a_uf_e_so_tem_os_do_grid(self):
         self._importar()
@@ -683,7 +701,7 @@ class RecebiveisBdoTests(TestCase):
         self.assertEqual(resp.context["recebiveis_valor_total"], Decimal("0"))
 
     def test_escolher_mais_de_um_boletim_traz_todas_as_linhas(self):
-        resp = self._post(boletim=["3658", "3700"])
+        resp = self._post(boletim=["3658", "3700"], visao="linhas")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.context["recebiveis_linhas"]), 7)
         self.assertEqual(resp.context["recebiveis_quantidade_ineps"], 12)
@@ -735,8 +753,47 @@ class RecebiveisBdoTests(TestCase):
         itu = self._id("3700", "ITU", "5.00")
         resp = self._post(boletim="3658", retirado=[str(itu), "abc", "999999"], visao="xx")
         self.assertEqual(resp.context["recebiveis_retirados"], [])
-        self.assertEqual(resp.context["recebiveis_visao"], "linhas")
+        self.assertEqual(resp.context["recebiveis_visao"], "municipio")  # padrão: Por Município (pedido do usuário, 2026-10-15)
         self.assertEqual(resp.context["recebiveis_valor_total"], Decimal("32605.94"))
+
+    def test_abre_com_o_boletim_e_o_periodo_do_grid_por_municipio(self):
+        """Pedido do usuário (2026-10-15): só o Boletim e o período de Data de
+        Ativação filtrados no grid; o município entra com a parte dos INEPs
+        do período e município sem nenhum fica de fora."""
+        escola = Escola.objects.create(inep="50031287", nome="Campo Grande", estado="MS", municipio="Campo Grande")
+        Ri.objects.create(escola=escola, data_ativacao=datetime.date(2026, 9, 10))
+        resp = self.client.get(reverse("bdo"), {"boletim": "3658", "data_inicial": "01/09/2026", "data_final": "30/09/2026"})
+        self.assertEqual(resp.context["recebiveis_selecionados"], {"3658"})
+        self.assertEqual(resp.context["recebiveis_visao"], "municipio")
+        [grupo] = resp.context["recebiveis_grupos"]
+        self.assertEqual((grupo["municipio"], grupo["quantidade_ineps"]), ("CAMPO GRANDE", 1))
+        self.assertEqual(resp.context["recebiveis_valor_total"], Decimal("273.61"))  # 1.094,45 ÷ 4 INEPs
+        self.assertContains(resp, '<input type="hidden" name="data_inicial" value="01/09/2026">', html=False)
+        self.assertContains(resp, "Ativação de 01/09/2026 até 30/09/2026")
+        # o período segue no formulário do modal
+        resp = self._post(boletim="3658", data_inicial="01/09/2026", data_final="30/09/2026")
+        self.assertEqual(resp.context["recebiveis_valor_total"], Decimal("273.61"))
+
+    def test_sem_filtro_no_grid_abre_sem_boletim(self):
+        resp = self.client.get(reverse("bdo"))
+        self.assertEqual(resp.context["recebiveis_selecionados"], set())
+
+    def test_inep_contestado_nao_entra_e_o_municipio_e_rateado(self):
+        InepBdo.objects.filter(inep="50031287", municipio_bdo__boletim__numero="3658").update(
+            status_divergencia=InepBdo.STATUS_CONTESTADO,
+        )
+        InepBdo.objects.filter(inep="35099999").update(status_divergencia=InepBdo.STATUS_CONTESTADO)
+        InepBdo.objects.filter(inep="50005111").update(status_divergencia=InepBdo.STATUS_APROVADO)
+        resp = self._post(boletim=["3658", "3700"], visao="linhas")
+        linhas = {(linha.boletim.numero, linha.municipio): linha for linha in resp.context["recebiveis_linhas"]}
+        campo_grande = linhas[("3658", "Campo Grande")]
+        self.assertEqual(campo_grande.lista_ineps, ["50005111", "50028340", "50033433"])
+        self.assertEqual(campo_grande.valor_recebivel, Decimal("820.84"))  # 1.094,45 × 3 ÷ 4
+        self.assertNotIn(("3700", "ITU"), linhas)  # único INEP contestado: município fora
+        self.assertEqual(resp.context["recebiveis_quantidade_ineps"], 10)
+        self.assertEqual(resp.context["recebiveis_valor_total"], Decimal("32482.33"))
+        self.assertEqual(resp.context["recebiveis_contestados"], 2)
+        self.assertContains(resp, "INEPs Contestados não entram (2 fora).")
 
     def test_nada_e_gravado(self):
         antes = (BoletimBdo.objects.count(), MunicipioBdo.objects.count(), InepBdo.objects.count())
@@ -784,3 +841,248 @@ class ImportarAssinaturaReTests(TestCase):
         self.assertEqual(atibaia.valor_assinatura_re, Decimal("370.50"))
         self.assertFalse(Escola.objects.filter(inep="35005434").exists())
         self.assertIn("2 escola(s) atualizada(s), 1 INEP(s) sem escola no sistema, 1 linha(s)", saida.getvalue())
+
+
+def _pro_rata(linhas, cabecalho=("INEP", "Ativado em", "Dias Descontados", "Valor"), nome="Pro_rata3658.xlsx"):
+    return _planilha(linhas, cabecalho, nome)
+
+
+def _item(ativado_em, dias, valor):
+    return {"ativado_em": ativado_em, "dias_descontados": dias, "valor_desconto": Decimal(valor)}
+
+
+class ProRataBdoTests(TestCase):
+    """Planilha Pro rata do cliente (pedido do usuário, 2026-10-15): o
+    "Ativado em", os "Dias Descontados" e o "Valor" (desconto) de cada INEP
+    do Boletim, para conferir com a Data de Ativação e o desconto do
+    sistema, e a aprovação das divergências com log."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="pro-rata-admin", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="pro-rata-analista", password="senha-teste-123", perfil=User.PERFIL_ANALISTA,
+        )
+        [self.boletim] = importar_planilha_bdo(
+            ler_planilha_bdo(_planilha(LINHAS_3658)), "RI", "FR_3658.xlsx", self.admin, datetime.date(2026, 9, 1),
+        )
+        KitPadrao.objects.create(
+            descricao="Manutenção de Rede Interna (serviços, materiais e equipamentos)", lote=9,
+            unidade="Escola/Mês", valor_servico=Decimal("300.00"),
+        )
+        # 35058592: 21/09 -> 9 dias, proporcional 90,00, desconto 210,00.
+        # 35011006: 05/09 -> 25 dias, proporcional 250,00, desconto 50,00.
+        for inep, data in (("35058592", datetime.date(2026, 9, 21)), ("35011006", datetime.date(2026, 9, 5))):
+            escola = Escola.objects.create(inep=inep, nome=f"Escola {inep}", estado="SP", municipio="X", lote=9)
+            Ri.objects.create(escola=escola, data_ativacao=data)
+
+    def _inep(self, inep):
+        return InepBdo.objects.get(municipio_bdo__boletim=self.boletim, inep=inep)
+
+    def _enviar(self, arquivo, usuario=None):
+        self.client.force_login(usuario or self.admin)
+        return self.client.post(reverse("bdo_pro_rata", args=[self.boletim.pk]), {"arquivo": arquivo}, follow=True)
+
+    def _linhas(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("bdo"))
+        return resp, {linha.inep: linha for linha in resp.context["page_obj"]}
+
+    def _status(self, inep, status, usuario=None, **extra):
+        self.client.force_login(usuario or self.analista)
+        return self.client.post(
+            reverse("bdo_status_divergencia", args=[self._inep(inep).pk]), {"status": status}, **extra,
+        )
+
+    def test_le_inep_numerico_data_em_texto_ou_do_excel_dias_e_valor(self):
+        dados = ler_planilha_pro_rata(_pro_rata([
+            (35058592, "21/09/2026", 21, 322), ("35011006", datetime.datetime(2026, 9, 8), 8, 444.666666666667),
+        ]))
+        self.assertEqual(dados, {
+            "35058592": _item(datetime.date(2026, 9, 21), 21, "322.00"),
+            "35011006": _item(datetime.date(2026, 9, 8), 8, "444.67"),
+        })
+
+    def test_sem_coluna_dado_invalido_ou_inep_repetido_com_outros_dados_da_erro(self):
+        with self.assertRaisesMessage(PlanilhaBdoError, "INEP, Ativado em, Dias Descontados, Valor"):
+            ler_planilha_pro_rata(_pro_rata([(35058592, "21/09/2026")], cabecalho=("INEP", "Ativado em")))
+        with self.assertRaisesMessage(PlanilhaBdoError, "linha 2 (Ativado em, Valor)"):
+            ler_planilha_pro_rata(_pro_rata([(35058592, "31/31/2026", 0, "")]))
+        with self.assertRaisesMessage(PlanilhaBdoError, "linha 2 (Dias Descontados)"):
+            ler_planilha_pro_rata(_pro_rata([(35058592, "21/09/2026", "x", 10)]))
+        with self.assertRaisesMessage(PlanilhaBdoError, "linha 3 (INEP 35058592 repetido com outros dados)"):
+            ler_planilha_pro_rata(_pro_rata([(35058592, "21/09/2026", 21, 10), (35058592, "21/09/2026", 21, 11)]))
+
+    def test_grava_so_nos_ineps_do_boletim_e_reenviar_substitui(self):
+        outro = importar_planilha_bdo(
+            ler_planilha_bdo(_planilha([_linha("3700", "AMERICANA", "SP", "10,00", "35058592")])),
+            "RE", "FR_3700.xlsx", self.admin,
+        )[0]
+        atualizados, fora = importar_pro_rata(self.boletim, {
+            "35058592": _item(datetime.date(2026, 9, 21), 21, "210"),
+            "35011006": _item(datetime.date(2026, 9, 8), 8, "50"),
+            "99999999": _item(datetime.date(2026, 9, 1), 1, "10"),
+        }, "Pro_rata3658.xlsx")
+        self.assertEqual((atualizados, fora), (2, ["99999999"]))
+        inep = self._inep("35058592")
+        self.assertEqual(
+            (inep.ativado_em_cliente, inep.dias_descontados_cliente, inep.valor_desconto_cliente),
+            (datetime.date(2026, 9, 21), 21, Decimal("210.00")),
+        )
+        self.assertIsNone(InepBdo.objects.get(municipio_bdo__boletim=outro).ativado_em_cliente)
+        importar_pro_rata(self.boletim, {"35058592": _item(datetime.date(2026, 9, 22), 22, "220")}, "Pro_rata3658b.xlsx")
+        self.assertEqual(self._inep("35058592").ativado_em_cliente, datetime.date(2026, 9, 22))
+        self.assertIsNone(self._inep("35011006").valor_desconto_cliente)
+        self.boletim.refresh_from_db()
+        self.assertEqual(self.boletim.pro_rata_arquivo, "Pro_rata3658b.xlsx")
+
+    def test_administrador_envia_pela_tela_e_ve_os_ineps_fora_do_boletim(self):
+        resp = self._enviar(_pro_rata([(35058592, "21/09/2026", 21, 322), (99999999, "01/09/2026", 1, 10)]))
+        self.assertRedirects(resp, reverse("relatorio_bdo"))
+        self.assertContains(resp, "Boletim 3658: Pro rata importada, 1 INEP(s) com Ativado em.")
+        self.assertContains(resp, "1 INEP(s) da Pro rata não estão no Boletim: 99999999.")
+        self.assertContains(resp, "Pro_rata3658.xlsx")
+        self.assertEqual(self._inep("35058592").valor_desconto_cliente, Decimal("322.00"))
+
+    def test_planilha_invalida_mostra_erro_e_nao_grava(self):
+        resp = self._enviar(_pro_rata([(35058592, "", 0, 0)]))
+        self.assertContains(resp, "Boletim 3658: Pro rata não importada.")
+        self.assertFalse(InepBdo.objects.filter(ativado_em_cliente__isnull=False).exists())
+        self.assertEqual(BoletimBdo.objects.get().pro_rata_arquivo, "")
+
+    def test_so_administrador_envia_a_pro_rata(self):
+        resp = self._enviar(_pro_rata([(35058592, "21/09/2026", 21, 322)]), usuario=self.analista)
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(InepBdo.objects.filter(ativado_em_cliente__isnull=False).exists())
+
+    def test_grid_mostra_divergencia_de_data_e_de_desconto(self):
+        importar_pro_rata(self.boletim, {
+            "35058592": _item(datetime.date(2026, 9, 21), 21, "210.01"),  # tudo confere (R$ 0,01 de tolerância)
+            "35011006": _item(datetime.date(2026, 9, 8), 22, "65"),  # data e desconto diferentes
+            "53002814": _item(datetime.date(2026, 9, 1), 29, "10"),  # sem escola: nada a comparar
+        }, "Pro_rata3658.xlsx")
+        resp, linhas = self._linhas()
+        americana = linhas["35058592"]
+        self.assertEqual((americana.ativacao_confere, americana.valor_confere, americana.tem_divergencia), (True, True, False))
+        atibaia = linhas["35011006"]
+        self.assertEqual(atibaia.valor_desconto_sistema, Decimal("50.00"))
+        self.assertEqual((atibaia.ativacao_confere, atibaia.valor_confere, atibaia.tem_divergencia), (False, False, True))
+        self.assertFalse(linhas["53002814"].tem_divergencia)
+        self.assertContains(resp, "Ativado em (cliente)")
+        self.assertContains(resp, "Desconto (cliente)")
+        self.assertContains(resp, "(diferente da Data de ativação)", count=1)
+        self.assertContains(resp, "(diferente do desconto do sistema, R$ 50,00)", count=1)
+        # ícone de aprovação só no INEP divergente
+        # campo de status e caixa da seleção em massa só no INEP divergente
+        self.assertContains(resp, "Status da divergência do INEP", count=1)
+        self.assertContains(resp, "Status da divergência do INEP 35011006")
+        self.assertContains(resp, 'name="inep_bdo"', count=1)
+        self.assertContains(resp, 'id="form-status-massa"')
+
+    def test_so_desconto_diferente_tambem_e_divergencia(self):
+        importar_pro_rata(self.boletim, {"35058592": _item(datetime.date(2026, 9, 21), 21, "215")}, "P.xlsx")
+        _resp, linhas = self._linhas()
+        self.assertTrue(linhas["35058592"].ativacao_confere)
+        self.assertTrue(linhas["35058592"].tem_divergencia)
+
+    def test_trocar_status_grava_log_e_devolve_o_campo(self):
+        importar_pro_rata(self.boletim, {"35011006": _item(datetime.date(2026, 9, 8), 22, "65")}, "P.xlsx")
+        resp = self._status("35011006", "APROVADO", HTTP_HX_REQUEST="true")
+        self.assertContains(resp, '<option value="APROVADO" selected>Aprovado</option>', html=False)
+        inep = self._inep("35011006")
+        self.assertEqual((inep.status_divergencia, inep.status_divergencia_por), ("APROVADO", self.analista))
+        self.assertIsNotNone(inep.status_divergencia_em)
+        log = LogStatusDivergenciaBdo.objects.get()
+        self.assertEqual(
+            (log.boletim, log.inep, log.acao, log.status_anterior, log.status, log.em_massa, log.usuario,
+             log.data_ativacao, log.ativado_em_cliente, log.valor_desconto_sistema, log.valor_desconto_cliente),
+            ("3658", "35011006", "ALTERADO", "", "APROVADO", False, self.analista, datetime.date(2026, 9, 5),
+             datetime.date(2026, 9, 8), Decimal("50.00"), Decimal("65.00")),
+        )
+        resp, _linhas = self._linhas()
+        self.assertContains(resp, "Alterado por pro-rata-analista")
+
+        resp = self._status("35011006", "CONTESTADO", usuario=self.admin)
+        self.assertRedirects(resp, f"{reverse('bdo')}?boletim=3658&inep=35011006")
+        self._status("35011006", "CONTESTADO")  # mesmo status: sem log novo
+        self._status("35011006", "")  # pendente não é opção do usuário
+        self._status("35011006", "REPROVADO")  # opção que não existe mais
+        self._status("35011006", "APROVADO")
+        self.assertEqual(self._inep("35011006").status_divergencia, "APROVADO")
+        self.assertEqual(
+            list(LogStatusDivergenciaBdo.objects.order_by("pk").values_list("status_anterior", "status", "usuario__username")),
+            [("", "APROVADO", "pro-rata-analista"), ("APROVADO", "CONTESTADO", "pro-rata-admin"),
+             ("CONTESTADO", "APROVADO", "pro-rata-analista")],
+        )
+
+    def test_status_invalido_ou_inep_sem_divergencia_nao_grava(self):
+        importar_pro_rata(self.boletim, {
+            "35058592": _item(datetime.date(2026, 9, 21), 21, "210"),
+            "35011006": _item(datetime.date(2026, 9, 8), 22, "65"),
+        }, "P.xlsx")
+        self._status("35058592", "APROVADO")
+        self._status("35011006", "QUALQUER")
+        self.assertFalse(InepBdo.objects.exclude(status_divergencia="").exists())
+        self.assertFalse(LogStatusDivergenciaBdo.objects.exists())
+
+    def test_status_em_massa_so_nos_ineps_divergentes_e_volta_para_a_mesma_pagina(self):
+        importar_pro_rata(self.boletim, {
+            "35058592": _item(datetime.date(2026, 9, 21), 21, "215"),  # desconto diferente
+            "35011006": _item(datetime.date(2026, 9, 8), 22, "65"),  # data e desconto diferentes
+            "53002814": _item(datetime.date(2026, 9, 1), 29, "10"),  # sem divergência
+        }, "P.xlsx")
+        ids = [self._inep(inep).pk for inep in ("35058592", "35011006", "53002814")]
+        self.client.force_login(self.analista)
+        voltar = f"{reverse('bdo')}?boletim=3658&page=1"
+        resp = self.client.post(
+            reverse("bdo_status_divergencia_massa"),
+            {"inep_bdo": ids, "status": "CONTESTADO", "next": voltar}, follow=True,
+        )
+        self.assertRedirects(resp, voltar)
+        self.assertContains(resp, "Status &quot;Contestado&quot; aplicado em 2 INEP(s).")
+        self.assertContains(resp, "1 INEP(s) sem divergência ficaram de fora.")
+        self.assertEqual(
+            dict(InepBdo.objects.filter(pk__in=ids).values_list("inep", "status_divergencia")),
+            {"35058592": "CONTESTADO", "35011006": "CONTESTADO", "53002814": ""},
+        )
+        self.assertEqual(LogStatusDivergenciaBdo.objects.filter(em_massa=True, status="CONTESTADO").count(), 2)
+
+    def test_status_em_massa_sem_inep_marcado_ou_destino_externo(self):
+        self.client.force_login(self.analista)
+        resp = self.client.post(
+            reverse("bdo_status_divergencia_massa"), {"status": "APROVADO", "next": "https://exemplo.com/"}, follow=True,
+        )
+        self.assertRedirects(resp, reverse("bdo"))
+        self.assertContains(resp, "Marque pelo menos um INEP.")
+
+    def test_reenviar_pro_rata_com_outro_dado_volta_o_status_para_pendente_com_log(self):
+        item = _item(datetime.date(2026, 9, 8), 22, "65")
+        importar_pro_rata(self.boletim, {"35011006": item}, "P.xlsx")
+        self._status("35011006", "CONTESTADO")
+        importar_pro_rata(self.boletim, {"35011006": item}, "P2.xlsx", self.admin)
+        self.assertEqual(self._inep("35011006").status_divergencia, "CONTESTADO")  # mesmo dado: continua
+        importar_pro_rata(self.boletim, {"35011006": _item(datetime.date(2026, 9, 9), 21, "65")}, "P3.xlsx", self.admin)
+        self.assertEqual(self._inep("35011006").status_divergencia, "")
+        log = LogStatusDivergenciaBdo.objects.order_by("-pk").first()
+        self.assertEqual(
+            (log.acao, log.status_anterior, log.status, log.usuario, log.ativado_em_cliente),
+            ("RETIRADO_PRO_RATA", "CONTESTADO", "", self.admin, datetime.date(2026, 9, 8)),
+        )
+
+    def test_visualizador_e_anonimo_nao_alteram_status(self):
+        importar_pro_rata(self.boletim, {"35011006": _item(datetime.date(2026, 9, 8), 22, "65")}, "P.xlsx")
+        visualizador = User.objects.create_user(
+            username="pro-rata-vis", password="senha-teste-123", perfil=User.PERFIL_VISUALIZADOR,
+        )
+        resp = self._status("35011006", "APROVADO", usuario=visualizador)
+        self.assertNotEqual(resp.status_code, 200)
+        resp = self.client.post(
+            reverse("bdo_status_divergencia_massa"), {"inep_bdo": [self._inep("35011006").pk], "status": "APROVADO"},
+        )
+        self.assertNotEqual(resp.status_code, 200)
+        self.client.logout()
+        resp = self.client.post(reverse("bdo_status_divergencia", args=[self._inep("35011006").pk]), {"status": "APROVADO"})
+        self.assertIn(reverse("login"), resp["Location"])
+        self.assertEqual(self._inep("35011006").status_divergencia, "")
+        self.assertFalse(LogStatusDivergenciaBdo.objects.exists())

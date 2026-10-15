@@ -231,3 +231,27 @@ class MesReferenciaBdoForm(forms.Form):
     2026-10-14), mesmo campo da importação."""
 
     mes_referencia = PlanilhaBdoUploadForm.base_fields["mes_referencia"]
+
+
+class PlanilhaProRataUploadForm(forms.Form):
+    """Planilha Pro rata do cliente de um Boletim já importado (pedido do
+    usuário, 2026-10-15). `cleaned_data["dados"]` vai pronto para
+    `importar_pro_rata`."""
+
+    arquivo = forms.FileField(
+        label="Planilha Pro rata (.xlsx)",
+        widget=forms.ClearableFileInput(attrs={"class": "sr-only", "accept": ".xlsx"}),
+        error_messages={"required": "Escolha a planilha Pro rata."},
+    )
+
+    def clean_arquivo(self):
+        from .bdo import PlanilhaBdoError, ler_planilha_pro_rata
+
+        arquivo = self.cleaned_data["arquivo"]
+        if not arquivo.name.lower().endswith(".xlsx"):
+            raise forms.ValidationError("Envie um arquivo .xlsx.")
+        try:
+            self.cleaned_data["dados"] = ler_planilha_pro_rata(arquivo)
+        except PlanilhaBdoError as erro:
+            raise forms.ValidationError(str(erro))
+        return arquivo

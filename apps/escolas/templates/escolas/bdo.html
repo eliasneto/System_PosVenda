@@ -162,24 +162,55 @@ topo seguem os filtros.
     {% endif %}
 </div>
 
+{% if divergencias_na_pagina %}
+{# Pedido do usuário (2026-10-15): status da divergência em massa nos INEPs marcados na página. #}
+<form id="form-status-massa" method="POST" action="{% url 'bdo_status_divergencia_massa' %}"
+      class="flex flex-wrap items-center gap-3 mb-4 px-4 py-3 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <span class="text-[11px] font-black uppercase text-gray-900 dark:text-gray-100"><span id="status-massa-quantidade">0</span> INEP(s) selecionado(s)</span>
+    <label for="status-massa-campo" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Alterar status para</label>
+    <select id="status-massa-campo" name="status" required
+            class="px-3 py-2 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none focus:ring-2 focus:ring-amber-400 font-black text-[11px] uppercase text-gray-800 dark:text-gray-100 cursor-pointer">
+        <option value="" disabled selected>Selecione</option>
+        {% for valor, rotulo in status_divergencia_choices %}
+        <option value="{{ valor }}">{{ rotulo }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit" id="status-massa-aplicar" disabled
+            class="px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 transition disabled:opacity-40 disabled:cursor-not-allowed">
+        Aplicar
+    </button>
+</form>
+{% endif %}
+
 <div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
     <div class="overflow-x-auto">
         <table class="min-w-full text-left border-collapse">
             <thead>
                 <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
                     {% if agrupar == "inep" %}
+                    <th class="px-3 py-2">
+                        {% if divergencias_na_pagina %}
+                        <input type="checkbox" id="status-massa-todos" class="w-4 h-4 accent-amber-500 cursor-pointer align-middle"
+                               title="Marcar todos os INEPs com divergência da página" aria-label="Marcar todos os INEPs com divergência da página">
+                        {% endif %}
+                    </th>
                     <th class="px-4 py-2">INEP</th>
                     <th class="px-4 py-2">Município</th>
                     <th class="px-4 py-2">UF</th>
                     <th class="px-4 py-2 whitespace-nowrap">Data de ativação</th>
+                    <th class="px-4 py-2 whitespace-nowrap" title="Ativado em da planilha Pro rata do cliente para o Boletim, enviada em Administrador &gt; Relatório BDO. Verde: igual à Data de ativação; vermelho: diferente">Ativado em (cliente)</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Dias cobrados no mês de referência do Boletim: ativado antes do mês, 30; ativado no mês, da Data de Ativação até o dia 30 (no dia 31, vai para o mês seguinte); ativado depois do mês, vazio. Boletim sem mês de referência: da Data de Ativação até o dia 30">Dias proporcionais</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Só para conferência: no Boletim RE, a assinatura mensal do RE da escola; no RI, a manutenção mensal do LPU no Lote da escola">Valor assinatura</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor assinatura × Dias proporcionais ÷ 30">Valor proporcional</th>
+                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor da Pro rata do cliente (o desconto). Verde: igual ao desconto do sistema (Valor assinatura − Valor proporcional, até R$ 0,01 de arredondamento); vermelho: diferente">Desconto (cliente)</th>
+                    <th class="px-4 py-2" title="Só nos INEPs com divergência de data ou de desconto: Aprovado ou Contestado (Pendente até o primeiro status). Cada troca fica registrada em log">Status</th>
                     {% elif agrupar == "municipio" %}
                     <th class="px-4 py-2">Município</th>
                     <th class="px-4 py-2">UF</th>
                     <th class="px-4 py-2 text-right">INEPs</th>
-                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor bruto: soma do valor proporcional dos INEPs do município no Boletim, sem outros descontos. Confere com Valor serviços − Valor descontos proporcionais">Total Howbe</th>
+                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor bruto: soma do valor proporcional dos INEPs do município no Boletim, sem outros descontos. Confere com Valor serviços − Valor descontos proporcionais">Total MEGA</th>
                     {% else %}
                     <th class="px-4 py-2">UF</th>
                     <th class="px-4 py-2 text-right">Municípios</th>
@@ -199,13 +230,41 @@ topo seguem os filtros.
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                     {% if agrupar == "inep" %}
                     {% with valores=linha.municipio_bdo %}
+                    <td class="px-3 py-2">
+                        {% if linha.tem_divergencia %}
+                        <input type="checkbox" name="inep_bdo" value="{{ linha.pk }}" form="form-status-massa"
+                               class="js-status-massa w-4 h-4 accent-amber-500 cursor-pointer align-middle"
+                               aria-label="Selecionar o INEP {{ linha.inep }}">
+                        {% endif %}
+                    </td>
                     <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.inep }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold uppercase">{{ valores.municipio }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ valores.uf }}</span></td>
                     <td class="px-4 py-2 whitespace-nowrap"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_ativacao|date:"d/m/Y"|default:"—" }}</span></td>
+                    <td class="px-4 py-2 whitespace-nowrap">
+                        {% if linha.ativado_em_cliente %}
+                        <span class="inline-flex items-center gap-1 align-middle text-[11px] font-black {% if linha.ativacao_confere %}text-emerald-700 dark:text-emerald-400{% elif linha.ativacao_confere is False %}text-red-600 dark:text-red-400{% else %}text-gray-600 dark:text-gray-400{% endif %}">
+                            {% if linha.ativacao_confere %}<i data-lucide="check" class="w-3.5 h-3.5" aria-hidden="true"></i>{% elif linha.ativacao_confere is False %}<i data-lucide="x" class="w-3.5 h-3.5" aria-hidden="true"></i>{% endif %}
+                            {{ linha.ativado_em_cliente|date:"d/m/Y" }}
+                            {% if linha.ativacao_confere %}<span class="sr-only">(confere)</span>{% elif linha.ativacao_confere is False %}<span class="sr-only">(diferente da Data de ativação)</span>{% endif %}
+                        </span>
+                        {% else %}<span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">—</span>{% endif %}
+                    </td>
                     <td class="px-4 py-2 text-right"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.dias_proporcionais is None %}—{% else %}{{ linha.dias_proporcionais }}{% endif %}</span></td>
                     <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-bold text-gray-600 dark:text-gray-400">{% if linha.valor_assinatura is None %}—{% else %}R$ {{ linha.valor_assinatura|intcomma }}{% endif %}</span></td>
                     <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.valor_proporcional is None %}—{% else %}R$ {{ linha.valor_proporcional|intcomma }}{% endif %}</span></td>
+                    <td class="px-4 py-2 text-right whitespace-nowrap">
+                        {% if linha.valor_desconto_cliente is None %}<span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">—</span>{% else %}
+                        <span class="inline-flex items-center gap-1 align-middle text-[11px] font-black {% if linha.valor_confere %}text-emerald-700 dark:text-emerald-400{% elif linha.valor_confere is False %}text-red-600 dark:text-red-400{% else %}text-gray-600 dark:text-gray-400{% endif %}"
+                              {% if linha.valor_desconto_sistema is not None %}title="Desconto do sistema: R$ {{ linha.valor_desconto_sistema|intcomma }}"{% endif %}>
+                            {% if linha.valor_confere %}<i data-lucide="check" class="w-3.5 h-3.5" aria-hidden="true"></i>{% elif linha.valor_confere is False %}<i data-lucide="x" class="w-3.5 h-3.5" aria-hidden="true"></i>{% endif %}
+                            R$ {{ linha.valor_desconto_cliente|intcomma }}
+                            {% if linha.valor_confere %}<span class="sr-only">(confere)</span>{% elif linha.valor_confere is False %}<span class="sr-only">(diferente do desconto do sistema, R$ {{ linha.valor_desconto_sistema|intcomma }})</span>{% endif %}
+                        </span>
+                        {% if linha.valor_confere is False %}<span class="block text-[10px] font-bold text-gray-500 dark:text-gray-400">Sistema R$ {{ linha.valor_desconto_sistema|intcomma }}</span>{% endif %}
+                        {% endif %}
+                    </td>
+                    {% include "escolas/_bdo_status_divergencia.html" %}
                     {% include "escolas/_bdo_valores.html" with valores=valores.valores_em_ordem %}
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ valores.boletim.numero }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ valores.boletim.tipo|default:"—" }}</span></td>
@@ -219,9 +278,9 @@ topo seguem os filtros.
                            title="Ver os INEPs de {{ linha.municipio }} no Boletim {{ linha.boletim }}">{{ linha.quantidade_ineps }}</a>
                     </td>
                     <td class="px-4 py-2 text-right whitespace-nowrap">
-                        <span class="text-[11px] font-black {% if linha.diferenca_howbe == 0 and not linha.ineps_sem_valor_howbe %}text-emerald-700 dark:text-emerald-400{% else %}text-gray-900 dark:text-gray-100{% endif %}">{% if linha.total_howbe is None %}—{% else %}R$ {{ linha.total_howbe|intcomma }}{% endif %}</span>
-                        {% if linha.diferenca_howbe %}<span class="block text-[10px] font-bold text-red-600 dark:text-red-400" title="Total Howbe − (Valor serviços − Valor descontos proporcionais da planilha R$ {{ linha.valor_conferencia_howbe|intcomma }})">Dif. R$ {{ linha.diferenca_howbe|intcomma }}</span>{% endif %}
-                        {% if linha.ineps_sem_valor_howbe %}<span class="block text-[10px] font-bold text-amber-600 dark:text-amber-400" title="INEPs sem valor assinatura, sem data de ativação ou ativados depois do mês de referência ficam fora da soma">{{ linha.ineps_sem_valor_howbe }} INEP(s) sem valor</span>{% endif %}
+                        <span class="text-[11px] font-black {% if linha.diferenca_mega == 0 and not linha.ineps_sem_valor_mega %}text-emerald-700 dark:text-emerald-400{% else %}text-gray-900 dark:text-gray-100{% endif %}">{% if linha.total_mega is None %}—{% else %}R$ {{ linha.total_mega|intcomma }}{% endif %}</span>
+                        {% if linha.diferenca_mega %}<span class="block text-[10px] font-bold text-red-600 dark:text-red-400" title="Total MEGA − (Valor serviços − Valor descontos proporcionais da planilha R$ {{ linha.valor_conferencia_mega|intcomma }})">Dif. R$ {{ linha.diferenca_mega|intcomma }}</span>{% endif %}
+                        {% if linha.ineps_sem_valor_mega %}<span class="block text-[10px] font-bold text-amber-600 dark:text-amber-400" title="INEPs sem valor assinatura, sem data de ativação ou ativados depois do mês de referência ficam fora da soma">{{ linha.ineps_sem_valor_mega }} INEP(s) sem valor</span>{% endif %}
                     </td>
                     {% include "escolas/_bdo_valores.html" with valores=linha.valores_em_ordem %}
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.boletim }}</span></td>
@@ -241,7 +300,7 @@ topo seguem os filtros.
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="14" class="px-6 py-12 text-center text-sm text-gray-500 dark:text-gray-400">Nenhum resultado para os filtros escolhidos.</td>
+                    <td colspan="18" class="px-6 py-12 text-center text-sm text-gray-500 dark:text-gray-400">Nenhum resultado para os filtros escolhidos.</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -326,5 +385,34 @@ document.querySelectorAll('input[data-mascara-data]').forEach(function (input) {
         input.value = partes.join('/');
     });
 });
+
+// Status da divergência em massa (pedido do usuário, 2026-10-15).
+(function () {
+    var todos = document.getElementById("status-massa-todos");
+    var quantidade = document.getElementById("status-massa-quantidade");
+    var aplicar = document.getElementById("status-massa-aplicar");
+    if (!aplicar) return;
+    function marcados() { return document.querySelectorAll(".js-status-massa:checked").length; }
+    function atualizar() {
+        var total = document.querySelectorAll(".js-status-massa").length;
+        var n = marcados();
+        quantidade.textContent = n;
+        aplicar.disabled = n === 0;
+        if (todos) {
+            todos.checked = n > 0 && n === total;
+            todos.indeterminate = n > 0 && n < total;
+        }
+    }
+    document.querySelectorAll(".js-status-massa").forEach(function (caixa) {
+        caixa.addEventListener("change", atualizar);
+    });
+    if (todos) {
+        todos.addEventListener("change", function () {
+            document.querySelectorAll(".js-status-massa").forEach(function (caixa) { caixa.checked = todos.checked; });
+            atualizar();
+        });
+    }
+    atualizar();
+})();
 </script>
 {% endblock %}

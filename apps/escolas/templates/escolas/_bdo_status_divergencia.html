@@ -1,0 +1,25 @@
+{% comment %}
+Célula "Status" do grid por INEP do BDO (pedido do usuário, 2026-10-15):
+campo lista só no INEP com divergência de data ou de desconto com a Pro rata
+do cliente. Mudar o valor grava na hora (HTMX); cada troca fica no log
+(`LogStatusDivergenciaBdo`).
+{% endcomment %}
+<td class="px-4 py-2" id="status-divergencia-{{ linha.pk }}">
+    {% if linha.tem_divergencia %}
+    <label for="status-divergencia-campo-{{ linha.pk }}" class="sr-only">Status da divergência do INEP {{ linha.inep }}</label>
+    <select id="status-divergencia-campo-{{ linha.pk }}" name="status"
+            hx-post="{% url 'bdo_status_divergencia' linha.pk %}" hx-trigger="change"
+            hx-target="#status-divergencia-{{ linha.pk }}" hx-swap="outerHTML"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            {% if linha.status_divergencia_em %}title="Alterado por {{ linha.status_divergencia_por.username|default:'—' }} em {{ linha.status_divergencia_em|date:'d/m/Y H:i' }}"{% endif %}
+            class="px-2 py-1 rounded-lg border outline-none focus:ring-2 focus:ring-amber-400 font-black text-[11px] uppercase cursor-pointer
+                   {% if linha.status_divergencia == 'APROVADO' %}bg-emerald-50 dark:bg-emerald-900/20 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400
+                   {% elif linha.status_divergencia == 'CONTESTADO' %}bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400
+                   {% else %}bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300{% endif %}">
+        {% if not linha.status_divergencia %}<option value="" disabled selected>Pendente</option>{% endif %}
+        {% for valor, rotulo in status_divergencia_choices %}
+        <option value="{{ valor }}" {% if linha.status_divergencia == valor %}selected{% endif %}>{{ rotulo }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+</td>

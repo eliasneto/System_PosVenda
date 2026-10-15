@@ -6,13 +6,15 @@ de INEPs separados por vírgula. Cada Boletim de desempenho é independente
 (pedido do usuário, 2026-10-14): nada já importado é sobreposto, e um
 Boletim já importado é recusado."""
 
+import datetime
 import unicodedata
 from decimal import Decimal, InvalidOperation
 
 import openpyxl
 from django.db import transaction
+from django.utils import timezone
 
-from .models import BoletimBdo, InepBdo, MunicipioBdo
+from .models import BoletimBdo, InepBdo, LogStatusDivergenciaBdo, MunicipioBdo
 
 COLUNA_BOLETIM = "BOLETIM DE DESEMPENHO"
 COLUNA_MUNICIPIO = "MUNICIPIO"
@@ -160,6 +162,132 @@ def importar_planilha_bdo(boletins, tipo, arquivo_nome, usuario, mes_referencia=
         InepBdo.objects.bulk_create(ineps)
         gravados.append(boletim)
     return gravados
+
+
+COLUNAS_PRO_RATA = {
+    "INEP": "INEP",
+    "ATIVADO EM": "Ativado em",
+    "DIAS DESCONTADOS": "Dias Descontados",
+    "VALOR": "Valor",
+}
+
+
+def _data(valor):
+    """Data do Excel ou texto "dd/mm/aaaa"; `None` se vazia ou inválida."""
+    if isinstance(valor, datetime.datetime):
+        return valor.date()
+    if isinstance(valor, datetime.date):
+        return valor
+    try:
+        return datetime.datetime.strptime(_texto(valor).split(" ")[0], "%d/%m/%Y").date()
+    except ValueError:
+        return None
+
+
+def _inteiro(valor):
+    try:
+        numero = Decimal(_texto(valor).replace(",", "."))
+    except InvalidOperation:
+        return None
+    return int(numero) if numero == numero.to_integral_value() and numero >= 0 else None
+
+
+def ler_planilha_pro_rata(arquivo):
+    """Pedido do usuário (2026-10-15): planilha Pro rata do cliente de um
+    Boletim, com o "Ativado em", os "Dias Descontados" e o "Valor" (o
+    desconto) de cada INEP. Lê a 1ª aba com as 4 colunas; devolve
+    `{inep: {"ativado_em", "dias_descontados", "valor_desconto"}}` ou levanta
+    `PlanilhaBdoError`. INEP repetido com dados diferentes é erro: não dá
+    para saber qual vale."""
+    try:
+        workbook = openpyxl.load_workbook(arquivo, read_only=True, data_only=True)
+    except Exception:
+        raise PlanilhaBdoError("Não foi possível ler o arquivo — verifique se é um .xlsx válido.")
+
+    try:
+        for aba in workbook.worksheets:
+            linhas = aba.iter_rows(values_only=True)
+            cabecalho = [_normalizar(valor) for valor in next(linhas, None) or ()]
+            if set(COLUNAS_PRO_RATA) <= set(cabecalho):
+                return _ler_linhas_pro_rata(linhas, {coluna: cabecalho.index(coluna) for coluna in COLUNAS_PRO_RATA})
+    finally:
+        workbook.close()
+    raise PlanilhaBdoError(f"Nenhuma aba do arquivo tem as colunas obrigatórias: {', '.join(COLUNAS_PRO_RATA.values())}.")
+
+
+def _ler_linhas_pro_rata(linhas, indice):
+    dados = {}
+    erros = []
+    for numero_linha, linha in enumerate(linhas, start=2):
+        def campo(coluna):
+            posicao = indice[coluna]
+            return linha[posicao] if posicao < len(linha) else None
+
+        if all(_texto(valor) == "" for valor in linha):
+            continue
+        inep = _texto(campo("INEP"))
+        try:
+            valor_desconto = _valor_decimal(campo("VALOR"))
+        except (InvalidOperation, ValueError):
+            valor_desconto = None
+        item = {
+            "ativado_em": _data(campo("ATIVADO EM")),
+            "dias_descontados": _inteiro(campo("DIAS DESCONTADOS")),
+            "valor_desconto": valor_desconto,
+        }
+        faltando = [
+            nome for nome, ok in (
+                ("INEP", inep), ("Ativado em", item["ativado_em"]),
+                ("Dias Descontados", item["dias_descontados"] is not None), ("Valor", valor_desconto is not None),
+            ) if not ok
+        ]
+        if faltando:
+            erros.append(f"linha {numero_linha} ({', '.join(faltando)})")
+        elif dados.setdefault(inep, item) != item:
+            erros.append(f"linha {numero_linha} (INEP {inep} repetido com outros dados)")
+    if erros:
+        exemplos = "; ".join(erros[:5]) + ("; ..." if len(erros) > 5 else "")
+        raise PlanilhaBdoError(f"{len(erros)} linha(s) com dado ausente ou inválido: {exemplos}.")
+    if not dados:
+        raise PlanilhaBdoError("A planilha não tem nenhuma linha de dados.")
+    return dados
+
+
+@transaction.atomic
+def importar_pro_rata(boletim, dados, arquivo_nome, usuario=None):
+    """Grava o que `ler_planilha_pro_rata` leu nos INEPs do Boletim.
+    Reenviar substitui a anterior: INEP do Boletim fora da planilha fica
+    vazio. INEP com status de divergência cujo dado do cliente mudou volta a
+    pendente, com log (pedido do usuário, 2026-10-15). Devolve
+    `(atualizados, ineps_fora_do_boletim)` - os INEPs da planilha que não
+    estão no Boletim são só contados."""
+    campos = {
+        "ativado_em_cliente": "ativado_em", "dias_descontados_cliente": "dias_descontados",
+        "valor_desconto_cliente": "valor_desconto",
+    }
+    ineps = list(InepBdo.objects.filter(municipio_bdo__boletim=boletim))
+    logs = []
+    for inep in ineps:
+        item = dados.get(inep.inep, {})
+        novos = {campo: item.get(chave) for campo, chave in campos.items()}
+        if inep.status_divergencia and any(getattr(inep, campo) != valor for campo, valor in novos.items()):
+            logs.append(LogStatusDivergenciaBdo(
+                inep_bdo=inep, boletim=boletim.numero, inep=inep.inep,
+                acao=LogStatusDivergenciaBdo.ACAO_RETIRADO_PRO_RATA, status_anterior=inep.status_divergencia,
+                ativado_em_cliente=inep.ativado_em_cliente, valor_desconto_cliente=inep.valor_desconto_cliente,
+                usuario=usuario,
+            ))
+            inep.status_divergencia, inep.status_divergencia_em, inep.status_divergencia_por = "", timezone.now(), usuario
+        for campo, valor in novos.items():
+            setattr(inep, campo, valor)
+    InepBdo.objects.bulk_update(
+        ineps, [*campos, "status_divergencia", "status_divergencia_em", "status_divergencia_por"], batch_size=500,
+    )
+    LogStatusDivergenciaBdo.objects.bulk_create(logs)
+    boletim.pro_rata_arquivo = arquivo_nome
+    boletim.save(update_fields=["pro_rata_arquivo"])
+    atualizados = sum(1 for inep in ineps if inep.ativado_em_cliente)
+    return atualizados, sorted(set(dados) - {inep.inep for inep in ineps})
 
 
 def dias_proporcionais(data_ativacao):
