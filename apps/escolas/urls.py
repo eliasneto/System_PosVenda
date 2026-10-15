@@ -25,6 +25,11 @@ urlpatterns = [
     path("mip/lote/<int:pk>/status/", views.mip_lote_status_update_view, name="mip_lote_status_update"),
     path("mip/lote/status-em-massa/", views.mip_lote_status_em_massa_view, name="mip_lote_status_em_massa"),
     path("mip/lote/<int:pk>/desfazer/", views.mip_lote_desfazer_view, name="mip_lote_desfazer"),
+    path("mip/lote/<int:pk>/reprovar/", views.mip_lote_reprovar_view, name="mip_lote_reprovar"),
+    path(
+        "mip/lote/<int:pk>/desfazer-reprovacao/", views.mip_lote_desfazer_reprovacao_view,
+        name="mip_lote_desfazer_reprovacao",
+    ),
     path(
         "mip/lote/<int:pk>/enviar-nf-portal/",
         views_rpa_mip_lote.rpa_mip_lote_enviar_view,

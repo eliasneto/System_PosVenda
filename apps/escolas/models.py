@@ -54,6 +54,11 @@ class Escola(models.Model):
     # `Lote.EM_FATURAMENTO`.
     EM_FATURAMENTO_LOTE = "em_faturamento_lote"
     FATURAMENTO_CONCLUIDO = "faturamento_concluido"
+    # Pedido do usuário (2026-10-15): LOTE em "Processo Concluído" que o
+    # cliente reprovou (`Lote.REPROVADO`) - o INEP sai de todo relatório de
+    # faturamento e pode entrar num LOTE novo para refaturar. Só gravado por
+    # `reprovar_lote_mip`, nunca escolhido à mão.
+    REPROVADO_MIP = "reprovado"
     STATUS_MIP_CHOICES = [
         # Pedido do usuário (2026-09-25): rótulo "Em Andamento MIP" para não
         # confundir com o "Em Andamento" do RI (Equipamentos); valor gravado
@@ -66,6 +71,7 @@ class Escola(models.Model):
         # (EMAIL_LOTE_ENVIADO, "Email em LOTE enviado"),  # e-mail do LOTE comentado (pedido do usuário, 2026-09-15)
         (EM_FATURAMENTO_LOTE, "Em Faturamento"),
         (FATURAMENTO_CONCLUIDO, "Processo Concluído"),
+        (REPROVADO_MIP, "Reprovado"),
     ]
 
     inep = models.CharField("INEP", max_length=8, unique=True)
@@ -226,7 +232,8 @@ class Escola(models.Model):
         andamento`, nunca por upload manual (não existe tela para isso,
         RN-XXX)."""
         agora = timezone.now()
-        existente = self.notas_fiscais_mip.filter(nome_original=nome_arquivo).first()
+        # NF de LOTE reprovado é histórico: nunca substituída por uma nova.
+        existente = self.notas_fiscais_mip.filter(nome_original=nome_arquivo, lote_reprovado__isnull=True).first()
         if existente is not None:
             existente.arquivo.delete(save=False)
             existente.arquivo.save(nome_arquivo, ContentFile(conteudo_pdf), save=False)
@@ -261,6 +268,13 @@ class NotaFiscalMip(models.Model):
     à Escola, não ao Lote/status atual."""
 
     escola = models.ForeignKey(Escola, on_delete=models.CASCADE, related_name="notas_fiscais_mip")
+    # Pedido do usuário (2026-10-15): NF do INEP quando o LOTE foi reprovado
+    # pelo cliente - fica guardada no LOTE reprovado (histórico) e deixa de
+    # valer para o INEP, que começa sem NF no LOTE novo. Vazio = NF atual.
+    lote_reprovado = models.ForeignKey(
+        "Lote", on_delete=models.SET_NULL, null=True, blank=True, related_name="notas_fiscais_reprovadas",
+        verbose_name="LOTE reprovado",
+    )
     arquivo = models.FileField(
         "Arquivo", upload_to="notas_fiscais_mip/escolas/%Y/%m/", max_length=255
     )
@@ -530,6 +544,12 @@ class Lote(models.Model):
     EM_ANDAMENTO = "em_andamento"
     EM_FATURAMENTO = "em_faturamento"
     FATURAMENTO_CONCLUIDO = "faturamento_concluido"
+    # Pedido do usuário (2026-10-15): o cliente reprovou o LOTE já em
+    # "Processo Concluído" - só pelo Administrador, com motivo
+    # (`reprovar_lote_mip`), e só ele desfaz (`desfazer_reprovacao_lote_mip`).
+    # Os valores saem de todo relatório de faturamento e só aparecem no
+    # filtro "Reprovado" da tela MIP (LOTE).
+    REPROVADO = "reprovado"
     STATUS_CHOICES = [
         # Pedido do usuário (2026-09-26): "Aguardando Encerramento LOTE" saiu
         # — o LOTE nasce "Em Andamento MIP" (constante mantida só para valor
@@ -539,6 +559,7 @@ class Lote(models.Model):
         (EM_ANDAMENTO, "Em Andamento MIP"),
         (EM_FATURAMENTO, "Em Faturamento"),
         (FATURAMENTO_CONCLUIDO, "Processo Concluído"),
+        (REPROVADO, "Reprovado"),
     ]
     status = models.CharField(
         "Status", max_length=30, choices=STATUS_CHOICES, default=EM_ANDAMENTO
@@ -584,6 +605,16 @@ class Lote(models.Model):
     # (`planilhas_faturamento_implantacao_lote`). Só para INEP sem rateio
     # automático por Cidade. {INEP: [{"cidade": "...", "valor": "..."}]}.
     rateio_manual = models.JSONField("Rateio manual por INEP", default=dict, blank=True)
+    motivo_reprovacao = models.TextField("Motivo da reprovação", blank=True)
+    reprovado_em = models.DateTimeField("Reprovado em", null=True, blank=True)
+    reprovado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Reprovado por",
+    )
 
     class Meta:
         verbose_name = "Lote"
@@ -592,6 +623,20 @@ class Lote(models.Model):
 
     def __str__(self):
         return f"LOTE-{self.pk:04d}"
+
+    def notas_fiscais_da_escola(self, escola):
+        """NFs do INEP neste LOTE: no LOTE reprovado, as que ficaram
+        guardadas nele; nos demais, as atuais do INEP (sem LOTE reprovado)
+        sincronizadas depois da criação do LOTE - NF de um LOTE anterior do
+        mesmo INEP (apagado e refeito) não vale para este (decisão do
+        usuário, 2026-10-15). Usa `escola.notas_fiscais_mip.all()` para
+        aproveitar o prefetch."""
+        if self.status == self.REPROVADO:
+            return [nota for nota in escola.notas_fiscais_mip.all() if nota.lote_reprovado_id == self.pk]
+        return [
+            nota for nota in escola.notas_fiscais_mip.all()
+            if nota.lote_reprovado_id is None and nota.sincronizada_em >= self.criado_em
+        ]
 
     def valor_faturado_planilha(self, escola):
         """Valor faturado do INEP na planilha da importação em massa

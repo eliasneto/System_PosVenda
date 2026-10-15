@@ -111,7 +111,7 @@ class BaseLoteComNf(TestCase):
 class EnfileirarRpaMipLoteTests(BaseLoteComNf):
 
     def test_enfileira_com_a_nf_comum_e_audita(self):
-        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         self.assertEqual(log.resultado, LogRpaEaceMip.NA_FILA)
         self.assertEqual(log.municipio, "Goiânia")
         self.assertEqual(log.nome_nota_fiscal, "377_22-09-2026_NOME_MEGA INFRA.pdf")
@@ -125,19 +125,19 @@ class EnfileirarRpaMipLoteTests(BaseLoteComNf):
         self.assertEqual(LogRpaEaceMip.objects.count(), 1)
 
     def test_recusa_depois_de_sucesso(self):
-        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         LogRpaEaceMip.objects.filter(pk=log.pk).update(resultado=LogRpaEaceMip.SUCESSO)
         with self.assertRaisesMessage(EnvioRpaMipRecusado, "já foi enviada"):
             enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
 
     def test_depois_de_erro_permite_de_novo(self):
-        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         LogRpaEaceMip.objects.filter(pk=log.pk).update(resultado=LogRpaEaceMip.ERRO, motivo_erro="valor_divergente")
         enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         self.assertEqual(LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count(), 1)
 
     def test_recusa_quando_a_nf_ja_estava_no_portal(self):
-        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         LogRpaEaceMip.objects.filter(pk=log.pk).update(
             resultado=LogRpaEaceMip.ERRO, motivo_erro="documento_ja_enviado", status_portal="Aprovado",
         )
@@ -148,7 +148,7 @@ class EnfileirarRpaMipLoteTests(BaseLoteComNf):
     def test_documento_ja_enviado_sem_status_lido_permite_de_novo(self):
         """Pedido 533 (2026-10-14): o RPA não leu o status do card e deu
         "NF já enviada" sem anexar nada - o LOTE não pode ficar travado."""
-        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         LogRpaEaceMip.objects.filter(pk=log.pk).update(
             resultado=LogRpaEaceMip.ERRO, motivo_erro="documento_ja_enviado", status_portal="",
         )
@@ -167,7 +167,7 @@ class ProcessarRpaMipTests(BaseLoteComNf):
 
     def setUp(self):
         super().setUp()
-        self.log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [self.log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
 
     def _resultado(self, sucesso=True, motivo=None):
         return ResultadoRpaMip(
@@ -384,7 +384,7 @@ class BotaoNaTelaDoLoteTests(BaseLoteComNf):
         self.assertNotContains(pagina, f'action="{reverse("rpa_mip_lote_enviar", kwargs={"pk": self.lote.pk})}"')
 
     def test_sucesso_desabilita_de_vez(self):
-        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         LogRpaEaceMip.objects.filter(pk=log.pk).update(resultado=LogRpaEaceMip.SUCESSO, executado_em=timezone.now())
         resposta = self.client.get(reverse("rpa_mip_lote_status", kwargs={"pk": self.lote.pk}))
         self.assertContains(resposta, "NF enviada em")
@@ -394,7 +394,7 @@ class BotaoNaTelaDoLoteTests(BaseLoteComNf):
         self.assertEqual(LogRpaEaceMip.objects.count(), 1)
 
     def test_nf_que_ja_estava_no_portal_desabilita_como_sucesso(self):
-        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         LogRpaEaceMip.objects.filter(pk=log.pk).update(
             resultado=LogRpaEaceMip.ERRO, motivo_erro="documento_ja_enviado", status_portal="Aprovado",
             executado_em=timezone.now(),
@@ -405,7 +405,7 @@ class BotaoNaTelaDoLoteTests(BaseLoteComNf):
         self.assertNotContains(resposta, f'action="{reverse("rpa_mip_lote_enviar", kwargs={"pk": self.lote.pk})}"')
 
     def test_erro_habilita_de_novo_com_o_motivo(self):
-        log = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         LogRpaEaceMip.objects.filter(pk=log.pk).update(resultado=LogRpaEaceMip.ERRO, motivo_erro="valor_divergente")
         resposta = self.client.get(reverse("rpa_mip_lote_status", kwargs={"pk": self.lote.pk}))
         self.assertContains(resposta, "Tentar de novo")
@@ -435,3 +435,81 @@ class FilaMostraMipTests(BaseLoteComNf):
         self.assertContains(resposta, "377_22-09-2026_NOME_MEGA INFRA.pdf"[-30:])
         self.assertEqual(resposta.context["total_na_fila"], 1)
         self.assertEqual(len(resposta.context["page_mip"]), 1)
+
+
+class NfAnteriorAoLoteTests(BaseLoteComNf):
+    """Decisão do usuário (2026-10-15): NF de um LOTE anterior do mesmo
+    INEP (apagado e refeito) não vale para o LOTE novo."""
+
+    def test_nf_sincronizada_antes_do_lote_e_ignorada(self):
+        antiga = self._nf(self.escola_a, "749_14-10-2026_NOME_MEGA INFRA.pdf")
+        NotaFiscalMip.objects.filter(pk=antiga.pk).update(sincronizada_em=self.lote.criado_em - timedelta(hours=1))
+        self._nf(self.escola_b, "749_14-10-2026_NOME_MEGA INFRA.pdf")
+        NotaFiscalMip.objects.filter(nome_original__startswith="749", escola=self.escola_b).update(
+            sincronizada_em=self.lote.criado_em - timedelta(hours=1)
+        )
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        self.assertEqual(log.nome_nota_fiscal, "377_22-09-2026_NOME_MEGA INFRA.pdf")
+
+
+class RateioManualTests(BaseLoteComNf):
+    """Decisão do usuário (2026-10-15): no rateio manual cada parte tem
+    a própria NF - 1 envio por NF, todas no mesmo clique."""
+
+    def setUp(self):
+        super().setUp()
+        self.lote.rateio_manual = {
+            self.escola_b.inep: [{"cidade": "Goiânia", "valor": "100.00"}, {"cidade": "Goiânia 1", "valor": "50.00"}],
+        }
+        self.lote.save(update_fields=["rateio_manual"])
+        self._nf(self.escola_b, "754_14-10-2026_NOME_MEGA INFRA.pdf")
+        self._nf(self.escola_b, "755_14-10-2026_NOME_MEGA INFRA.pdf")
+
+    def test_enfileira_a_nf_comum_e_1_por_parte_do_rateio(self):
+        logs = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        self.assertEqual(
+            [log.nome_nota_fiscal for log in logs],
+            ["377_22-09-2026_NOME_MEGA INFRA.pdf", "754_14-10-2026_NOME_MEGA INFRA.pdf",
+             "755_14-10-2026_NOME_MEGA INFRA.pdf"],
+        )
+        self.assertEqual({log.municipio for log in logs}, {"Goiânia"})
+        self.assertEqual(sorted(logs, key=lambda log: log.enfileirado_em), logs)
+
+    def test_lote_so_com_inep_rateado(self):
+        NotaFiscalMip.objects.filter(nome_original__startswith="377").delete()
+        self.lote.escolas.set([self.escola_b])
+        logs = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        self.assertEqual(len(logs), 2)
+
+    def test_nf_sobrando_no_inep_rateado_bloqueia(self):
+        self.lote.escolas.set([self.escola_b])
+        with self.assertRaisesMessage(EnvioRpaMipRecusado, "rateio em 2 partes, mas 3"):
+            enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+
+    def test_falta_nf_de_uma_parte_bloqueia(self):
+        NotaFiscalMip.objects.filter(nome_original__startswith="755").delete()
+        with self.assertRaisesMessage(EnvioRpaMipRecusado, "rateio em 2 partes, mas 1"):
+            enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+
+    def test_so_fica_verde_com_todas_enviadas_e_reenvia_so_as_pendentes(self):
+        logs = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        LogRpaEaceMip.objects.filter(pk__in=[logs[0].pk, logs[1].pk]).update(resultado=LogRpaEaceMip.SUCESSO)
+        LogRpaEaceMip.objects.filter(pk=logs[2].pk).update(resultado=LogRpaEaceMip.ERRO, motivo_erro="valor_divergente")
+        estado = estados_rpa_mip_dos_lotes([self._lote_prefetch()])[self.lote.pk]
+        self.assertFalse(estado.enviado)
+        self.assertTrue(estado.pode_enviar)
+        self.assertIn("valor", estado.motivo_erro_legivel.lower())
+        [novo] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        self.assertEqual(novo.nome_nota_fiscal, "755_14-10-2026_NOME_MEGA INFRA.pdf")
+        LogRpaEaceMip.objects.filter(pk=novo.pk).update(resultado=LogRpaEaceMip.SUCESSO)
+        estado = estados_rpa_mip_dos_lotes([self._lote_prefetch()])[self.lote.pk]
+        self.assertTrue(estado.enviado)
+        with self.assertRaisesMessage(EnvioRpaMipRecusado, "já foi enviada"):
+            enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+
+    def test_botao_mostra_as_nfs_do_rateio_na_confirmacao(self):
+        self.client.force_login(self.usuario)
+        resposta = self.client.get(reverse("rpa_mip_lote_status", kwargs={"pk": self.lote.pk}))
+        self.assertContains(resposta, "As 3 Notas Fiscais do rateio")
+        self.client.post(reverse("rpa_mip_lote_enviar", kwargs={"pk": self.lote.pk}))
+        self.assertEqual(LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count(), 3)

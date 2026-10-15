@@ -14,6 +14,7 @@ from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
@@ -40,6 +41,8 @@ from .services import (
     criar_lote_mip,
     criar_lotes_mip_em_massa,
     desfazer_lote_mip,
+    desfazer_reprovacao_lote_mip,
+    reprovar_lote_mip,
     # enviar_email_lote, montar_assunto_email_lote, montar_corpo_email_lote — e-mail do LOTE comentado (pedido do usuário, 2026-09-15, ver `.services`).
     escolas_com_lado3_preenchido_no_arquivo_ativo,
     escolas_elegiveis_lote_mip,
@@ -771,7 +774,7 @@ def mip_lote_inep_view(request):
                     # 2026-09-24): INEP rateado pode ter mais de 1 Nota
                     # Fiscal (`NotaFiscalMip`, 1 por fração/Cidade) —
                     # lista, não mais um único arquivo.
-                    "notas_fiscais": list(escola.notas_fiscais_mip.all()),
+                    "notas_fiscais": registro_lote.notas_fiscais_da_escola(escola),
                 }
             )
         # Pedido do usuário (2026-09-16): coluna "Valor Total do LOTE" na
@@ -848,9 +851,18 @@ def mip_lote_inep_view(request):
     for linha in linhas_lote:
         linha["rpa_mip"] = estados_rpa_mip[linha["lote"].pk]
 
-    valor_total_geral = sum((linha["valor_total_lote"] for linha in linhas_lote_filtradas), Decimal("0.00"))
-    valor_total_geral_incompleto = any(linha["valor_total_lote_incompleto"] for linha in linhas_lote_filtradas)
-    valor_total_todos_status = sum((linha["valor_total_lote"] for linha in linhas_lote_todos), Decimal("0.00"))
+    # Pedido do usuário (2026-10-15): LOTE reprovado não entra em total de
+    # faturamento - só aparece somado no próprio filtro "Reprovado".
+    linhas_somadas = [
+        linha for linha in linhas_lote_filtradas
+        if status_filtro == Lote.REPROVADO or linha["lote"].status != Lote.REPROVADO
+    ]
+    valor_total_geral = sum((linha["valor_total_lote"] for linha in linhas_somadas), Decimal("0.00"))
+    valor_total_geral_incompleto = any(linha["valor_total_lote_incompleto"] for linha in linhas_somadas)
+    valor_total_todos_status = sum(
+        (linha["valor_total_lote"] for linha in linhas_lote_todos if linha["lote"].status != Lote.REPROVADO),
+        Decimal("0.00"),
+    )
 
     return render(
         request,
@@ -1088,6 +1100,9 @@ def mip_lote_status_update_view(request, pk):
     if novo_status not in (Lote.EM_ANDAMENTO, Lote.EM_FATURAMENTO, Lote.FATURAMENTO_CONCLUIDO):
         messages.error(request, "Status inválido.")
         return redirect(next_url)
+    if lote.status == Lote.REPROVADO:
+        messages.error(request, f'{lote} está reprovado — use "Desfazer reprovação".')
+        return redirect(next_url)
     if lote.status == Lote.FATURAMENTO_CONCLUIDO and not request.user.is_administrador:
         # Pedido do usuário (2026-10-14): só o Administrador reabre um LOTE
         # em "Processo Concluído" - mesmo critério do Status (MIP) do INEP.
@@ -1104,6 +1119,46 @@ def mip_lote_status_update_view(request, pk):
     messages.success(request, f'{lote} atualizado para "{lote.get_status_display()}".')
 
     return redirect(next_url)
+
+
+def _next_url_lote(request):
+    next_url = request.POST.get("next") or ""
+    return next_url if next_url.startswith("/") else reverse("mip_lote_inep")
+
+
+@login_required
+@require_POST
+def mip_lote_reprovar_view(request, pk):
+    """Pedido do usuário (2026-10-15): "Reprovar" do LOTE em "Processo
+    Concluído" que o cliente reprovou - só o Administrador, com motivo
+    (`reprovar_lote_mip`)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode reprovar um LOTE.")
+    lote = get_object_or_404(Lote, pk=pk)
+    try:
+        reprovar_lote_mip(lote, request.POST.get("motivo"), request.user)
+    except LoteMipError as erro:
+        messages.error(request, str(erro))
+    else:
+        messages.success(request, f"{lote} reprovado. Os INEPs podem entrar num LOTE novo para refaturar.")
+    return redirect(_next_url_lote(request))
+
+
+@login_required
+@require_POST
+def mip_lote_desfazer_reprovacao_view(request, pk):
+    """Volta o LOTE reprovado para "Processo Concluído" - só o
+    Administrador (`desfazer_reprovacao_lote_mip`)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode desfazer a reprovação de um LOTE.")
+    lote = get_object_or_404(Lote, pk=pk)
+    try:
+        desfazer_reprovacao_lote_mip(lote, request.user)
+    except LoteMipError as erro:
+        messages.error(request, str(erro))
+    else:
+        messages.success(request, f'Reprovação de {lote} desfeita — voltou para "Processo Concluído".')
+    return redirect(_next_url_lote(request))
 
 
 @login_required
@@ -1134,7 +1189,8 @@ def mip_lote_status_em_massa_view(request):
     if pulados:
         messages.error(
             request,
-            f'{len(pulados)} LOTE(s) já em "Processo Concluído" não foram alterados (só o Administrador pode): '
+            f'{len(pulados)} LOTE(s) não foram alterados ("Processo Concluído" só o Administrador altera; '
+            '"Reprovado" só pelo "Desfazer reprovação"): '
             + ", ".join(str(lote) for lote in pulados) + ".",
         )
     return redirect(next_url)
@@ -1303,7 +1359,7 @@ def mip_detail_view(request, inep):
     # RN ampliada (bug real reportado pelo usuário, 2026-09-24): INEP
     # rateado pode ter mais de 1 Nota Fiscal (`NotaFiscalMip`, 1 por
     # fração/Cidade) — lista, não mais um único arquivo.
-    notas_fiscais_mip = list(escola.notas_fiscais_mip.all())
+    notas_fiscais_mip = list(escola.notas_fiscais_mip.filter(lote_reprovado__isnull=True))
     # RN-095: dados da própria RI só para comparação visual (ver docstring
     # acima) — calculado só quando o template vai exibi-lo, para não
     # gastar consulta/CPU à toa nos outros 2 status do MIP.
@@ -1335,7 +1391,7 @@ def mip_detail_view(request, inep):
     status_mip_opcoes_editavel = [
         (valor, rotulo)
         for valor, rotulo in Escola.STATUS_MIP_CHOICES
-        if valor not in (Escola.AGUARDANDO_ENCERRAMENTO_LOTE, Escola.EM_FATURAMENTO_LOTE)
+        if valor not in (Escola.AGUARDANDO_ENCERRAMENTO_LOTE, Escola.EM_FATURAMENTO_LOTE, Escola.REPROVADO_MIP)
     ]
 
     somente_servico_editavel = escola.status_mip == Escola.AGUARDANDO_VALIDACAO_EACE
@@ -1405,13 +1461,14 @@ def mip_status_update_view(request, inep):
     novo_status = (request.POST.get("status_mip") or "").strip()
     if (
         novo_status not in dict(Escola.STATUS_MIP_CHOICES)
-        or novo_status in (Escola.AGUARDANDO_ENCERRAMENTO_LOTE, Escola.EM_FATURAMENTO_LOTE)
+        or novo_status in (Escola.AGUARDANDO_ENCERRAMENTO_LOTE, Escola.EM_FATURAMENTO_LOTE, Escola.REPROVADO_MIP)
     ):
         messages.error(request, "Status inválido.")
         return redirect("mip_detail", inep=inep)
     if novo_status == escola.status_mip:
         return redirect("mip_detail", inep=inep)
-    lote = escola.lotes.order_by("-criado_em").first()
+    # LOTE reprovado não prende o INEP (pedido do usuário, 2026-10-15).
+    lote = escola.lotes.exclude(status=Lote.REPROVADO).order_by("-criado_em").first()
     if lote:
         # Pedido do usuário (2026-10-14): INEP em LOTE só muda de status
         # pelo LOTE (`mip_lote_status_update_view`), que leva todos os

@@ -27,11 +27,14 @@ def _lote_com_notas(pk):
 def rpa_mip_lote_enviar_view(request, pk):
     lote = _lote_com_notas(pk)
     try:
-        enfileirar_rpa_mip_lote(lote, request.user)
+        logs = enfileirar_rpa_mip_lote(lote, request.user)
     except EnvioRpaMipRecusado as exc:
         messages.error(request, f"{lote}: {exc}")
     else:
-        messages.success(request, f"{lote}: envio da NF ao portal EACE colocado na fila.")
+        if len(logs) > 1:
+            messages.success(request, f"{lote}: envio de {len(logs)} NFs ao portal EACE colocado na fila.")
+        else:
+            messages.success(request, f"{lote}: envio da NF ao portal EACE colocado na fila.")
     next_url = request.POST.get("next") or ""
     return redirect(next_url if next_url.startswith("/") else "mip_lote_inep")
 

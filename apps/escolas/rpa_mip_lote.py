@@ -3,8 +3,8 @@ formalizar pelo Orquestrador em business_rules.md; pedido do usuário,
 2026-09-29).
 
 Botão "Enviar ao portal EACE" de cada LOTE ("Projeto > MIP (LOTE)") ->
-`enfileirar_rpa_mip_lote` cria 1 `LogRpaEaceMip` "Na fila". Quem executa
-é o mesmo worker da fila do RPA EACE do RI (`manage.py
+`enfileirar_rpa_mip_lote` cria 1 `LogRpaEaceMip` "Na fila" por NF a enviar.
+Quem executa é o mesmo worker da fila do RPA EACE do RI (`manage.py
 processar_fila_rpa_eace`, 1 por vez em todo o sistema - RN-058), que chama
 `processar_proximo_rpa_mip` quando o item mais antigo da fila é do MIP.
 
@@ -12,13 +12,18 @@ A NF enviada é a comum a TODOS os INEPs do LOTE (decisão do usuário,
 2026-09-29 - a NF é por município e o mesmo PDF é gravado em cada INEP que
 ela referencia); INEP rateado pode ter NF de outro município também, por
 isso "comum a todos", não "qualquer uma".
+
+Rateio manual (decisão do usuário, 2026-10-15): cada parte do INEP vira
+1 NF própria, então o LOTE pode ter mais de 1 NF - 1 envio por NF, todas
+enfileiradas no mesmo clique; o valor do PDF escolhe o card no portal.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -40,22 +45,25 @@ def _chave_nome_nf(nome: str) -> str:
     return re.sub(r"[\s_]+", "_", nome.strip().lower())
 
 
+def _por_nome(notas: list[NotaFiscalMip]) -> dict[str, NotaFiscalMip]:
+    """{chave do nome: NF} - entre registros duplicados da mesma NF, vale a
+    sincronização mais recente."""
+    da_escola = {}
+    for nota in notas:
+        chave = _chave_nome_nf(nota.nome_original)
+        atual = da_escola.get(chave)
+        if atual is None or (nota.sincronizada_em or 0) > (atual.sincronizada_em or 0):
+            da_escola[chave] = nota
+    return da_escola
+
+
 def nota_fiscal_comum_do_lote(notas_por_escola: list[list[NotaFiscalMip]]) -> tuple[NotaFiscalMip | None, str]:
     """A NF (pelo nome do PDF, `_chave_nome_nf`) presente em todos os INEPs
-    do LOTE - entre registros duplicados da mesma NF, vale a sincronização
-    mais recente. Devolve `(nota, "")`, ou `(None, motivo)` quando não há
+    do LOTE. Devolve `(nota, "")`, ou `(None, motivo)` quando não há
     exatamente 1."""
     if not notas_por_escola:
         return None, "O LOTE não tem INEPs."
-    por_nome = []
-    for notas in notas_por_escola:
-        da_escola = {}
-        for nota in notas:
-            chave = _chave_nome_nf(nota.nome_original)
-            atual = da_escola.get(chave)
-            if atual is None or (nota.sincronizada_em or 0) > (atual.sincronizada_em or 0):
-                da_escola[chave] = nota
-        por_nome.append(da_escola)
+    por_nome = [_por_nome(notas) for notas in notas_por_escola]
     if any(not notas for notas in por_nome):
         return None, "Há INEP do LOTE sem Nota Fiscal sincronizada."
     comuns = set(por_nome[0]).intersection(*por_nome[1:])
@@ -66,35 +74,98 @@ def nota_fiscal_comum_do_lote(notas_por_escola: list[list[NotaFiscalMip]]) -> tu
     return por_nome[0][comuns.pop()], ""
 
 
-def _notas_por_escola(lote: Lote) -> list[list[NotaFiscalMip]]:
-    """Usa o prefetch da tela (`escolas` + `notas_fiscais_mip`) quando
-    houver - sem consulta extra por LOTE."""
-    return [list(escola.notas_fiscais_mip.all()) for escola in lote.escolas.all()]
+def notas_fiscais_do_lote(lote: Lote) -> tuple[list[NotaFiscalMip], str]:
+    """NFs que o LOTE envia ao portal: a comum aos INEPs sem rateio manual
+    (`nota_fiscal_comum_do_lote`) + 1 por parte de cada INEP com rateio
+    manual (`Lote.rateio_manual`). Devolve `(notas, "")`, ou `([], motivo)`
+    quando faltar ou sobrar NF. Usa o prefetch da tela (`escolas` +
+    `notas_fiscais_mip`) quando houver - sem consulta extra por LOTE."""
+    escolas = list(lote.escolas.all())
+    if not escolas:
+        return [], "O LOTE não tem INEPs."
+    rateio_manual = lote.rateio_manual or {}
+    sem_rateio = [escola for escola in escolas if not rateio_manual.get(escola.inep)]
+    notas = {}
+    if sem_rateio:
+        nota, motivo = nota_fiscal_comum_do_lote([lote.notas_fiscais_da_escola(escola) for escola in sem_rateio])
+        if nota is None:
+            return [], motivo
+        notas[_chave_nome_nf(nota.nome_original)] = nota
+    for escola in escolas:
+        partes = len(rateio_manual.get(escola.inep) or [])
+        if not partes:
+            continue
+        das_partes = {
+            chave: nota for chave, nota in _por_nome(lote.notas_fiscais_da_escola(escola)).items()
+            if chave not in notas
+        }
+        if len(das_partes) != partes:
+            return [], (
+                f"O INEP {escola.inep} tem rateio em {partes} partes, mas {len(das_partes)} "
+                "Nota(s) Fiscal(is) sincronizada(s) - precisa de 1 por parte."
+            )
+        notas.update(das_partes)
+    return sorted(notas.values(), key=lambda nota: nota.nome_original), ""
 
 
 @dataclass
 class EstadoRpaMipLote:
-    """O que o botão do LOTE mostra (`_rpa_mip_lote_acao.html`)."""
+    """O que o botão do LOTE mostra (`_rpa_mip_lote_acao.html`).
+    `ultimo_log_por_nota`: último envio de cada NF do LOTE (chave
+    `_chave_nome_nf`); `ultimo_log_do_lote`: o mais recente de todos."""
 
-    ultimo_log: LogRpaEaceMip | None
-    nota_fiscal: NotaFiscalMip | None
+    notas_fiscais: list[NotaFiscalMip]
     motivo_sem_nota: str
+    ultimo_log_por_nota: dict[str, LogRpaEaceMip] = field(default_factory=dict)
+    ultimo_log_do_lote: LogRpaEaceMip | None = None
+
+    def _ultimo_log(self, nota) -> LogRpaEaceMip | None:
+        return self.ultimo_log_por_nota.get(_chave_nome_nf(nota.nome_original))
+
+    @staticmethod
+    def _log_enviado(log) -> bool:
+        """Sucesso, ou o card já não estava Pendente ("documento já
+        enviado") - nos 2 casos a NF não vai de novo."""
+        return bool(log and (log.resultado == LogRpaEaceMip.SUCESSO or log.ja_estava_no_portal))
 
     @property
     def em_andamento(self) -> bool:
-        return bool(self.ultimo_log and self.ultimo_log.em_andamento)
+        return any(log.em_andamento for log in self.ultimo_log_por_nota.values())
+
+    @property
+    def notas_a_enviar(self) -> list[NotaFiscalMip]:
+        return [
+            nota for nota in self.notas_fiscais
+            if not self._log_enviado(self._ultimo_log(nota))
+            and not (self._ultimo_log(nota) and self._ultimo_log(nota).em_andamento)
+        ]
+
+    @property
+    def enviado(self) -> bool:
+        """Todas as NFs do LOTE enviadas - o ícone fica desabilitado de
+        vez. Sem NF calculável (ex.: LOTE antigo), vale o último envio."""
+        if self.notas_fiscais:
+            return all(self._log_enviado(self._ultimo_log(nota)) for nota in self.notas_fiscais)
+        return self._log_enviado(self.ultimo_log_do_lote)
+
+    @property
+    def ultimo_log(self) -> LogRpaEaceMip | None:
+        """O envio que o botão descreve: o que está na fila/processando,
+        senão o mais recente das NFs do LOTE."""
+        andamento = [log for log in self.ultimo_log_por_nota.values() if log.em_andamento]
+        if andamento:
+            return next((log for log in andamento if log.resultado == LogRpaEaceMip.PROCESSANDO), andamento[0])
+        logs = [log for log in map(self._ultimo_log, self.notas_fiscais) if log]
+        return max(logs, key=lambda log: log.criado_em) if logs else self.ultimo_log_do_lote
 
     @property
     def ja_estava_no_portal(self) -> bool:
         return bool(self.ultimo_log and self.ultimo_log.ja_estava_no_portal)
 
     @property
-    def enviado(self) -> bool:
-        """Sucesso, ou o card já não estava Pendente ("documento já
-        enviado") - nos 2 casos o ícone fica desabilitado de vez."""
-        return bool(
-            self.ultimo_log and (self.ultimo_log.resultado == LogRpaEaceMip.SUCESSO or self.ja_estava_no_portal)
-        )
+    def nota_fiscal(self) -> NotaFiscalMip | None:
+        """1ª NF ainda a enviar (o template habilita o botão com ela)."""
+        return next(iter(self.notas_a_enviar), None)
 
     @property
     def pode_enviar(self) -> bool:
@@ -102,21 +173,27 @@ class EstadoRpaMipLote:
 
     @property
     def motivo_erro_legivel(self) -> str:
-        if self.ultimo_log and self.ultimo_log.resultado == LogRpaEaceMip.ERRO and not self.ja_estava_no_portal:
-            return self.ultimo_log.motivo_erro_legivel
-        return ""
+        erros = [
+            log for log in map(self._ultimo_log, self.notas_a_enviar)
+            if log and log.resultado == LogRpaEaceMip.ERRO and not log.ja_estava_no_portal
+        ]
+        return max(erros, key=lambda log: log.criado_em).motivo_erro_legivel if erros else ""
 
 
 def estados_rpa_mip_dos_lotes(lotes: list[Lote]) -> dict[int, EstadoRpaMipLote]:
-    """Estado do botão de cada LOTE - 1 consulta só para os últimos logs
-    de todos os LOTEs da página (sem N+1)."""
+    """Estado do botão de cada LOTE - 1 consulta só para os logs de todos
+    os LOTEs da página (sem N+1)."""
     ultimo_por_lote: dict[int, LogRpaEaceMip] = {}
+    ultimo_por_nota: dict[int, dict[str, LogRpaEaceMip]] = {}
     for log in LogRpaEaceMip.objects.filter(lote__in=lotes).order_by("lote_id", "-criado_em"):
         ultimo_por_lote.setdefault(log.lote_id, log)
+        ultimo_por_nota.setdefault(log.lote_id, {}).setdefault(_chave_nome_nf(log.nome_nota_fiscal), log)
     estados = {}
     for lote in lotes:
-        nota, motivo = nota_fiscal_comum_do_lote(_notas_por_escola(lote))
-        estados[lote.pk] = EstadoRpaMipLote(ultimo_por_lote.get(lote.pk), nota, motivo)
+        notas, motivo = notas_fiscais_do_lote(lote)
+        estados[lote.pk] = EstadoRpaMipLote(
+            notas, motivo, ultimo_por_nota.get(lote.pk, {}), ultimo_por_lote.get(lote.pk)
+        )
     return estados
 
 
@@ -128,39 +205,47 @@ class EnvioRpaMipRecusado(Exception):
     """Motivo (em português) de o botão não poder enfileirar agora."""
 
 
-def enfileirar_rpa_mip_lote(lote: Lote, usuario) -> LogRpaEaceMip:
-    """Coloca o envio da NF do LOTE na fila. Recusa (`EnvioRpaMipRecusado`)
-    se já houver um envio na fila/processando, se o último envio já deu
-    Sucesso, ou se o LOTE não tiver 1 NF comum a todos os INEPs."""
+def enfileirar_rpa_mip_lote(lote: Lote, usuario) -> list[LogRpaEaceMip]:
+    """Coloca na fila 1 envio por NF do LOTE ainda não enviada. Recusa
+    (`EnvioRpaMipRecusado`) se já houver envio na fila/processando, se
+    todas as NFs já foram enviadas, ou se faltar/sobrar NF
+    (`notas_fiscais_do_lote`)."""
     with transaction.atomic():
         Lote.objects.select_for_update().filter(pk=lote.pk).first()
-        ultimo = LogRpaEaceMip.objects.filter(lote=lote).order_by("-criado_em").first()
-        if ultimo and ultimo.em_andamento:
+        if lote.status == Lote.REPROVADO:
+            raise EnvioRpaMipRecusado("LOTE reprovado pelo cliente — a NF dele não vai ao portal.")
+        estado = estado_rpa_mip_do_lote(lote)
+        if estado.em_andamento:
             raise EnvioRpaMipRecusado("O envio da NF deste LOTE já está na fila.")
-        if ultimo and ultimo.resultado == LogRpaEaceMip.SUCESSO:
+        if estado.enviado:
+            if estado.ja_estava_no_portal:
+                raise EnvioRpaMipRecusado(estado.ultimo_log.motivo_erro_legivel)
             raise EnvioRpaMipRecusado("A NF deste LOTE já foi enviada ao portal com sucesso.")
-        if ultimo and ultimo.ja_estava_no_portal:
-            raise EnvioRpaMipRecusado(ultimo.motivo_erro_legivel)
-        nota, motivo = nota_fiscal_comum_do_lote(_notas_por_escola(lote))
-        if nota is None:
-            raise EnvioRpaMipRecusado(motivo)
-        log = LogRpaEaceMip.objects.create(
-            lote=lote,
-            nota_fiscal=nota,
-            nome_nota_fiscal=nota.nome_original[:255],
-            municipio=lote.municipio,
-            solicitado_por=usuario,
-            enfileirado_em=timezone.now(),
+        if not estado.notas_a_enviar:
+            raise EnvioRpaMipRecusado(estado.motivo_sem_nota)
+        agora = timezone.now()
+        logs = [
+            LogRpaEaceMip.objects.create(
+                lote=lote,
+                nota_fiscal=nota,
+                nome_nota_fiscal=nota.nome_original[:255],
+                municipio=lote.municipio,
+                solicitado_por=usuario,
+                # Mesma ordem de chegada na fila que a ordem das NFs.
+                enfileirado_em=agora + timedelta(microseconds=ordem),
+            )
+            for ordem, nota in enumerate(estado.notas_a_enviar)
+        ]
+    for log in logs:
+        auditar(
+            usuario,
+            Auditoria.EXECUCAO_RPA_EACE,
+            entidade="Lote",
+            entidade_id=lote.pk,
+            campo="Envio da NF ao portal EACE (MIP)",
+            valor_novo=f"Na fila - {log.nome_nota_fiscal}",
         )
-    auditar(
-        usuario,
-        Auditoria.EXECUCAO_RPA_EACE,
-        entidade="Lote",
-        entidade_id=lote.pk,
-        campo="Envio da NF ao portal EACE (MIP)",
-        valor_novo=f"Na fila - {log.nome_nota_fiscal}",
-    )
-    return log
+    return logs
 
 
 def proximo_enfileirado_rpa_mip_em():

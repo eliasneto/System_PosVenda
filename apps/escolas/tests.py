@@ -2642,8 +2642,8 @@ class IconeNotaFiscalMipTests(TestCase):
     def test_mip_lote_inep_mostra_icone_habilitado_e_desabilitado(self):
         escola_com_nf, _ri1 = _criar_escola_elegivel_lote("10000303")
         escola_sem_nf, _ri2 = _criar_escola_elegivel_lote("10000304")
-        nota = escola_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000303.pdf")
         criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        nota = escola_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000303.pdf")
 
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"))
@@ -2670,8 +2670,8 @@ class MipLoteInepFiltroNfTests(TestCase):
         )
         self.escola_com_nf, _ri1 = _criar_escola_elegivel_lote("10000401")
         self.escola_sem_nf, _ri2 = _criar_escola_elegivel_lote("10000402")
-        self.escola_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000401.pdf")
         self.lote = criar_lote_mip("GO", "Abadiânia", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        self.escola_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000401.pdf")
 
     def test_filtro_com_nf_mostra_so_quem_tem(self):
         self.client.force_login(self.usuario)
@@ -2698,8 +2698,8 @@ class MipLoteInepFiltroNfTests(TestCase):
         fazer esse 2º LOTE sumir da lista inteira, não só esvaziar seu
         drill-down."""
         escola_so_com_nf, _ri3 = _criar_escola_elegivel_lote("10000403", municipio="Anápolis")
-        escola_so_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000403.pdf")
         lote2 = criar_lote_mip("GO", "Anápolis", datetime.date(2026, 9, 1), datetime.date(2026, 9, 30), self.usuario)
+        escola_so_com_nf.adicionar_ou_substituir_nota_fiscal_mip(b"conteudo fake pdf", "10000403.pdf")
 
         self.client.force_login(self.usuario)
         resp = self.client.get(reverse("mip_lote_inep"), {"nf": "sem"})

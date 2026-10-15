@@ -35,7 +35,9 @@ from apps.auditoria.services import registrar as auditar
 from apps.ri.models import KitPadrao, Ri, RiHistorico
 from apps.ri.services import casar_planilha_eace_com_catalogo, quantidade_planilha_eace, trocar_status_com_log
 
-from .models import Escola, EscolaItemRelatorioEaceMip, Lote, NotasFiscaisMip, PlanilhaRelatorioEaceMip
+from .models import (
+    Escola, EscolaItemRelatorioEaceMip, Lote, NotaFiscalMip, NotasFiscaisMip, PlanilhaRelatorioEaceMip,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -929,8 +931,8 @@ def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim, *, exig
     data_ativacao_ri_atual = Subquery(ri_atual_qs.values("data_ativacao")[:1], output_field=DateField())
     # Pedido do usuário (2026-10-13): INEP pausado no MIP não entra em LOTE.
     escolas = Escola.objects.annotate(data_ativacao_ri_atual=data_ativacao_ri_atual).filter(
-        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, estado=estado, municipio=municipio, pausado_mip=False,
-    ).exclude(lotes__isnull=False)  # nunca o mesmo INEP em 2 LOTEs
+        status_mip__in=STATUS_MIP_ELEGIVEIS_LOTE, estado=estado, municipio=municipio, pausado_mip=False,
+    ).exclude(pk__in=_escolas_em_lote_ativo())  # nunca o mesmo INEP em 2 LOTEs (fora os reprovados)
     if exigir_relatorio_eace_mip:
         # Pedido do usuário (2026-09-30): LOTE só com INEP que veio no
         # Relatório EACE (MIP) — mesmo critério do grid do MIP. A
@@ -968,6 +970,19 @@ def escolas_elegiveis_lote_mip(estado, municipio, data_inicio, data_fim, *, exig
             escola.valor_total_lote_mip = valor_total_lado2
             elegiveis.append(escola)
     return elegiveis
+
+
+def _escolas_em_lote_ativo():
+    """Ids das Escolas que estão em algum LOTE não reprovado - pedido do
+    usuário (2026-10-15): INEP de LOTE reprovado pode entrar num LOTE novo
+    para refaturar; o "nunca o mesmo INEP em 2 LOTEs" vale só para os
+    LOTEs que não foram reprovados."""
+    return Lote.escolas.through.objects.exclude(lote__status=Lote.REPROVADO).values("escola_id")
+
+
+# Status (MIP) que deixam o INEP entrar num LOTE: o de sempre e o do INEP
+# de LOTE reprovado (pedido do usuário, 2026-10-15).
+STATUS_MIP_ELEGIVEIS_LOTE = (Escola.AGUARDANDO_VALIDACAO_EACE, Escola.REPROVADO_MIP)
 
 
 class LoteMipError(Exception):
@@ -1090,8 +1105,8 @@ def lotes_mip_previstos_em_massa(data_inicio=None, data_fim=None, estado=None):
     Estado/Município. Devolve lista de dicts `{"estado", "municipio",
     "escolas", "valor_total"}`."""
     candidatas = Escola.objects.filter(
-        status_mip=Escola.AGUARDANDO_VALIDACAO_EACE, pausado_mip=False, encontrado_relatorio_eace_mip=True,
-    ).exclude(estado="").exclude(municipio="").exclude(lotes__isnull=False)
+        status_mip__in=STATUS_MIP_ELEGIVEIS_LOTE, pausado_mip=False, encontrado_relatorio_eace_mip=True,
+    ).exclude(estado="").exclude(municipio="").exclude(pk__in=_escolas_em_lote_ativo())
     if estado:
         candidatas = candidatas.filter(estado=estado)
     cidades = candidatas.order_by("estado", "municipio").values_list("estado", "municipio").distinct()
@@ -1293,9 +1308,9 @@ def escolas_no_grid_mip():
     grid — o que sobra é o que ainda falta fazer. Desfazer o LOTE
     (`desfazer_lote_mip`, que exclui o `Lote`) traz o INEP de volta."""
     return Escola.objects.filter(
-        Q(encontrado_relatorio_eace_mip=True) | Q(status_mip=Escola.AGUARDANDO_VALIDACAO_EACE),
+        Q(encontrado_relatorio_eace_mip=True) | Q(status_mip__in=STATUS_MIP_ELEGIVEIS_LOTE),
         retirado_grid_mip=False,
-    ).exclude(lotes__isnull=False)
+    ).exclude(pk__in=_escolas_em_lote_ativo())  # INEP de LOTE reprovado volta ao grid (2026-10-15)
 
 
 def retirar_do_grid_mip(escola_ids, usuario):
@@ -1384,12 +1399,84 @@ def aplicar_status_lotes_mip_em_massa(lote_ids, novo_status, usuario):
     `mip_lote_status_update_view`). Devolve `(alterados, pulados)`."""
     alterados, pulados = [], []
     for lote in Lote.objects.filter(pk__in=lote_ids).order_by("pk"):
-        if lote.status == Lote.FATURAMENTO_CONCLUIDO and not usuario.is_administrador:
+        # LOTE reprovado só sai pelo "Desfazer reprovação" (2026-10-15).
+        if lote.status == Lote.REPROVADO or (
+            lote.status == Lote.FATURAMENTO_CONCLUIDO and not usuario.is_administrador
+        ):
             pulados.append(lote)
             continue
         aplicar_status_lote_mip(lote, novo_status, usuario)
         alterados.append(lote)
     return alterados, pulados
+
+
+@transaction.atomic
+def reprovar_lote_mip(lote, motivo, usuario):
+    """Pedido do usuário (2026-10-15; a formalizar pelo Orquestrador em
+    business_rules.md): o cliente reprovou um LOTE já em "Processo
+    Concluído". Só o Administrador (a view confere), com motivo
+    obrigatório. O LOTE vai para "Reprovado" e cada INEP para o Status
+    (MIP) "Reprovado", com o motivo no histórico do RI atual - os valores
+    saem de todo relatório de faturamento. As NFs atuais dos INEPs ficam
+    guardadas no LOTE (`NotaFiscalMip.lote_reprovado`) e o INEP fica livre
+    para entrar num LOTE novo, sem NF."""
+    motivo = (motivo or "").strip()
+    if lote.status != Lote.FATURAMENTO_CONCLUIDO:
+        raise LoteMipError(f'Só LOTE em "Processo Concluído" pode ser reprovado - {lote} está em "{lote.get_status_display()}".')
+    if not motivo:
+        raise LoteMipError("Informe o motivo da reprovação.")
+
+    escolas = list(lote.escolas.all())
+    NotaFiscalMip.objects.filter(escola__in=escolas, lote_reprovado__isnull=True).update(lote_reprovado=lote)
+    for escola in escolas:
+        status_anterior = escola.get_status_mip_display()
+        escola.status_mip = Escola.REPROVADO_MIP
+        escola.save(update_fields=["status_mip"])
+        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if ri_atual:
+            _registrar_log_campo_lote(ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display())
+            _registrar_log_campo_lote(ri_atual, usuario, "LOTE", str(lote), f"Reprovado pelo cliente: {motivo}")
+    lote.status = Lote.REPROVADO
+    lote.motivo_reprovacao = motivo
+    lote.reprovado_em = timezone.now()
+    lote.reprovado_por = usuario
+    lote.save(update_fields=["status", "motivo_reprovacao", "reprovado_em", "reprovado_por"])
+
+
+@transaction.atomic
+def desfazer_reprovacao_lote_mip(lote, usuario):
+    """Volta o LOTE reprovado para "Processo Concluído" (pedido do usuário,
+    2026-10-15; só o Administrador, a view confere): INEPs de volta ao
+    "Processo Concluído" e as NFs guardadas voltam a valer. Recusado se
+    algum INEP já entrou num LOTE criado depois deste - ele está sendo
+    refaturado lá."""
+    if lote.status != Lote.REPROVADO:
+        raise LoteMipError(f'{lote} não está reprovado.')
+    escolas = list(lote.escolas.all())
+    em_lote_novo = sorted(
+        escola.inep for escola in Escola.objects.filter(
+            pk__in=[escola.pk for escola in escolas], lotes__criado_em__gt=lote.criado_em,
+        ).distinct()
+    )
+    if em_lote_novo:
+        raise LoteMipError(
+            f"Não é possível desfazer a reprovação de {lote} - INEP(s) já em outro LOTE: {', '.join(em_lote_novo)}."
+        )
+
+    NotaFiscalMip.objects.filter(lote_reprovado=lote).update(lote_reprovado=None)
+    for escola in escolas:
+        status_anterior = escola.get_status_mip_display()
+        escola.status_mip = Escola.FATURAMENTO_CONCLUIDO
+        escola.save(update_fields=["status_mip"])
+        ri_atual = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+        if ri_atual:
+            _registrar_log_campo_lote(ri_atual, usuario, "Status (MIP)", status_anterior, escola.get_status_mip_display())
+            _registrar_log_campo_lote(ri_atual, usuario, "LOTE", str(lote), "Reprovação desfeita")
+    lote.status = Lote.FATURAMENTO_CONCLUIDO
+    lote.motivo_reprovacao = ""
+    lote.reprovado_em = None
+    lote.reprovado_por = None
+    lote.save(update_fields=["status", "motivo_reprovacao", "reprovado_em", "reprovado_por"])
 
 
 # ---------------------------------------------------------------------------
@@ -1518,7 +1605,7 @@ def importar_lotes_mip_em_massa(linhas_por_inep, usuario, *, nome_arquivo, inclu
             registro["motivo"] = MOTIVO_IMPORTACAO_NAO_CADASTRADO
             continue
         registro["estado"], registro["municipio"] = escola.estado, escola.municipio
-        lotes_existentes = list(escola.lotes.all())
+        lotes_existentes = [lote for lote in escola.lotes.all() if lote.status != Lote.REPROVADO]
         if lotes_existentes:
             registro["motivo"] = MOTIVO_IMPORTACAO_JA_EM_LOTE
             registro["lote"] = ", ".join(str(lote) for lote in lotes_existentes)
@@ -2265,6 +2352,8 @@ def _valor_inep_mip(escola, catalogo_kits):
     (`mip_lote_inep_view`): no LOTE importado em massa, o faturado na
     planilha; senão (ou sem LOTE), o Valor Total (IXC)."""
     for lote in escola.lotes.all():
+        if lote.status == Lote.REPROVADO:
+            continue
         valor = lote.valor_faturado_planilha(escola)
         if valor is not None:
             return valor
@@ -2364,6 +2453,8 @@ def montar_dashboard_faturamento_mip(
 
     cards = []
     for status, rotulo in Escola.STATUS_MIP_CHOICES:
+        if status == Escola.REPROVADO_MIP:
+            continue  # reprovado não entra em relatório de faturamento (pedido do usuário, 2026-10-15)
         do_status = [registro for registro in recorte if registro["status"] == status]
         cards.append({
             "status": status,

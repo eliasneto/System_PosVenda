@@ -108,7 +108,7 @@
 <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
     <a href="{% url 'mip_lote_inep' %}{% if querystring_extra %}?{{ querystring_extra|slice:'1:' }}{% endif %}"
        class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 px-5 py-3 rounded-2xl shadow-sm hover:ring-2 hover:ring-amber-400 transition {% if not status_filtro %}ring-2 ring-pv-yellow{% endif %}"
-       title="Ver o Valor Total de todos os Status">
+       title="Ver o Valor Total de todos os Status — sem os LOTEs reprovados, que não entram no faturamento">
         <p class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase leading-snug mb-1">Todos os Status</p>
         <p class="text-base font-black italic text-gray-900 dark:text-gray-100 truncate">R$ {{ valor_total_todos_status|intcomma }}</p>
     </a>
@@ -184,11 +184,17 @@
                     <td class="px-4 py-2">
                         <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
                             {% if linha.lote.status == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
+                            {% elif linha.lote.status == 'reprovado' %}bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400
                             {% elif linha.lote.status == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
                             {% elif linha.lote.status == 'em_faturamento' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
                             {% else %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400{% endif %}">
                             {{ linha.lote.get_status_display }}
                         </span>
+                        {% if linha.lote.status == 'reprovado' %}
+                        {# Pedido do usuário (2026-10-15): motivo da reprovação pelo cliente, sempre visível na linha. #}
+                        <p class="mt-1 max-w-[16rem] text-[10px] font-bold text-red-600 dark:text-red-400 leading-snug"
+                           title="Reprovado por {{ linha.lote.reprovado_por.username|default:'—' }} em {{ linha.lote.reprovado_em|date:'d/m/Y H:i' }}">{{ linha.lote.motivo_reprovacao }}</p>
+                        {% endif %}
                     </td>
                     {% if not request.user.is_visualizador %}
                     <td class="px-4 py-2" data-no-toggle>
@@ -222,7 +228,7 @@
                                     <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Notas Fiscais (.zip/.rar)</span>
                                 </div>
                                 {% endif %}
-                                {% if linha.lote.status != 'faturamento_concluido' or request.user.is_administrador %}
+                                {% if linha.lote.status != 'reprovado' %}{% if linha.lote.status != 'faturamento_concluido' or request.user.is_administrador %}
                                 {# Correção (2026-09-24; bug real reportado pelo usuário: menu abria cortado/fora do lugar) — o `<details>`/`<summary>` com o menu em `position: absolute` foi trocado por um botão + painel próprio em `position: fixed`, posicionado via JS (`posicionarMenuDeStatus`, script no fim do arquivo) e renderizado FORA do container "overflow-x-auto contain-layout" da tabela (mesmo motivo documentado acima para os modais de e-mail, FEAT-045: `contain: layout` faz o ancestral virar containing block também de `position: fixed`, e o `overflow-x-auto` corta qualquer coisa que escape verticalmente das bordas dele — por isso o menu antigo, apesar de posicionado certinho em relação ao ícone, ficava cortado/invisível pra LOTEs perto do topo ou fim da lista). O painel de verdade fica no 2º laço, logo depois do fechamento desse container. #}
                                 <div class="relative">
                                     <button type="button" data-status-menu-toggle="{{ linha.lote.pk }}" title="Mudar status"
@@ -230,7 +236,7 @@
                                         <i data-lucide="refresh-cw" class="w-4 h-4 text-gray-500 dark:text-gray-400"></i>
                                     </button>
                                 </div>
-                                {% endif %}
+                                {% endif %}{% endif %}
                                 <!-- FEAT-049 (a formalizar pelo Orquestrador em
                                      business_rules.md; pedido do usuário,
                                      2026-09-14): "Desfazer LOTE" — mesma
@@ -262,7 +268,37 @@
                                     </div>
                                 </form>
                                 {% endif %}
+                                {% if request.user.is_administrador and linha.lote.status == 'faturamento_concluido' %}
+                                <div class="relative group">
+                                    <button type="button" data-abrir-dialog="dialog-reprovar-lote-{{ linha.lote.pk }}" title="Reprovar LOTE"
+                                            class="inline-flex items-center justify-center w-8 h-8 border-2 border-red-200 dark:border-red-900/50 text-red-500 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition">
+                                        <i data-lucide="thumbs-down" class="w-4 h-4"></i>
+                                    </button>
+                                    <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Reprovar LOTE</span>
+                                </div>
+                                {% endif %}
+                                {% if linha.lote.status == 'reprovado' %}
+                                {% if request.user.is_administrador %}
+                                <form method="POST" action="{% url 'mip_lote_desfazer_reprovacao' pk=linha.lote.pk %}" class="contents">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                    <div class="relative group">
+                                        <button type="button"
+                                                data-confirmar
+                                                data-confirmar-titulo="Desfazer reprovação?"
+                                                data-confirmar-mensagem="{{ linha.lote }} volta para &quot;Processo Concluído&quot;, com os {{ linha.escolas|length }} INEP(s) e as Notas Fiscais guardadas nele."
+                                                data-confirmar-texto-botao="Desfazer reprovação"
+                                                title="Desfazer reprovação"
+                                                class="inline-flex items-center justify-center w-8 h-8 border-2 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+                                            <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                                        </button>
+                                        <span aria-hidden="true" class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 whitespace-nowrap rounded-lg bg-pv-black px-2 py-1 text-[9px] font-black uppercase italic text-pv-yellow opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20">Desfazer reprovação</span>
+                                    </div>
+                                </form>
+                                {% endif %}
+                                {% else %}
                                 {% include "escolas/_rpa_mip_lote_acao.html" with lote=linha.lote rpa_mip=linha.rpa_mip next=request.get_full_path %}
+                                {% endif %}
                             </div>
                             {% if linha.lote.email_enviado_em %}
                             <span class="text-[9px] font-bold text-gray-400 dark:text-gray-500">Enviado em {{ linha.lote.email_enviado_em|date:"d/m/Y H:i" }}</span>
@@ -303,6 +339,7 @@
                                         <td class="px-4 py-2">
                                             <span class="inline-flex px-2 py-1 rounded-lg text-[10px] font-black uppercase
                                                 {% if item.escola.status_mip == 'faturamento_concluido' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400
+                                                {% elif item.escola.status_mip == 'reprovado' %}bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400
                                                 {% elif item.escola.status_mip == 'em_andamento' %}bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400
                                                 {% elif item.escola.status_mip == 'em_faturamento_lote' %}bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400
                                                 {% else %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400{% endif %}">
@@ -420,7 +457,7 @@
 {# Correção (2026-09-24; bug real reportado pelo usuário: menu "Mudar status" abria cortado/fora do lugar) — painel de cada LOTE fica FORA dos containers com "overflow-x-auto"/"overflow-hidden" da tabela acima (mesmo motivo do comentário logo abaixo, sobre os modais de e-mail): script no fim do arquivo posiciona cada um em `position: fixed`, calculado a partir do botão que abre, e mostra só 1 por vez. 2º laço só para renderizar os painéis — nenhuma consulta nova (mesmo `linhas_lote` já calculado na view). #}
 {% if not request.user.is_visualizador %}
 {% for linha in linhas_lote %}
-{% if linha.lote.status != 'faturamento_concluido' or request.user.is_administrador %}
+{% if linha.lote.status != 'reprovado' %}{% if linha.lote.status != 'faturamento_concluido' or request.user.is_administrador %}
 <form method="POST" action="{% url 'mip_lote_status_update' pk=linha.lote.pk %}"
       id="status-menu-{{ linha.lote.pk }}" data-status-menu
       class="hidden fixed z-30 w-40 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg overflow-hidden flex flex-col">
@@ -433,8 +470,52 @@
     <button type="submit" name="status" value="faturamento_concluido"
             class="px-3 py-2 text-left text-[10px] font-black uppercase text-gray-700 dark:text-gray-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition border-t border-gray-100 dark:border-gray-800">Processo Concluído</button>
 </form>
+{% endif %}{% endif %}
+{% endfor %}
+{% if request.user.is_administrador %}
+{# Pedido do usuário (2026-10-15): "Reprovar" do LOTE em "Processo Concluído" - `<dialog>` nativo (camada de topo, não é cortado pela rolagem da tabela) com o motivo obrigatório. #}
+{% for linha in linhas_lote %}
+{% if linha.lote.status == 'faturamento_concluido' %}
+<dialog id="dialog-reprovar-lote-{{ linha.lote.pk }}" aria-labelledby="titulo-reprovar-lote-{{ linha.lote.pk }}"
+        class="w-[calc(100%-2rem)] max-w-md rounded-3xl p-0 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 shadow-2xl backdrop:bg-black/50">
+    <form method="POST" action="{% url 'mip_lote_reprovar' pk=linha.lote.pk %}" class="p-6 flex flex-col gap-4">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <div>
+            <h2 id="titulo-reprovar-lote-{{ linha.lote.pk }}" class="text-base font-black uppercase italic">Reprovar {{ linha.lote }}?</h2>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ linha.lote.municipio }}/{{ linha.lote.estado }} — {{ linha.escolas|length }} INEP(s), R$ {{ linha.valor_total_lote|intcomma }}.
+                O valor sai dos relatórios de faturamento, as Notas Fiscais ficam guardadas neste LOTE e os INEPs podem entrar num LOTE novo para refaturar.
+            </p>
+        </div>
+        <div class="flex flex-col gap-1.5">
+            <label for="motivo-reprovar-lote-{{ linha.lote.pk }}" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Motivo da reprovação</label>
+            <textarea id="motivo-reprovar-lote-{{ linha.lote.pk }}" name="motivo" rows="3" required maxlength="1000"
+                      class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 text-xs font-bold text-gray-800 dark:text-gray-100"></textarea>
+        </div>
+        <div class="flex justify-end gap-2">
+            <button type="button" data-fechar-dialog
+                    class="px-4 py-2 rounded-xl text-[11px] font-black uppercase text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition">Cancelar</button>
+            <button type="submit"
+                    class="px-4 py-2 rounded-xl text-[11px] font-black uppercase bg-red-600 text-white hover:bg-red-700 transition">Reprovar LOTE</button>
+        </div>
+    </form>
+</dialog>
 {% endif %}
 {% endfor %}
+<script>
+document.addEventListener('click', function (evento) {
+    var abrir = evento.target.closest('[data-abrir-dialog]');
+    if (abrir) {
+        var dialogo = document.getElementById(abrir.getAttribute('data-abrir-dialog'));
+        if (dialogo) dialogo.showModal();
+        return;
+    }
+    var fechar = evento.target.closest('[data-fechar-dialog]');
+    if (fechar) fechar.closest('dialog').close();
+});
+</script>
+{% endif %}
 {% endif %}
 
 {% comment %}

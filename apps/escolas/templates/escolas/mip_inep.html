@@ -223,6 +223,7 @@
                         <span class="inline-block whitespace-nowrap px-2 py-0.5 rounded-md text-[10px] font-black uppercase
                             {% if status == 'aguardando_validacao_eace' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300
                             {% elif status == 'faturamento_concluido' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300
+                            {% elif status == 'reprovado' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300
                             {% elif status == 'em_faturamento_lote' %}bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300
                             {% else %}bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300{% endif %}">
                             {{ linha.escola.get_status_mip_display|default:"Sem Status (MIP)" }}

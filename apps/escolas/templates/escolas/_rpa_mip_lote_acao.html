@@ -9,6 +9,8 @@ passar o mouse, pedido do usuário).
   desabilitado de vez (check verde) - pedido do usuário, 2026-09-29.
 - Erro ou nunca enviado: habilitado (erro = ponto vermelho + motivo no balão).
 - Sem 1 NF comum a todos os INEPs: desabilitado, motivo no balão.
+- Rateio manual (2026-10-15): 1 NF por parte; o clique enfileira todas as
+  ainda não enviadas, e o check verde só vem com todas enviadas.
 Contexto: `lote`, `rpa_mip` (EstadoRpaMipLote), `next` (volta da tela).
 {% endcomment %}
 <div id="rpa-mip-lote-{{ lote.pk }}" class="relative group"
@@ -40,7 +42,9 @@ Contexto: `lote`, `rpa_mip` (EstadoRpaMipLote), `next` (volta da tela).
         <button type="button"
                 data-confirmar
                 data-confirmar-titulo="Enviar a Nota Fiscal ao portal EACE?"
-                data-confirmar-mensagem="A Nota Fiscal {{ rpa_mip.nota_fiscal.nome_original }} vai para a fila e será anexada no card de {{ lote.municipio }} do pedido mais recente no portal EACE (só se o card estiver Pendente e o valor bater)."
+                {% with notas=rpa_mip.notas_a_enviar %}
+                data-confirmar-mensagem="{% if notas|length > 1 %}As {{ notas|length }} Notas Fiscais do rateio ({% for nota in notas %}{{ nota.nome_original }}{% if not forloop.last %}, {% endif %}{% endfor %}) vão para a fila, uma de cada vez, e cada uma será anexada no card de {{ lote.municipio }} com o mesmo valor, no pedido mais recente do portal EACE (só se o card estiver Pendente).{% else %}A Nota Fiscal {{ rpa_mip.nota_fiscal.nome_original }} vai para a fila e será anexada no card de {{ lote.municipio }} do pedido mais recente no portal EACE (só se o card estiver Pendente e o valor bater).{% endif %}"
+                {% endwith %}
                 data-confirmar-texto-botao="Enviar ao portal"
                 title="{% if rpa_mip.motivo_erro_legivel %}Tentar de novo — erro: {{ rpa_mip.motivo_erro_legivel }}{% else %}Enviar ao portal EACE{% endif %}"
                 class="relative inline-flex items-center justify-center w-8 h-8 bg-pv-black text-pv-yellow rounded-lg hover:bg-gray-800 transition">
