@@ -3929,6 +3929,7 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
                 "nota_fiscal": numero_nf,
                 "valor": Decimal(item.quantidade) * item.valor_unitario,
                 "numero_osp": item.num_osp,
+                "ri_id": ri.pk,
                 "data_transicao": data_transicao_por_ri[ri.pk],
             })
 
@@ -4165,8 +4166,9 @@ def gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas):
     relatorio_faturamento_eace_materiais`, mesmo filtro de período da
     tela/`.xlsx`, reaproveitado sem consulta extra para achar os RI do
     período). 1 pasta por INEP dentro do `.zip` — um INEP pode ter mais de
-    1 Nota Fiscal, cada uma com 1 PDF + 1 XML."""
-    ri_ids = [linha["ri_id"] for linha in linhas]
+    1 Nota Fiscal, cada uma com 1 PDF + 1 XML. Também usado pela versão
+    "(NOVO)", cujas `linhas` repetem o mesmo RI (1 linha por item)."""
+    ri_ids = list(dict.fromkeys(linha["ri_id"] for linha in linhas))
     # Pedido do usuário (2026-09-25): PDF/XML de processamento RPA
     # cancelado (NF errada) fica fora do .zip; os do processamento manual
     # já entram por serem `Documento` do RI.

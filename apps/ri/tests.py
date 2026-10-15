@@ -9279,7 +9279,7 @@ class RelatorioFaturamentoEaceMateriaisNovoViewTests(TestCase):
         resp = self.client.get(url, {**dia, "hora_inicio": "14:30", "hora_fim": "14:30"})
         self.assertEqual([linha["inep"] for linha in resp.context["linhas"]], ["60000032"])  # minuto inclusive
         self.assertContains(resp, "15/08/2026 14:30")
-        self.assertContains(resp, "&hora_inicio=14:30&hora_fim=14:30")
+        self.assertContains(resp, "&amp;hora_inicio=14%3A30&amp;hora_fim=14%3A30", count=2)  # Excel e .zip
 
         resp = self.client.get(url, {**dia, "hora_inicio": "14:00"})
         self.assertEqual([linha["inep"] for linha in resp.context["linhas"]], ["60000032"])
@@ -9321,6 +9321,89 @@ class RelatorioFaturamentoEaceMateriaisNovoViewTests(TestCase):
             "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
         })
         self.assertEqual(resp.status_code, 403)
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT_TESTE_EXPORTAR_ARQUIVOS_FATURAMENTO)
+class RelatorioFaturamentoEaceMateriaisNovoExportarArquivosViewTests(TestCase):
+    """Botão "Exportar Arquivos (.zip)" da tela "(NOVO)" — mesmo `.zip`
+    do relatório original (RN-087), com o filtro de Data/Hora da tela."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(_MEDIA_ROOT_TESTE_EXPORTAR_ARQUIVOS_FATURAMENTO, ignore_errors=True)
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin-zip-novo", password="senha-teste-123", perfil=User.PERFIL_ADMINISTRADOR,
+        )
+        self.analista = User.objects.create_user(
+            username="analista-zip-novo", password="senha-teste-123", perfil=User.PERFIL_ANALISTA,
+        )
+        self.escola = Escola.objects.create(inep="60000051", nome="Escola Zip Novo", estado="PE")
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+        # 2 itens no mesmo RI = 2 linhas no "(NOVO)"; o .zip não pode
+        # duplicar os arquivos por isso.
+        for nota_fiscal in ("3001", "3002"):
+            RiItemRelatorioEace.objects.create(
+                ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="500.00",
+                nota_fiscal=nota_fiscal, num_osp="9101",
+            )
+        self.pdf = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF, arquivo=SimpleUploadedFile("nota.pdf", b"%PDF-fake"),
+        )
+        self.xml = Documento.objects.create(
+            ri=self.ri, tipo=Documento.XML, arquivo=SimpleUploadedFile("nota.xml", b"<nfe/>"),
+        )
+        _marcar_transicao_aguardando_validacao_eace(self.ri, date(2026, 8, 15))
+
+    def test_exportar_gera_zip_com_pdf_e_xml_do_periodo(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar_arquivos"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "application/zip")
+        self.assertIn("FATURAMENTO EACE MATERIAIS (NOVO) - ARQUIVOS", resp["Content-Disposition"])
+        nomes = zipfile.ZipFile(BytesIO(resp.content)).namelist()
+        self.assertEqual(sorted(nomes), sorted([
+            f"60000051/{os.path.basename(self.pdf.arquivo.name)}",
+            f"60000051/{os.path.basename(self.xml.arquivo.name)}",
+        ]))
+
+    def test_exportar_respeita_a_hora(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar_arquivos"), {
+            "data_inicio": "2026-08-15", "data_fim": "2026-08-15", "hora_inicio": "10:00",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("15-08-2026 10h00 a 15-08-2026", resp["Content-Disposition"])
+        self.assertEqual(zipfile.ZipFile(BytesIO(resp.content)).namelist(), [])  # RI às 00:00
+
+    def test_exportar_sem_periodo_retorna_400(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar_arquivos"))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_analista_nao_exporta(self):
+        self.client.force_login(self.analista)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo_exportar_arquivos"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertEqual(resp.status_code, 403)
+
+    def test_botao_exportar_arquivos_aparece_na_tela(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo"), {
+            "data_inicio": "2026-08-01", "data_fim": "2026-08-31",
+        })
+        self.assertContains(resp, "Exportar Excel")
+        self.assertContains(resp, "Exportar Arquivos (.zip)")
+        self.assertContains(
+            resp,
+            reverse("relatorio_faturamento_eace_materiais_novo_exportar_arquivos")
+            + "?data_inicio=2026-08-01&amp;data_fim=2026-08-31",
+        )
 
 
 CABECALHO_LEGADO_EACE = [

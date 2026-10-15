@@ -1,7 +1,7 @@
 import logging
 from datetime import date, timedelta
 from decimal import Decimal
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from django.conf import settings
 from django.contrib import messages
@@ -2443,17 +2443,27 @@ def relatorio_faturamento_eace_materiais_novo_view(request):
     form = RelatorioFaturamentoEaceMateriaisNovoForm(request.GET or None)
     linhas = None
     total_valor = None
+    filtro_querystring = ""
     if form.is_bound and form.is_valid():
+        dados = form.cleaned_data
         linhas = montar_relatorio_faturamento_eace_materiais_novo(
-            form.cleaned_data["data_inicio"], form.cleaned_data["data_fim"],
-            form.cleaned_data["hora_inicio"], form.cleaned_data["hora_fim"],
+            dados["data_inicio"], dados["data_fim"], dados["hora_inicio"], dados["hora_fim"],
         )
         total_valor = sum((linha["valor"] for linha in linhas), Decimal("0"))
+        # Mesmo filtro repassado aos botões "Exportar Excel" e
+        # "Exportar Arquivos (.zip)".
+        filtro = {"data_inicio": f"{dados['data_inicio']:%Y-%m-%d}", "data_fim": f"{dados['data_fim']:%Y-%m-%d}"}
+        if dados["hora_inicio"]:
+            filtro["hora_inicio"] = f"{dados['hora_inicio']:%H:%M}"
+        if dados["hora_fim"]:
+            filtro["hora_fim"] = f"{dados['hora_fim']:%H:%M}"
+        filtro_querystring = urlencode(filtro)
 
     return render(request, "ri/relatorio_faturamento_eace_materiais_novo.html", {
         "form": form,
         "linhas": linhas,
         "total_valor": total_valor,
+        "filtro_querystring": filtro_querystring,
     })
 
 
@@ -2484,6 +2494,34 @@ def relatorio_faturamento_eace_materiais_novo_exportar_view(request):
     inicio = f"{data_inicio:%d-%m-%Y}" + (f" {hora_inicio:%Hh%M}" if hora_inicio else "")
     fim = f"{data_fim:%d-%m-%Y}" + (f" {hora_fim:%Hh%M}" if hora_fim else "")
     nome_arquivo = f"FATURAMENTO EACE MATERIAIS (NOVO) - {inicio} a {fim}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def relatorio_faturamento_eace_materiais_novo_exportar_arquivos_view(request):
+    """Botão "Exportar Arquivos (.zip)" da tela "(NOVO)" — mesmo filtro
+    (querystring, com Hora início/Hora fim) do "Exportar Excel", mesmo
+    `.zip` de PDF/XML por INEP do relatório original (RN-087). Ação
+    restrita a Administrador, mesmo critério da tela (RN-004)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode acessar esta tela.")
+
+    form = RelatorioFaturamentoEaceMateriaisNovoForm(request.GET or None)
+    if not form.is_valid():
+        return HttpResponseBadRequest("Informe Data início e Data fim válidas.")
+
+    data_inicio = form.cleaned_data["data_inicio"]
+    data_fim = form.cleaned_data["data_fim"]
+    hora_inicio = form.cleaned_data["hora_inicio"]
+    hora_fim = form.cleaned_data["hora_fim"]
+    linhas = montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio, hora_fim)
+    conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas)
+
+    resposta = HttpResponse(conteudo, content_type="application/zip")
+    inicio = f"{data_inicio:%d-%m-%Y}" + (f" {hora_inicio:%Hh%M}" if hora_inicio else "")
+    fim = f"{data_fim:%d-%m-%Y}" + (f" {hora_fim:%Hh%M}" if hora_fim else "")
+    nome_arquivo = f"FATURAMENTO EACE MATERIAIS (NOVO) - ARQUIVOS - {inicio} a {fim}.zip"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
     return resposta
 
