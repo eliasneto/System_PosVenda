@@ -60,13 +60,13 @@ municípios retirados e a visão ficam nele. Retirar é só por município
         {% else %}
         <input type="hidden" name="visao" value="{{ recebiveis_visao }}">
         {% endif %}
-        {# Pedido do usuário (2026-10-15): período do filtro do grid; INEPs Contestados fora, valor rateado pelos INEPs que entram. #}
+        {# Pedido do usuário (2026-10-15): período do filtro do grid; do INEP Contestado entra só o valor recebido (valor pago). #}
         <p class="text-[11px] text-gray-500 dark:text-gray-400">
             {% if recebiveis_data_inicial or recebiveis_data_final %}
             <span class="font-black text-gray-900 dark:text-gray-100">Ativação{% if recebiveis_data_inicial %} de {{ recebiveis_data_inicial|date:"d/m/Y" }}{% endif %}{% if recebiveis_data_final %} até {{ recebiveis_data_final|date:"d/m/Y" }}{% endif %}</span> ·
             {% endif %}
-            INEPs Contestados não entram{% if recebiveis_contestados %} ({{ recebiveis_contestados|intcomma }} fora){% endif %}.
-            O valor do município é rateado pelos INEPs que entram.
+            O valor do município é rateado pelos INEPs não Contestados.
+            Do INEP Contestado entra só o valor recebido (valor pago){% if recebiveis_contestados %}: {{ recebiveis_contestados|intcomma }} INEP(s), R$ {{ recebiveis_recebido_contestados|intcomma }}{% endif %}; o faltando fica para outro Boletim.
         </p>
     </div>
 
@@ -181,6 +181,15 @@ municípios retirados e a visão ficam nele. Retirar é só por município
         <div>
             <p class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase leading-none mb-1">Valor total</p>
             <p class="text-base font-black italic text-amber-600 dark:text-pv-yellow whitespace-nowrap">R$ {{ recebiveis_valor_total|intcomma }}</p>
+        </div>
+        {# Pedido do usuário (2026-10-15): Medição de cada Boletim com o que ficou no modal; envio normal (download), fora do HTMX - script em `bdo.html`. #}
+        <div class="col-span-2 sm:col-span-4 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2 pt-1">
+            <span class="text-[11px] text-gray-500 dark:text-gray-400">Uma planilha por Boletim (.zip com mais de um). Grava o nº da Medição e o 1º faturamento dos INEPs novos.</span>
+            <button type="button" data-gerar-medicao="{% url 'bdo_medicao' %}" {% if not recebiveis_linhas %}disabled{% endif %}
+                    class="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-black uppercase tracking-wide whitespace-nowrap focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+                <i data-lucide="file-spreadsheet" class="w-4 h-4" aria-hidden="true"></i>
+                Gerar Medição (.xlsx)
+            </button>
         </div>
     </div>
 </form>

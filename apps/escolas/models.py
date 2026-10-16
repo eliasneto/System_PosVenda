@@ -1045,3 +1045,46 @@ class LogStatusDivergenciaBdo(models.Model):
 
     def __str__(self):
         return f"{self.boletim}/{self.inep} {self.status_anterior or '-'} -> {self.status or '-'}"
+
+
+class PrimeiroFaturamentoInep(models.Model):
+    """Data do 1º faturamento da manutenção recorrente de um INEP em cada
+    tipo de Boletim (pedido do usuário, 2026-10-15), coluna da planilha de
+    Medição. Fica por INEP porque o cliente separa o município em linhas
+    por data. Os INEPs da MEDIÇÃO 05 (Boletim 3657) vêm dela; INEP novo
+    recebe a data em que a Medição é gerada e a mantém nos meses seguintes."""
+
+    tipo = models.CharField("Tipo", max_length=2, choices=BoletimBdo.TIPO_CHOICES)
+    inep = models.CharField("INEP", max_length=20)
+    data = models.DateField("1º faturamento")
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["tipo", "inep"], name="primeiro_faturamento_inep_unico")]
+        verbose_name = "1º faturamento de INEP"
+        verbose_name_plural = "1º faturamento de INEPs"
+
+    def __str__(self):
+        return f"{self.tipo} {self.inep}: {self.data:%d/%m/%Y}"
+
+
+class MedicaoBdo(models.Model):
+    """Planilha de Medição de um Boletim, gerada pelo modal Recebíveis
+    (pedido do usuário, 2026-10-15). O número é sequencial por tipo e
+    criado pelo sistema; gerar de novo o mesmo Boletim mantém o número."""
+
+    boletim = models.OneToOneField(BoletimBdo, on_delete=models.CASCADE, related_name="medicao")
+    tipo = models.CharField("Tipo", max_length=2, choices=BoletimBdo.TIPO_CHOICES)
+    numero = models.PositiveIntegerField("Nº da medição")
+    gerada_em = models.DateTimeField("Gerada em", auto_now=True)
+    gerada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["tipo", "numero"], name="medicao_bdo_numero_unico")]
+        verbose_name = "Medição BDO"
+        verbose_name_plural = "Medições BDO"
+
+    def __str__(self):
+        return f"MEDIÇÃO {self.numero:02d} - {self.boletim}"

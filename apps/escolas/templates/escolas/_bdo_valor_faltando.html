@@ -1,0 +1,12 @@
+{% load humanize %}
+{% comment %}
+Célula "Valor faltando" do grid por INEP do BDO (pedido do usuário,
+2026-10-15): só no INEP Contestado em que o cliente pagou menos, Valor
+proporcional − valor recebido (Valor assinatura − desconto da Pro rata). Volta junto com a
+célula de Status quando o status muda (HTMX, `oob`).
+{% endcomment %}
+<td class="px-4 py-2 text-right whitespace-nowrap" id="valor-faltando-{{ linha.pk }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+    {% if linha.valor_faltando is not None %}
+    <span class="text-[11px] font-black text-amber-700 dark:text-amber-400" title="Recebido R$ {{ linha.valor_recebido|intcomma }} (fica); faltando contestado para outro Boletim">R$ {{ linha.valor_faltando|intcomma }}</span>
+    {% endif %}
+</td>

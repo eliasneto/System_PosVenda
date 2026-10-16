@@ -9,9 +9,14 @@ Visualizador: as rotas não estão na lista liberada do
 Relatório BDO" (`relatorio_bdo_view`), só do Administrador, mesmo critério
 das demais importações (RN-004)."""
 
+import io
+import zipfile
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
+
+import openpyxl
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -19,12 +24,14 @@ from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, DateField, OuterRef, Subquery, Sum
 from django.db.models.functions import Upper
-from django.http import HttpResponseForbidden, QueryDict
+from django.http import HttpResponse, HttpResponseForbidden, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
 from django.views.decorators.http import require_POST
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from apps.ri.models import KitPadrao, Ri
 
@@ -33,13 +40,14 @@ from .bdo import (
     valor_proporcional,
 )
 from .forms import MesReferenciaBdoForm, PlanilhaBdoUploadForm, PlanilhaProRataUploadForm
+from .medicao_bdo import MedicaoBdoError, gerar_medicoes
 from .models import BoletimBdo, Escola, InepBdo, LogStatusDivergenciaBdo, MunicipioBdo
 from .views import _parse_data_filtro
 
 DIFERENCA_TODOS = "1"
 AGRUPAMENTOS = (("inep", "Por INEP"), ("municipio", "Por Município"), ("uf", "Por UF"))
 LINHAS_POR_PAGINA = 50
-TOLERANCIA_DESCONTO = Decimal("0.01")
+TOLERANCIA_VALOR = Decimal("0.01")
 
 
 def _somar(atual, valor):
@@ -106,74 +114,87 @@ def _anotar_data_ativacao(linhas):
 
 def _anotar_divergencia(linha):
     """Pedido do usuário (2026-10-15): o INEP diverge da Pro rata do cliente
-    quando a Data de Ativação é diferente do "Ativado em" ou o desconto do
-    sistema (Valor assinatura - Valor proporcional) difere do "Valor" da
-    Pro rata em mais de R$ 0,01 (arredondamento por INEP). Só compara
-    quando os dois lados existem. Só INEP divergente pode ser aprovado.
+    quando a Data de Ativação é diferente do "Ativado em" ou o valor pago
+    pelo cliente (Valor assinatura − "Valor" da Pro rata, que é o desconto;
+    decisão do usuário de 2026-10-15) é menor que o Valor proporcional do
+    sistema em mais de R$ 0,01 (arredondamento por INEP); pago a mais
+    confere (verde, pedido do usuário de 2026-10-15). Só compara quando os dois lados existem.
     Pedido do usuário (2026-10-15): INEP sem Data de Ativação no sistema
     ou sem "Ativado em" do cliente também recebe status."""
+    linha.valor_pago_cliente = (
+        None if linha.valor_assinatura is None or linha.valor_desconto_cliente is None
+        else linha.valor_assinatura - linha.valor_desconto_cliente
+    )
     linha.valor_desconto_sistema = (
         None if linha.valor_assinatura is None or linha.valor_proporcional is None
         else linha.valor_assinatura - linha.valor_proporcional
     )
     linha.valor_confere = (
-        None if linha.valor_desconto_sistema is None or linha.valor_desconto_cliente is None
-        else abs(linha.valor_desconto_sistema - linha.valor_desconto_cliente) <= TOLERANCIA_DESCONTO
+        None if linha.valor_proporcional is None or linha.valor_pago_cliente is None
+        else linha.valor_pago_cliente >= linha.valor_proporcional - TOLERANCIA_VALOR
     )
     linha.tem_divergencia = (
         linha.data_ativacao is None or linha.ativado_em_cliente is None
         or linha.ativacao_confere is False or linha.valor_confere is False
     )
     # Pedido do usuário (2026-10-15): parte do INEP na Dif. do Total MEGA -
-    # desconto do cliente menos o do sistema. INEP sem valor proporcional
-    # fica fora do Total MEGA e entra na Dif. sem valor.
+    # valor do sistema menos o pago pelo cliente. INEP sem valor
+    # proporcional fica fora do Total MEGA e entra na Dif. sem valor.
+    linha.valor_recebido = _valor_pago_para_diferenca(linha)
     linha.diferenca_inep = (
-        None if linha.valor_proporcional is None
-        else _desconto_cliente_para_diferenca(linha) - linha.valor_desconto_sistema
+        None if linha.valor_proporcional is None or linha.valor_recebido is None
+        else linha.valor_proporcional - linha.valor_recebido
     )
     # Lado da Dif. (pedido do usuário, 2026-10-15): "mais" quando o cliente
-    # paga mais que o sistema (desconta menos, ou INEP fora do Total MEGA
-    # que a planilha cobra), "menos" quando paga menos.
-    if linha.diferenca_inep is None or linha.diferenca_inep < -TOLERANCIA_DESCONTO:
+    # paga mais que o sistema (ou INEP fora do Total MEGA que a planilha
+    # cobra), "menos" quando paga menos.
+    if linha.diferenca_inep is None or linha.diferenca_inep < -TOLERANCIA_VALOR:
         linha.lado_diferenca = "mais"
-    elif linha.diferenca_inep > TOLERANCIA_DESCONTO:
+    elif linha.diferenca_inep > TOLERANCIA_VALOR:
         linha.lado_diferenca = "menos"
     else:
         linha.lado_diferenca = None
     linha.entra_na_diferenca = linha.lado_diferenca is not None
     linha.valor_lado_diferenca = None if linha.diferenca_inep is None else abs(linha.diferenca_inep)
+    # Pedido do usuário (2026-10-15): no INEP Contestado o valor recebido
+    # (o valor pago) fica e só o faltando (Valor proporcional − recebido)
+    # é contestado para vir em outro Boletim - só quando o cliente pagou
+    # menos.
+    linha.contestado = linha.status_divergencia == InepBdo.STATUS_CONTESTADO
+    linha.valor_faltando = (
+        linha.diferenca_inep if linha.contestado and linha.lado_diferenca == "menos" else None
+    )
 
 
-def _desconto_cliente_para_diferenca(linha):
+def _valor_pago_para_diferenca(linha):
     """Pedido do usuário (2026-10-15): nunca supor o valor cheio quando o
-    cliente informou a ativação. Sem o "Valor" da Pro rata, o desconto do
-    cliente sai do "Ativado em" dele pela mesma conta do sistema - data
-    igual, diferença zero. Só o INEP fora da Pro rata conta sem desconto
-    (o cliente cobrou o mês cheio)."""
+    cliente informou a ativação. Com o "Valor" da Pro rata (o desconto), o
+    pago é Valor assinatura − desconto. Sem ele, o valor pago
+    pelo cliente sai do "Ativado em" dele pela mesma conta do sistema -
+    data igual, diferença zero. Só o INEP fora da Pro rata conta pelo mês
+    cheio (o cliente cobrou sem desconto)."""
     if linha.valor_desconto_cliente is not None:
-        return linha.valor_desconto_cliente
+        return linha.valor_pago_cliente
     if linha.ativado_em_cliente is None:
-        return Decimal("0")
+        return linha.valor_assinatura
     dias = dias_no_mes_referencia(linha.ativado_em_cliente, linha.municipio_bdo.boletim.mes_referencia)
     proporcional_cliente = valor_proporcional(linha.valor_assinatura, dias)
-    return Decimal("0") if proporcional_cliente is None else linha.valor_assinatura - proporcional_cliente
+    return linha.valor_assinatura if proporcional_cliente is None else proporcional_cliente
 
 
 def _anotar_total_mega(grupos, ineps):
     """Pedido do usuário (2026-10-14): "Total MEGA" (nome de 2026-10-15,
     antes "Total Howbe") de cada município da página no agrupamento por
     Município - soma do valor proporcional dos
-    INEPs dele no Boletim (os mesmos contados na coluna INEPs). É o valor
-    bruto com o único desconto do lado MEGA, o de dias proporcionais, e
-    por isso bate com Valor serviços - Valor descontos proporcionais da
-    planilha, não com o Valor total (que tira também o Valor descontos).
-    INEP sem valor proporcional fica fora da soma e é contado em
-    `ineps_sem_valor_mega`; sem nenhum, fica vazio.
+    INEPs dele no Boletim (os mesmos contados na coluna INEPs). INEP sem
+    valor proporcional fica fora da soma e é contado em
+    `ineps_sem_valor_mega`; sem nenhum, fica vazio. A Dif. é Total MEGA −
+    Valor total da planilha do cliente (pedido do usuário, 2026-10-16).
 
-    Pedido do usuário (2026-10-15): INEP Contestado sai do Total MEGA e o
-    valor dele fica em `total_contestado_mega`. A Dif. continua conferindo
-    a importação com a planilha, que traz o município inteiro, então
-    compara a soma com os Contestados."""
+    Pedido do usuário (2026-10-15): do INEP Contestado só o valor recebido
+    (Valor assinatura − desconto da Pro rata) fica no Total MEGA; o
+    faltando vai para `total_contestado_mega`, a cobrar em outro Boletim, e
+    fica fora da Dif.: o Valor total do cliente não o inclui."""
     por_municipio = {}
     for grupo in grupos:
         for municipio_id in grupo["municipio_ids"]:
@@ -182,33 +203,99 @@ def _anotar_total_mega(grupos, ineps):
         grupo["ineps_sem_valor_mega"] = 0
         grupo["ineps_contestados_mega"] = 0
         grupo["total_contestado_mega"] = Decimal("0")
-        grupo["cliente_a_mais"] = grupo["cliente_a_menos"] = Decimal("0")
-        grupo["ineps_a_mais"] = grupo["ineps_a_menos"] = 0
     linhas = list(
         ineps.filter(municipio_bdo_id__in=por_municipio).select_related("municipio_bdo__boletim")
     )
     _anotar_data_ativacao(linhas)
     for linha in linhas:
         grupo = por_municipio[linha.municipio_bdo_id]
-        if linha.lado_diferenca:
-            grupo[f"ineps_a_{linha.lado_diferenca}"] += 1
-            grupo[f"cliente_a_{linha.lado_diferenca}"] += abs(linha.diferenca_inep or Decimal("0"))
         if linha.valor_proporcional is None:
             grupo["ineps_sem_valor_mega"] += 1
-        elif linha.status_divergencia == InepBdo.STATUS_CONTESTADO:
+        elif linha.contestado:
             grupo["ineps_contestados_mega"] += 1
-            grupo["total_contestado_mega"] += linha.valor_proporcional
+            faltando = linha.valor_faltando or Decimal("0")
+            grupo["total_contestado_mega"] += faltando
+            grupo["total_mega"] = (grupo["total_mega"] or Decimal("0")) + linha.valor_proporcional - faltando
         else:
             grupo["total_mega"] = (grupo["total_mega"] or Decimal("0")) + linha.valor_proporcional
     for grupo in grupos:
-        if grupo["total_mega"] is None and grupo["ineps_contestados_mega"]:
-            grupo["total_mega"] = Decimal("0")
-        servicos, proporcionais = grupo["valor_servicos"], grupo["valor_descontos_proporcionais"]
-        grupo["valor_conferencia_mega"] = None if servicos is None or proporcionais is None else servicos - proporcionais
-        total_importado = None if grupo["total_mega"] is None else grupo["total_mega"] + grupo["total_contestado_mega"]
+        grupo["valor_conferencia_mega"] = grupo["valor_total"]
         grupo["diferenca_mega"] = (
-            None if total_importado is None or grupo["valor_conferencia_mega"] is None
-            else total_importado - grupo["valor_conferencia_mega"]
+            None if grupo["total_mega"] is None or grupo["valor_total"] is None
+            else grupo["total_mega"] - grupo["valor_total"]
+        )
+        # Pedido do usuário (2026-10-16): o Valor total é o que o cliente
+        # pagou, então o lado da Dif. sai dele, não da soma por INEP.
+        diferenca = grupo["diferenca_mega"] or Decimal("0")
+        grupo["lado_diferenca_mega"] = "mais" if diferenca < 0 else "menos" if diferenca > 0 else None
+        grupo["valor_lado_diferenca_mega"] = abs(diferenca)
+
+
+def _faturamento_por_municipio(chaves):
+    """Pedido do usuário (2026-10-15): para cada `(uf, municipio)` - nome
+    sem acento nem maiúsculas -, as escolas do município no sistema e os
+    INEPs dele já faturados em qualquer Boletim de cada tipo (RE/RI), cada
+    INEP uma vez. Em Python pelo mesmo motivo de collation de
+    `_anotar_data_ativacao`. Devolve `(escolas, faturados)`: `escolas[(uf,
+    municipio)]` e `faturados[(tipo, uf, municipio)]` são conjuntos de INEPs."""
+    ufs = {uf for uf, _municipio in chaves}
+    escolas = defaultdict(set)
+    for inep, municipio, uf in Escola.objects.filter(estado__in=ufs).values_list("inep", "municipio", "estado"):
+        escolas[(uf, _normalizar(municipio))].add(inep)
+    faturados = defaultdict(set)
+    for inep, municipio, uf, tipo in InepBdo.objects.filter(
+        municipio_bdo__uf__in=ufs, municipio_bdo__boletim__tipo__in=dict(BoletimBdo.TIPO_CHOICES),
+    ).values_list("inep", "municipio_bdo__municipio", "municipio_bdo__uf", "municipio_bdo__boletim__tipo"):
+        faturados[(tipo, uf, _normalizar(municipio))].add(inep)
+    return escolas, faturados
+
+
+def _situacao_faturamento(faltam, tipo):
+    """Pedido do usuário (2026-10-15): enquanto faltar uma escola do
+    município no faturamento do tipo, o município é Proporcional; sem
+    nenhuma faltando, Integral. Devolve `(situacao, titulo)`."""
+    if faltam:
+        return "Proporcional", f"Falta(m) {faltam} escola(s) do município no faturamento {tipo}"
+    return "Integral", f"Todas as escolas do município no faturamento {tipo}"
+
+
+def _anotar_ineps_faturados(grupos):
+    """Pedido do usuário (2026-10-15): no agrupamento por Município, um
+    quadro para RE e outro para RI com os INEPs do município já faturados
+    e os que faltam entre todas as escolas do município no sistema, e a
+    situação (Proporcional/Integral) no tipo do Boletim da linha."""
+    escolas, faturados = _faturamento_por_municipio({(grupo["uf"], _normalizar(grupo["municipio"])) for grupo in grupos})
+    for grupo in grupos:
+        chave = (grupo["uf"], _normalizar(grupo["municipio"]))
+        grupo["quantidade_escolas"] = len(escolas[chave])
+        grupo["faturamento_por_tipo"] = [
+            {
+                "tipo": tipo,
+                "faturados": len(faturados[(tipo, *chave)]),
+                "faltam": len(escolas[chave] - faturados[(tipo, *chave)]),
+            }
+            for tipo, _rotulo in BoletimBdo.TIPO_CHOICES
+        ]
+        grupo["situacao_faturamento"], grupo["titulo_situacao"] = next(
+            (_situacao_faturamento(item["faltam"], item["tipo"])
+             for item in grupo["faturamento_por_tipo"] if item["tipo"] == grupo["tipo"]),
+            (None, ""),
+        )
+
+
+def _anotar_situacao_faturamento(linhas):
+    """Pedido do usuário (2026-10-15): no grid por INEP, a situação
+    (Proporcional/Integral) do município do INEP no tipo do Boletim e
+    quantas escolas faltam. Boletim sem tipo fica vazio."""
+    chaves = {(linha.municipio_bdo.uf, _normalizar(linha.municipio_bdo.municipio)) for linha in linhas}
+    escolas, faturados = _faturamento_por_municipio(chaves)
+    for linha in linhas:
+        chave = (linha.municipio_bdo.uf, _normalizar(linha.municipio_bdo.municipio))
+        tipo = linha.municipio_bdo.boletim.tipo
+        linha.ineps_faltando_municipio = len(escolas[chave] - faturados[(tipo, *chave)]) if tipo else None
+        linha.situacao_faturamento, linha.titulo_situacao = (
+            (None, "") if linha.ineps_faltando_municipio is None
+            else _situacao_faturamento(linha.ineps_faltando_municipio, tipo)
         )
 
 
@@ -319,6 +406,94 @@ def _ineps_da_diferenca(ineps, lado):
     }
 
 
+def _anotar_linhas(linhas, agrupar, ineps):
+    """Colunas calculadas do grid, iguais na página e no Excel."""
+    if agrupar == "inep":
+        _anotar_data_ativacao(linhas)
+        _anotar_situacao_faturamento(linhas)
+    elif agrupar == "municipio":
+        _anotar_total_mega(linhas, ineps)
+        _anotar_ineps_faturados(linhas)
+    return linhas
+
+
+def _planilha_grid_bdo(linhas, agrupar):
+    """Pedido do usuário (2026-10-16): botão "Excel" do grid do BDO - todas
+    as linhas dos filtros e do agrupamento da tela, sem paginação, com as
+    mesmas colunas do grid."""
+    valores = [nome for _coluna, nome in COLUNAS_VALORES.values()]
+    status = dict(InepBdo.STATUS_DIVERGENCIA_CHOICES)
+    if agrupar == "inep":
+        titulos = [
+            "INEP", "Município", "UF", "Data de ativação", "Ativado em (cliente)", "Dias proporcionais",
+            "Valor assinatura", "Valor proporcional", "Desconto (cliente)", "Valor pago (cliente)", "Status",
+            "Valor faltando", *valores, "Boletim de desempenho", "Tipo", "Faturamento",
+        ]
+        dados = (
+            [
+                linha.inep, linha.municipio_bdo.municipio, linha.municipio_bdo.uf, linha.data_ativacao,
+                linha.ativado_em_cliente, linha.dias_proporcionais, linha.valor_assinatura, linha.valor_proporcional,
+                linha.valor_desconto_cliente, linha.valor_pago_cliente,
+                status.get(linha.status_divergencia, "Pendente") if linha.tem_divergencia else None,
+                linha.valor_faltando, *linha.municipio_bdo.valores_em_ordem, linha.municipio_bdo.boletim.numero,
+                linha.municipio_bdo.boletim.tipo or None, linha.situacao_faturamento,
+            ]
+            for linha in linhas
+        )
+    elif agrupar == "municipio":
+        tipos = [tipo for tipo, _rotulo in BoletimBdo.TIPO_CHOICES]
+        titulos = [
+            "Município", "UF", "INEPs",
+            *(f"{tipo} {coluna}" for tipo in tipos for coluna in ("faturados", "faltam")),
+            "Total MEGA", "Dif. (Total MEGA − Valor total)", *valores, "Boletim de desempenho", "Tipo", "Faturamento",
+        ]
+        dados = (
+            [
+                linha["municipio"], linha["uf"], linha["quantidade_ineps"],
+                *(item[coluna] for item in linha["faturamento_por_tipo"] for coluna in ("faturados", "faltam")),
+                linha["total_mega"], linha["diferenca_mega"], *linha["valores_em_ordem"], linha["boletim"],
+                linha["tipo"] or None, linha["situacao_faturamento"],
+            ]
+            for linha in linhas
+        )
+    else:
+        titulos = ["UF", "Municípios", "INEPs", *valores, "Boletim de desempenho", "Tipo"]
+        dados = (
+            [
+                linha["uf"], linha["quantidade_municipios"], linha["quantidade_ineps"], *linha["valores_em_ordem"],
+                linha["boletim"], linha["tipo"] or None,
+            ]
+            for linha in linhas
+        )
+
+    workbook = openpyxl.Workbook()
+    aba = workbook.active
+    aba.title = "BDO"
+    aba.append(titulos)
+    for celula in aba[1]:
+        celula.font = Font(bold=True, color="FFFFFF")
+        celula.fill = PatternFill("solid", fgColor="1F2937")
+        celula.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    colunas_moeda = {
+        indice for indice, titulo in enumerate(titulos, start=1)
+        if titulo.startswith(("Valor", "Desconto", "Total", "Dif."))
+    }
+    for linha in dados:
+        aba.append(linha)
+        for indice, celula in enumerate(aba[aba.max_row], start=1):
+            if indice in colunas_moeda:
+                celula.number_format = '"R$" #,##0.00'
+            elif isinstance(celula.value, date):
+                celula.number_format = "DD/MM/YYYY"
+    for indice, titulo in enumerate(titulos, start=1):
+        aba.column_dimensions[get_column_letter(indice)].width = max(12, min(len(titulo) + 4, 30))
+    aba.freeze_panes = "A2"
+    aba.auto_filter.ref = aba.dimensions
+    saida = io.BytesIO()
+    workbook.save(saida)
+    return saida.getvalue()
+
+
 @login_required
 def bdo_view(request):
     boletins = list(BoletimBdo.objects.all())
@@ -402,12 +577,12 @@ def bdo_view(request):
     else:
         linhas = _linhas_agrupadas(municipios, ineps, agrupar)
 
+    if request.GET.get("exportar") == "excel":
+        linhas = _anotar_linhas(list(linhas), agrupar, ineps)
+        nome = f"BDO - {boletim.numero if boletim else 'todos os Boletins'} - {dict(AGRUPAMENTOS)[agrupar]}.xlsx"
+        return _anexo(_planilha_grid_bdo(linhas, agrupar), nome, MIME_XLSX)
     page_obj = Paginator(linhas, LINHAS_POR_PAGINA).get_page(request.GET.get("page"))
-    if agrupar == "inep":
-        page_obj.object_list = list(page_obj.object_list)
-        _anotar_data_ativacao(page_obj.object_list)
-    elif agrupar == "municipio":
-        _anotar_total_mega(page_obj.object_list, ineps)
+    page_obj.object_list = _anotar_linhas(list(page_obj.object_list), agrupar, ineps)
     filtros = {
         chave: valor for chave, valor in (
             ("boletim", numero_filtro if boletim else ""), ("inep", inep_filtro),
@@ -574,6 +749,7 @@ def _alterar_status_divergencia(linhas, status, usuario, em_massa=False):
             usuario=usuario,
         ))
         linha.status_divergencia, linha.status_divergencia_em, linha.status_divergencia_por = status, agora, usuario
+        _anotar_divergencia(linha)
         alterados.append(linha)
     with transaction.atomic():
         InepBdo.objects.bulk_update(
@@ -608,7 +784,7 @@ def bdo_status_divergencia_view(request, pk):
         messages.error(request, f"INEP {linha.inep}: não há divergência para mudar o status.")
     if request.headers.get("HX-Request"):
         return render(request, "escolas/_bdo_status_divergencia.html", {
-            "linha": linha, "status_divergencia_choices": InepBdo.STATUS_DIVERGENCIA_CHOICES,
+            "linha": linha, "status_divergencia_choices": InepBdo.STATUS_DIVERGENCIA_CHOICES, "oob": True,
         })
     return redirect(f"{reverse('bdo')}?boletim={linha.municipio_bdo.boletim.numero}&inep={linha.inep}")
 
@@ -667,10 +843,12 @@ def _contexto_recebiveis(dados):
 
     Pedido do usuário (2026-10-15): abre com o Boletim e o período de Data
     de Ativação filtrados no grid, na visão "Por Município". Só entram os
-    INEPs ativados no período e que não estão Contestados; o município entra
-    com a parte desses INEPs (Valor total ÷ INEPs do município × INEPs que
-    entram), mesmo rateio do card "Valor total". Município sem nenhum INEP
-    que entre fica de fora."""
+    INEPs ativados no período; o município entra com a parte dos INEPs não
+    Contestados (Valor total ÷ INEPs do município × INEPs não Contestados),
+    mesmo rateio do card "Valor total". Do INEP Contestado entra só o valor
+    recebido (Valor assinatura − desconto da Pro rata, pedido do usuário
+    de 2026-10-15); o faltando fica para outro Boletim. Município sem nenhum INEP no período
+    fica de fora."""
     boletins = list(BoletimBdo.objects.all())
     numeros = set(dados.getlist("boletim"))
     selecionados = [boletim for boletim in boletins if boletim.numero in numeros]
@@ -691,17 +869,27 @@ def _contexto_recebiveis(dados):
         .annotate(quantidade_ineps=Count("ineps")).order_by("-boletim__numero", "uf", Upper("municipio"), "pk")
     )
     ineps = defaultdict(list)
-    todos_ineps = InepBdo.objects.filter(municipio_bdo__in=municipios)
-    contestados = todos_ineps.filter(status_divergencia=InepBdo.STATUS_CONTESTADO).count()
-    entram = todos_ineps.exclude(status_divergencia=InepBdo.STATUS_CONTESTADO)
+    recebido_contestados = defaultdict(Decimal)
+    quantidade_contestados = defaultdict(int)
+    entram = InepBdo.objects.filter(municipio_bdo__in=municipios)
     if data_inicial or data_final:
         entram = entram.filter(inep__in=_ineps_ativados_no_periodo(data_inicial, data_final))
-    for municipio_id, inep in entram.values_list("municipio_bdo_id", "inep"):
+    contestados = list(entram.filter(status_divergencia=InepBdo.STATUS_CONTESTADO).select_related("municipio_bdo__boletim"))
+    _anotar_data_ativacao(contestados)
+    for linha in contestados:
+        recebido_contestados[linha.municipio_bdo_id] += linha.valor_recebido or Decimal("0")
+        quantidade_contestados[linha.municipio_bdo_id] += 1
+    for municipio_id, inep in entram.exclude(status_divergencia=InepBdo.STATUS_CONTESTADO).values_list(
+        "municipio_bdo_id", "inep",
+    ):
         ineps[municipio_id].append(inep)
+    for linha in contestados:
+        ineps[linha.municipio_bdo_id].append(linha.inep)
     for municipio in municipios:
         municipio.lista_ineps = ineps[municipio.pk]
+        nao_contestados = len(municipio.lista_ineps) - quantidade_contestados[municipio.pk]
         municipio.valor_recebivel = (
-            municipio.valor_total * len(municipio.lista_ineps) / municipio.quantidade_ineps
+            municipio.valor_total * nao_contestados / municipio.quantidade_ineps + recebido_contestados[municipio.pk]
         ).quantize(Decimal("0.01")) if municipio.quantidade_ineps else Decimal("0.00")
         municipio.quantidade_ineps = len(municipio.lista_ineps)
     municipios = [municipio for municipio in municipios if municipio.quantidade_ineps]
@@ -739,7 +927,8 @@ def _contexto_recebiveis(dados):
         "recebiveis_valor_total": sum((municipio.valor_recebivel for municipio in mantidos), Decimal("0.00")),
         "recebiveis_data_inicial": data_inicial,
         "recebiveis_data_final": data_final,
-        "recebiveis_contestados": contestados,
+        "recebiveis_contestados": len(contestados),
+        "recebiveis_recebido_contestados": sum(recebido_contestados.values(), Decimal("0.00")),
     }
 
 
@@ -751,3 +940,50 @@ def bdo_recebiveis_view(request):
     `VisualizadorAccessMiddleware`."""
     dados = request.POST if request.method == "POST" else request.GET
     return render(request, "escolas/_bdo_recebiveis.html", _contexto_recebiveis(dados))
+
+
+MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _anexo(conteudo, nome, content_type):
+    """Download com nome acentuado: filename ASCII de reserva + filename*
+    (RFC 5987), mesmo padrão das demais planilhas."""
+    resposta = HttpResponse(conteudo, content_type=content_type)
+    nome_ascii = nome.encode("ascii", "ignore").decode("ascii") or "medicao"
+    resposta["Content-Disposition"] = f"attachment; filename=\"{nome_ascii}\"; filename*=UTF-8''{quote(nome)}"
+    return resposta
+
+
+@login_required
+@require_POST
+def bdo_medicao_view(request):
+    """Gera a planilha de Medição de cada Boletim do modal "Recebíveis"
+    (pedido do usuário, 2026-10-15) com o que ficou nele depois da
+    conferência: uma .xlsx com um Boletim, um .zip com uma por Boletim.
+    Grava o número da Medição e o 1º faturamento dos INEPs novos, por isso
+    fica fora do Visualizador."""
+    if request.user.is_visualizador:
+        return HttpResponseForbidden("Visualizador não pode gerar a Medição.")
+    linhas = _contexto_recebiveis(request.POST)["recebiveis_linhas"]
+    if not linhas:
+        messages.error(request, "Medição não gerada: escolha um Boletim no Recebíveis e mantenha pelo menos um município.")
+        return redirect("bdo")
+    chaves = {(linha.uf, _normalizar(linha.municipio)) for linha in linhas}
+    escolas, faturados = _faturamento_por_municipio(chaves)
+    situacoes = {
+        (tipo, *chave): _situacao_faturamento(len(escolas[chave] - faturados[(tipo, *chave)]), tipo)[0]
+        for chave in chaves for tipo, _rotulo in BoletimBdo.TIPO_CHOICES
+    }
+    try:
+        arquivos = gerar_medicoes(linhas, situacoes, request.user)
+    except MedicaoBdoError as erro:
+        messages.error(request, f"Medição não gerada: {erro}")
+        return redirect("bdo")
+    if len(arquivos) == 1:
+        nome, conteudo = arquivos[0]
+        return _anexo(conteudo, nome, MIME_XLSX)
+    saida = io.BytesIO()
+    with zipfile.ZipFile(saida, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
+        for nome, conteudo in arquivos:
+            arquivo_zip.writestr(nome, conteudo)
+    return _anexo(saida.getvalue(), "MEDIÇÕES - MANUTENÇÃO.zip", "application/zip")

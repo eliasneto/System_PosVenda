@@ -1,6 +1,6 @@
 {% comment %}
 Célula "Status" do grid por INEP do BDO (pedido do usuário, 2026-10-15):
-campo lista só no INEP com divergência de data ou de desconto com a Pro rata
+campo lista só no INEP com divergência de data ou de valor pago com a Pro rata
 do cliente. Mudar o valor grava na hora (HTMX); cada troca fica no log
 (`LogStatusDivergenciaBdo`).
 {% endcomment %}
@@ -23,3 +23,4 @@ do cliente. Mudar o valor grava na hora (HTMX); cada troca fica no log
     </select>
     {% endif %}
 </td>
+{% if oob %}{% include "escolas/_bdo_valor_faltando.html" %}{% endif %}
