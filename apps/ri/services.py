@@ -800,6 +800,13 @@ def _comparar_nota_fiscal_com_relatorio_eace(ri, documento, dados, catalogo):
             f"{' ou '.join(itens_lpu_esperados)}."
         )
 
+    # Pedido do usuário (2026-10-16): sem o CNPJ da EACE na NF o portal
+    # mostra o AVISO "Não identificamos o CNPJ da EACE nessa NF" no envio.
+    if not dados.get("cnpj_eace", True):
+        from apps.integracoes.eace.extrair_dados_pdf import CNPJ_EACE_FORMATADO
+
+        motivos.append(f"CNPJ da EACE ({CNPJ_EACE_FORMATADO}) não encontrado na Nota Fiscal.")
+
     avisos = []
     if casado_por_item_lpu:
         avisos.append(

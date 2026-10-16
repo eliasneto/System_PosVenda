@@ -25,6 +25,22 @@ _RE_VALOR = re.compile(r"VALOR\s+TOTAL\s+DA\s+NOTA", re.IGNORECASE)
 # Linha de dados do produto: [COD.PROD] [DESCRICAO] [NCM 0000.00.00] [resto...]
 _RE_PRODUTO = re.compile(r"^\S+\s+(.+?)\s+\d{4}\.\d{2}\.\d{2}", re.MULTILINE)
 
+# CNPJ da EACE, destinataria de toda Nota Fiscal do RI (pedido do usuario,
+# 2026-10-16): o portal mostra o AVISO "Nao identificamos o CNPJ da EACE
+# nessa NF" quando nao o encontra - aqui ele e conferido no PDF e no XML
+# antes de a NF ir para o portal. CNPJ formatado (PDF) ou so digitos (XML).
+CNPJ_EACE = "45726363000147"
+CNPJ_EACE_FORMATADO = "45.726.363/0001-47"
+_RE_CNPJ = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
+
+# CNPJ da EACE, destinataria de toda Nota Fiscal do RI (pedido do usuario,
+# 2026-10-16): o portal mostra o AVISO "Nao identificamos o CNPJ da EACE
+# nessa NF" quando nao o encontra - aqui ele e conferido no PDF e no XML
+# antes de a NF ir para o portal. CNPJ formatado ou so digitos (XML).
+CNPJ_EACE = "45726363000147"
+CNPJ_EACE_FORMATADO = "45.726.363/0001-47"
+_RE_CNPJ = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
+
 # Botão "Validar Notas Fiscais" (a formalizar pelo Orquestrador em
 # business_rules.md; ver `apps.ri.services.validar_notas_fiscais_financeiro`):
 # texto do "ITEM LPU" gravado em "Dados Adicionais" do DANFE — mesmo texto
@@ -82,6 +98,21 @@ def extrair_valor(texto: str) -> str:
                 if numeros:
                     return numeros[-1]
     return ""
+
+
+def contem_cnpj_eace(texto: str) -> bool:
+    return any(re.sub(r"\D", "", cnpj) == CNPJ_EACE for cnpj in _RE_CNPJ.findall(texto))
+
+
+def xml_contem_cnpj_eace(caminho_xml: str) -> bool:
+    """`False` tambem quando o XML nao pode ser lido - o portal recusaria
+    do mesmo jeito."""
+    try:
+        texto = Path(caminho_xml).read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        logger.error("Erro ao ler XML %s: %s", Path(caminho_xml).name, exc)
+        return False
+    return contem_cnpj_eace(texto)
 
 
 def _normalizar_valor(valor: str) -> float:
@@ -154,6 +185,7 @@ def extrair_dados_validacao_nf(caminho_pdf: str) -> dict:
         "inep": extrair_inep(texto),
         "item_lpu": extrair_item_lpu(texto),
         "itens": extrair_itens_produto_nf(texto),
+        "cnpj_eace": contem_cnpj_eace(texto),
         "ilegivel": not texto.strip(),
     }
 
@@ -178,11 +210,12 @@ def extrair_dados_nota_fiscal(caminho_pdf: str) -> dict:
         "inep": extrair_inep(texto),
         "produto": extrair_produto(texto),
         "valor": extrair_valor(texto),
+        "cnpj_eace": contem_cnpj_eace(texto),
         "ilegivel": not texto.strip(),
     }
     logger.info(
-        "Dados extraidos da NF (%s): INEP=%s | Produto=%s | Valor=%s | Ilegivel=%s",
+        "Dados extraidos da NF (%s): INEP=%s | Produto=%s | Valor=%s | CNPJ EACE=%s | Ilegivel=%s",
         Path(caminho_pdf).name, dados["inep"] or "?", dados["produto"] or "?", dados["valor"] or "?",
-        dados["ilegivel"],
+        dados["cnpj_eace"], dados["ilegivel"],
     )
     return dados

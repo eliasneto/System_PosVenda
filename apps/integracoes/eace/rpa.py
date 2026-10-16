@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .config import SCREENSHOTS_DIR, ConfigEace
-from .extrair_dados_pdf import extrair_dados_nota_fiscal, valores_iguais
+from .extrair_dados_pdf import extrair_dados_nota_fiscal, valores_iguais, xml_contem_cnpj_eace
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,8 @@ class ResultadoRpaEace:
 #   pdf_sem_inep            - PDF lido, mas sem "INEP: ########" no texto
 #   pdf_sem_valor           - PDF lido, mas sem "Valor Total da Nota" no texto
 #   inep_divergente_do_pdf  - INEP do PDF diferente do --inep informado
+#   pdf_sem_cnpj_eace       - PDF lido, mas sem o CNPJ da EACE (destinataria) no texto
+#   xml_sem_cnpj_eace       - XML sem o CNPJ da EACE (destinataria)
 #   login                   - login recusado pelo portal
 #   selecao_perfil          - modal "Fornecedor" nao respondeu
 #   abrir_medicoes          - card "Medições" nao encontrado
@@ -85,6 +87,8 @@ MOTIVOS_REGRA_DE_NEGOCIO = frozenset({
     "pdf_sem_inep",
     "pdf_sem_valor",
     "inep_divergente_do_pdf",
+    "pdf_sem_cnpj_eace",
+    "xml_sem_cnpj_eace",
     "valor_divergente",
     "valor_ambiguo",
     "osp_nao_encontrada",
@@ -227,6 +231,15 @@ def anexar_nota_fiscal(
             dados_pdf["inep"], inep,
         )
         return ResultadoRpaEace(sucesso=False, motivo="inep_divergente_do_pdf", dados_pdf=dados_pdf)
+    # Pedido do usuario (2026-10-16): NF sem o CNPJ da EACE faz o portal
+    # mostrar o AVISO "Nao identificamos o CNPJ da EACE nessa NF" - barra
+    # aqui, antes de abrir o portal, para o usuario corrigir a NF.
+    if not dados_pdf["cnpj_eace"]:
+        logger.error("PDF da NF sem o CNPJ da EACE - abortando antes de abrir o portal.")
+        return ResultadoRpaEace(sucesso=False, motivo="pdf_sem_cnpj_eace", dados_pdf=dados_pdf)
+    if not xml_contem_cnpj_eace(caminho_xml):
+        logger.error("XML da NF sem o CNPJ da EACE - abortando antes de abrir o portal.")
+        return ResultadoRpaEace(sucesso=False, motivo="xml_sem_cnpj_eace", dados_pdf=dados_pdf)
 
     cfg = config or ConfigEace.carregar()
     if not cfg.usuario or not cfg.senha:

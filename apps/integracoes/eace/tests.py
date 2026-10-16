@@ -55,13 +55,20 @@ def _gerar_pdf_nota_fiscal_validacao(
     c.save()
 
 
-def _gerar_pdf_nota_fiscal(caminho, inep="35083938", valor="22.644,43", com_inep=True, com_valor=True):
+_XML_NF_EACE = "<nfeProc><dest><CNPJ>45726363000147</CNPJ></dest></nfeProc>"
+
+
+def _gerar_pdf_nota_fiscal(
+    caminho, inep="35083938", valor="22.644,43", com_inep=True, com_valor=True, com_cnpj_eace=True
+):
     """Gera um PDF minimo com o mesmo formato que `extrair_dados_pdf`
     procura - usado para testar a extracao de ponta a ponta, sem
     depender de um PDF real de Nota Fiscal."""
     c = canvas.Canvas(str(caminho))
     y = 750  # pagina padrao (letter) tem 792pt de altura - fica com margem
     linhas = ["NOTA FISCAL ELETRONICA", "MEGA INFRA SOLUCOES EM INFRAESTRUTURA"]
+    if com_cnpj_eace:
+        linhas.append("DESTINATARIO EACE CNPJ 45.726.363/0001-47")
     if com_inep:
         linhas.append(f"INEP: {inep}")
     linhas.append("001 Kit Cobertura Wi-Fi - 12 Access Points 8517.62.59")
@@ -93,6 +100,14 @@ class ExtrairDadosPdfTests(SimpleTestCase):
     def test_extrai_produto(self):
         texto = "001 Kit Cobertura Wi-Fi - 12 Access Points 8517.62.59"
         self.assertEqual(extrair_dados_pdf.extrair_produto(texto), "Kit Cobertura Wi-Fi - 12 Access Points")
+
+    def test_contem_cnpj_eace_formatado_ou_so_digitos(self):
+        self.assertTrue(extrair_dados_pdf.contem_cnpj_eace("CNPJ 45.726.363/0001-47"))
+        self.assertTrue(extrair_dados_pdf.contem_cnpj_eace("<CNPJ>45726363000147</CNPJ>"))
+
+    def test_contem_cnpj_eace_ignora_outros_cnpjs_e_numeros_longos(self):
+        self.assertFalse(extrair_dados_pdf.contem_cnpj_eace("CNPJ 07.525.262/0004-61"))
+        self.assertFalse(extrair_dados_pdf.contem_cnpj_eace("chave 9945726363000147123"))
 
     def test_valores_iguais_ignora_formatacao(self):
         self.assertTrue(extrair_dados_pdf.valores_iguais("22.644,43", "22.644,43"))
@@ -141,7 +156,7 @@ class ExtrairDadosNotaFiscalPdfRealTests(SimpleTestCase):
         arquivo_invalido = Path(self._tmp.name) / "nao-e-pdf.pdf"
         arquivo_invalido.write_bytes(b"isto nao e um PDF de verdade")
         dados = extrair_dados_pdf.extrair_dados_nota_fiscal(str(arquivo_invalido))
-        self.assertEqual(dados, {"inep": "", "produto": "", "valor": "", "ilegivel": True})
+        self.assertEqual(dados, {"inep": "", "produto": "", "valor": "", "cnpj_eace": False, "ilegivel": True})
 
     def test_pdf_ausente_no_disco_e_ilegivel(self):
         """Caso real de produção (INEP 35230571, 2026-09-08): arquivo do
@@ -152,7 +167,7 @@ class ExtrairDadosNotaFiscalPdfRealTests(SimpleTestCase):
         com sucesso mas sem INEP."""
         caminho_inexistente = str(Path(self._tmp.name) / "nao-existe.pdf")
         dados = extrair_dados_pdf.extrair_dados_nota_fiscal(caminho_inexistente)
-        self.assertEqual(dados, {"inep": "", "produto": "", "valor": "", "ilegivel": True})
+        self.assertEqual(dados, {"inep": "", "produto": "", "valor": "", "cnpj_eace": False, "ilegivel": True})
 
 
 class ExtrairDadosValidacaoNfTests(SimpleTestCase):
@@ -249,7 +264,7 @@ class AnexarNotaFiscalValidacaoAntecipadaTests(SimpleTestCase):
         self.addCleanup(self._tmp.cleanup)
         self.pdf = Path(self._tmp.name) / "nota.pdf"
         self.xml = Path(self._tmp.name) / "nota.xml"
-        self.xml.write_text("<xml/>", encoding="utf-8")
+        self.xml.write_text(_XML_NF_EACE, encoding="utf-8")
 
     def _rodar(self, **kwargs):
         base = {"osp": "3929", "inep": "35083938", "indice": 1, "caminho_xml": str(self.xml)}
@@ -283,6 +298,23 @@ class AnexarNotaFiscalValidacaoAntecipadaTests(SimpleTestCase):
         self.assertFalse(resultado.sucesso)
         self.assertEqual(resultado.motivo, "pdf_sem_valor")
 
+    def test_pdf_sem_cnpj_eace_aborta_antes_do_navegador(self):
+        from apps.integracoes.eace.rpa import MOTIVOS_REGRA_DE_NEGOCIO
+        _gerar_pdf_nota_fiscal(self.pdf, com_cnpj_eace=False)
+        resultado = self._rodar()
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "pdf_sem_cnpj_eace")
+        self.assertIn("pdf_sem_cnpj_eace", MOTIVOS_REGRA_DE_NEGOCIO)
+
+    def test_xml_sem_cnpj_eace_aborta_antes_do_navegador(self):
+        _gerar_pdf_nota_fiscal(self.pdf)
+        self.xml.write_text("<nfeProc><dest><CNPJ>11222333000181</CNPJ></dest></nfeProc>", encoding="utf-8")
+        with patch("playwright.sync_api.sync_playwright") as mock_playwright:
+            resultado = self._rodar()
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "xml_sem_cnpj_eace")
+        mock_playwright.assert_not_called()
+
     def test_inep_do_pdf_diferente_do_informado_aborta_antes_do_navegador(self):
         _gerar_pdf_nota_fiscal(self.pdf, inep="35083938")
         resultado = self._rodar(inep="99999999")
@@ -301,7 +333,7 @@ class AnexarNotaFiscalValidacaoContraOPortalTests(SimpleTestCase):
         self.pdf = Path(self._tmp.name) / "nota.pdf"
         self.xml = Path(self._tmp.name) / "nota.xml"
         _gerar_pdf_nota_fiscal(self.pdf, inep="35083938", valor="22.644,43")
-        self.xml.write_text("<xml/>", encoding="utf-8")
+        self.xml.write_text(_XML_NF_EACE, encoding="utf-8")
 
     def _mock_sync_playwright(self):
         """Monta a cadeia sync_playwright() -> p -> navegador -> contexto
@@ -633,7 +665,7 @@ class EaceAnexarNotaFiscalCommandTests(TestCase):
         self.pdf = tmp_dir / "nota.pdf"
         self.xml = tmp_dir / "nota.xml"
         self.pdf.write_bytes(b"%PDF-fake")
-        self.xml.write_text("<xml/>", encoding="utf-8")
+        self.xml.write_text(_XML_NF_EACE, encoding="utf-8")
 
         self.base_args = {
             "osp": "12345",
@@ -712,3 +744,31 @@ class EaceAnexarNotaFiscalCommandTests(TestCase):
         ) as mock_rpa:
             self._rodar(indice=2)
             self.assertEqual(mock_rpa.call_args.kwargs["indice"], 2)
+
+
+class AvisoCnpjEacePortalTests(SimpleTestCase):
+    """Pedido do usuario (2026-10-16): AVISO "Nao identificamos o CNPJ da
+    EACE nessa NF" do portal - o RPA do RI clica em 'Continuar com o envio'
+    (o CNPJ ja foi conferido antes de abrir o portal)."""
+
+    def test_clica_em_continuar_quando_o_aviso_aparece(self):
+        from apps.integracoes.eace.dashboard import _continuar_aviso_cnpj
+        pagina = MagicMock()
+        self.assertTrue(_continuar_aviso_cnpj(pagina, timeout_ms=10))
+        pagina.get_by_role.assert_called_once_with("button", name="Continuar com o envio")
+        pagina.get_by_role.return_value.click.assert_called_once()
+
+    def test_sem_aviso_nao_clica_em_nada(self):
+        from playwright.sync_api import TimeoutError as PWTimeout
+
+        from apps.integracoes.eace.dashboard import _continuar_aviso_cnpj
+        pagina = MagicMock()
+        pagina.get_by_role.return_value.wait_for.side_effect = PWTimeout("sem aviso")
+        self.assertFalse(_continuar_aviso_cnpj(pagina, timeout_ms=10))
+        pagina.get_by_role.return_value.click.assert_not_called()
+
+    def test_modal_do_mip_nao_trata_o_aviso(self):
+        from apps.integracoes.eace import dashboard
+        with patch.object(dashboard, "_continuar_aviso_cnpj") as mock_aviso:
+            dashboard._confirmar_modal_pos_upload(MagicMock())
+        mock_aviso.assert_not_called()

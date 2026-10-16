@@ -3354,6 +3354,22 @@ criado nem acionado.
   o autor real em vez de sempre "Sistema").
 - 4 testes novos, suíte de `apps.ri`/`apps.escolas` sem regressão.
 
+**Entrega do Dev (2026-10-16, correção — "Enviar notas" não era apertado):**
+- Usuário reportou que o RPA do RI anexava NF e XML, mas não apertava
+  "Enviar notas". Logs e prints do servidor mostraram 2 causas: o portal
+  abria o AVISO "Não identificamos o CNPJ da EACE nessa NF" na frente do
+  "Confirmar informações", e em alguns casos o PDF não ficava na linha.
+- Decisão do usuário: o sistema confere o CNPJ da EACE no PDF e no XML
+  antes de abrir o portal (erros novos `pdf_sem_cnpj_eace`/
+  `xml_sem_cnpj_eace`, sem reprocessamento automático) e no botão
+  "Validar Notas Fiscais"; com o CNPJ conferido, o robô clica em
+  "Continuar com o envio" quando o aviso aparecer.
+- O robô confere se o PDF apareceu na linha e anexa de novo se precisar;
+  os botões "Confirmar informações" e "Enviar notas" passaram a ser
+  localizados pelo texto visível.
+- **Pendência:** Orquestrador formalizar a regra em `business_rules.md`;
+  validar no portal real após o deploy.
+
 ---
 
 ### FEAT-034 — Submenu MIP (Projeto > MIP): grid de INEPs em Validação EACE com os 3 lados do RI

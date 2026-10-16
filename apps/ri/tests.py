@@ -9780,6 +9780,7 @@ class ValidarNotasFiscaisFinanceiroServiceTests(TestCase):
                 "descricao": "CONVERSOR DE MIDIA", "quantidade": "1,00",
                 "valor_unitario": "1.733,47", "valor_total": "1.733,47",
             }],
+            "cnpj_eace": True,
             "ilegivel": False,
         }
         dados.update(overrides)
@@ -9791,6 +9792,15 @@ class ValidarNotasFiscaisFinanceiroServiceTests(TestCase):
             return_value=dados_pdf,
         ):
             return validar_notas_fiscais_financeiro(self.ri, self.usuario)
+
+    def test_divergente_quando_nf_nao_tem_o_cnpj_da_eace(self):
+        """Pedido do usuário (2026-10-16): sem o CNPJ da EACE na NF o
+        portal mostra o AVISO "Não identificamos o CNPJ da EACE nessa NF"."""
+        resultados = self._validar(self._dados_pdf(cnpj_eace=False))
+        self.assertFalse(resultados[0]["ok"])
+        self.assertEqual(
+            resultados[0]["motivos"], ["CNPJ da EACE (45.726.363/0001-47) não encontrado na Nota Fiscal."]
+        )
 
     def test_valida_nf_do_processamento_manual(self):
         """Pedido do usuário (2026-09-25): NF corrigida recebida por fora

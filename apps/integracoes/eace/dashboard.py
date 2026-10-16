@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 
 from playwright.sync_api import Page, TimeoutError as PWTimeout
 
@@ -238,9 +239,41 @@ def extrair_dados_grid(pagina: Page, numero_inep: str) -> list[dict]:
     return resultados
 
 
-def _confirmar_modal_pos_upload(pagina: Page) -> None:
-    """Aguarda e clica em 'Confirmar informacoes' no modal pos-upload."""
+def _continuar_aviso_cnpj(pagina: Page, timeout_ms: int = 5_000) -> bool:
+    """Clica em 'Continuar com o envio' no AVISO "Nao identificamos o CNPJ
+    da EACE nessa NF", se ele aparecer em ate `timeout_ms`.
+
+    Decisao do usuario (2026-10-16): o CNPJ ja foi conferido no PDF e no
+    XML antes de abrir o portal (`rpa.anexar_nota_fiscal`) - o aviso so
+    aparece quando o portal nao consegue ler o PDF (pre-visualizacao em
+    branco nas falhas de 16/10, NFs 2731 e 2737 com o CNPJ presente). Sem
+    este clique o aviso fica na frente de 'Confirmar informações' e o RPA
+    morria em `enviar_notas`.
+    """
+    botao = pagina.get_by_role("button", name="Continuar com o envio")
+    try:
+        botao.wait_for(state="visible", timeout=timeout_ms)
+    except PWTimeout:
+        return False
+    logger.warning("  [Aviso] Portal nao identificou o CNPJ da EACE na NF - clicando em 'Continuar com o envio'.")
+    try:
+        botao.click()
+        pagina.wait_for_timeout(1_500)
+        return True
+    except Exception as exc:
+        logger.warning("  [Aviso] Erro ao clicar em 'Continuar com o envio': %s", exc)
+        return False
+
+
+def _confirmar_modal_pos_upload(pagina: Page, continuar_aviso_cnpj: bool = False) -> None:
+    """Aguarda e clica em 'Confirmar informações' no modal pos-upload.
+
+    `continuar_aviso_cnpj` so no RPA do RI, que confere o CNPJ da EACE na
+    NF antes de abrir o portal (o MIP nao confere).
+    """
     pagina.wait_for_timeout(2_500)
+    if continuar_aviso_cnpj:
+        _continuar_aviso_cnpj(pagina)
 
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
     pagina.screenshot(
@@ -250,17 +283,21 @@ def _confirmar_modal_pos_upload(pagina: Page) -> None:
     logger.info("  [Modal] Screenshot salvo em debug_modal_pre_confirmacao.png")
 
     try:
+        # O texto do portal tem acento ("Confirmar informações"); uniao de
+        # seletores CSS devolve em ordem de DOM, por isso so os visiveis.
         btn = pagina.locator(
             "button.baaMyaY0, "
-            "button:has-text('Confirmar informacoes'), "
+            "button:has-text('Confirmar informações'), "
             "button:has-text('Confirmar'), "
             "button:has-text('Salvar'), "
             "button:has-text('OK')"
-        ).first
+        ).filter(visible=True).first
         btn.wait_for(state="visible", timeout=10_000)
         btn.click()
         logger.info("  [Modal] Botao de confirmacao clicado.")
         pagina.wait_for_timeout(2_000)
+        if continuar_aviso_cnpj:
+            _continuar_aviso_cnpj(pagina, timeout_ms=2_000)
     except PWTimeout:
         logger.warning("  [Modal] Botao de confirmacao nao apareceu - continuando.")
     except Exception as exc:
@@ -302,6 +339,20 @@ def _set_arquivo(pagina: Page, file_input, caminho: str, label: str) -> bool:
         return False
 
 
+def _aguardar_arquivo_na_linha(pagina: Page, linha, caminho: str, timeout_ms: int = 20_000) -> bool:
+    """Espera o nome do arquivo enviado aparecer na linha do grid (o portal
+    mostra o nome, quebrado em 2 linhas, no lugar do botao 'Nota fiscal')."""
+    prefixo = Path(caminho).stem.split("-")[0]
+    for _ in range(timeout_ms // 1_000):
+        try:
+            if prefixo in linha.inner_text(timeout=2_000):
+                return True
+        except Exception:
+            pass
+        pagina.wait_for_timeout(1_000)
+    return False
+
+
 def upload_linha(
     pagina: Page,
     numero_inep: str,
@@ -321,7 +372,13 @@ def upload_linha(
     if not _set_arquivo(pagina, linha.locator("input[type='file']").nth(0), caminho_pdf, "PDF"):
         return False
 
-    pagina.wait_for_timeout(2_000)
+    # Falhas de 14-15/10 (INEPs 52003949, 35010083): o PDF "anexado" nao
+    # ficou na linha (so o XML apareceu), sem modal nem 'Enviar notas'.
+    if not _aguardar_arquivo_na_linha(pagina, linha, caminho_pdf):
+        logger.warning("    PDF nao apareceu na linha - anexando de novo...")
+        _set_arquivo(pagina, linha.locator("input[type='file']").nth(0), caminho_pdf, "PDF")
+        if not _aguardar_arquivo_na_linha(pagina, linha, caminho_pdf):
+            logger.warning("    PDF continua sem aparecer na linha - seguindo com o XML mesmo assim.")
 
     logger.info("    XML upload...")
     # Re-query apos o upload do PDF: Bubble.io pode ter re-renderizado a linha.
@@ -330,20 +387,30 @@ def upload_linha(
 
     # Modal de confirmacao aparece apos o XML.
     pagina.wait_for_timeout(2_000)
-    _confirmar_modal_pos_upload(pagina)
+    _confirmar_modal_pos_upload(pagina, continuar_aviso_cnpj=True)
     return True
 
 
 def clicar_enviar_notas(pagina: Page) -> bool:
     """Clica no botao 'Enviar notas' apos o upload de todos os arquivos do INEP."""
     logger.info("Clicando em 'Enviar notas'...")
+    # O AVISO do CNPJ pode ter ficado aberto na frente do botao.
+    _continuar_aviso_cnpj(pagina, timeout_ms=1_000)
     try:
-        btn = pagina.locator("button.baaNgaC3, button:has-text('Enviar notas')").first
-        btn.wait_for(state="visible", timeout=10_000)
+        # So pelo texto: a classe `baaNgaC3` e o estilo de botao verde do
+        # Bubble, compartilhado com outros botoes da tela.
+        btn = pagina.locator("button:has-text('Enviar notas')").filter(visible=True).first
+        btn.wait_for(state="visible", timeout=15_000)
         btn.scroll_into_view_if_needed()
         btn.click()
         logger.info("'Enviar notas' clicado.")
         pagina.wait_for_timeout(2_000)
+        _continuar_aviso_cnpj(pagina, timeout_ms=2_000)
+        try:
+            SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+            pagina.screenshot(path=str(SCREENSHOTS_DIR / "debug_pos_enviar_notas.png"), full_page=True)
+        except Exception:
+            pass
         return True
     except PWTimeout:
         logger.error("Timeout ao localizar botao 'Enviar notas'.")
