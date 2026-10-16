@@ -47,6 +47,8 @@ urlpatterns = [
     ),
     path("bdo/", views_bdo.bdo_view, name="bdo"),
     path("bdo/recebiveis/", views_bdo.bdo_recebiveis_view, name="bdo_recebiveis"),
+    path("bdo/<int:pk>/leitura-eace/", views_bdo.bdo_leitura_eace_view, name="bdo_leitura_eace"),
+    path("bdo/<int:pk>/leitura-eace/status/", views_bdo.bdo_leitura_eace_status_view, name="bdo_leitura_eace_status"),
     path("bdo/recebiveis/medicao/", views_bdo.bdo_medicao_view, name="bdo_medicao"),
     path("bdo/inep/<int:pk>/status-divergencia/", views_bdo.bdo_status_divergencia_view, name="bdo_status_divergencia"),
     path(

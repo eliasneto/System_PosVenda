@@ -39,9 +39,10 @@ from .bdo import (
     COLUNAS_VALORES, PlanilhaBdoError, _normalizar, dias_no_mes_referencia, importar_planilha_bdo, importar_pro_rata,
     valor_proporcional,
 )
+from .leitura_eace_bdo import conferencia_eace_boletim, enfileirar_leitura_eace_bdo, mensagem_motivo_bdo
 from .forms import MesReferenciaBdoForm, PlanilhaBdoUploadForm, PlanilhaProRataUploadForm
 from .medicao_bdo import MedicaoBdoError, gerar_medicoes
-from .models import BoletimBdo, Escola, InepBdo, LogStatusDivergenciaBdo, MunicipioBdo
+from .models import BoletimBdo, Escola, InepBdo, LeituraEaceBdo, LogStatusDivergenciaBdo, MunicipioBdo
 from .views import _parse_data_filtro
 
 DIFERENCA_TODOS = "1"
@@ -406,6 +407,32 @@ def _ineps_da_diferenca(ineps, lado):
     }
 
 
+def _anotar_portal_eace(grupos):
+    """Pedido do usuário (2026-10-16): coluna "Portal EACE" do grid Por
+    Município - Status, "Valor total a ser emitido" e arquivo da NF do card
+    do município no portal, gravados pela Leitura EACE do BDO. `eace_lido`
+    falso = Boletim ainda não lido do portal; lido sem status = o portal
+    não tem card do município."""
+    ids = [pk for grupo in grupos for pk in grupo["municipio_ids"]]
+    dados = {
+        municipio["pk"]: municipio for municipio in MunicipioBdo.objects.filter(pk__in=ids).values(
+            "pk", "status_eace", "valor_eace", "arquivo_nf_eace", "eace_lido_em",
+        )
+    }
+    for grupo in grupos:
+        itens = [dados[pk] for pk in grupo["municipio_ids"] if pk in dados]
+        com_card = [item for item in itens if item["status_eace"]]
+        grupo["eace_lido"] = any(item["eace_lido_em"] for item in itens)
+        grupo["status_eace"] = ", ".join(sorted({item["status_eace"] for item in com_card}))
+        valores = [item["valor_eace"] for item in com_card if item["valor_eace"] is not None]
+        grupo["valor_eace"] = sum(valores, Decimal("0")) if valores else None
+        grupo["arquivo_nf_eace"] = ", ".join(item["arquivo_nf_eace"] for item in com_card if item["arquivo_nf_eace"])
+        grupo["diferenca_eace"] = (
+            None if grupo["valor_eace"] is None or grupo["valor_total"] is None
+            else grupo["valor_eace"] - grupo["valor_total"]
+        )
+
+
 def _anotar_linhas(linhas, agrupar, ineps):
     """Colunas calculadas do grid, iguais na página e no Excel."""
     if agrupar == "inep":
@@ -414,6 +441,7 @@ def _anotar_linhas(linhas, agrupar, ineps):
     elif agrupar == "municipio":
         _anotar_total_mega(linhas, ineps)
         _anotar_ineps_faturados(linhas)
+        _anotar_portal_eace(linhas)
     return linhas
 
 
@@ -445,13 +473,16 @@ def _planilha_grid_bdo(linhas, agrupar):
         titulos = [
             "Município", "UF", "INEPs",
             *(f"{tipo} {coluna}" for tipo in tipos for coluna in ("faturados", "faltam")),
-            "Total MEGA", "Dif. (Total MEGA − Valor total)", *valores, "Boletim de desempenho", "Tipo", "Faturamento",
+            "Total MEGA", "Dif. (Total MEGA − Valor total)", "Status EACE", "Valor EACE (a ser emitido)",
+            "Arquivo da NF (EACE)", *valores, "Boletim de desempenho", "Tipo", "Faturamento",
         ]
         dados = (
             [
                 linha["municipio"], linha["uf"], linha["quantidade_ineps"],
                 *(item[coluna] for item in linha["faturamento_por_tipo"] for coluna in ("faturados", "faltam")),
-                linha["total_mega"], linha["diferenca_mega"], *linha["valores_em_ordem"], linha["boletim"],
+                linha["total_mega"], linha["diferenca_mega"],
+                linha["status_eace"] or ("Sem card no portal" if linha["eace_lido"] else None),
+                linha["valor_eace"], linha["arquivo_nf_eace"] or None, *linha["valores_em_ordem"], linha["boletim"],
                 linha["tipo"] or None, linha["situacao_faturamento"],
             ]
             for linha in linhas
@@ -618,8 +649,64 @@ def bdo_view(request):
         ),
         "status_divergencia_choices": InepBdo.STATUS_DIVERGENCIA_CHOICES,
         "divergencias_na_pagina": agrupar == "inep" and any(linha.tem_divergencia for linha in page_obj),
+        **(_contexto_leitura_eace(boletim) if boletim else {}),
     })
     return render(request, "escolas/bdo.html", contexto)
+
+
+def _contexto_leitura_eace(boletim):
+    leitura = boletim.leituras_eace.select_related("solicitado_por").first()
+    if leitura and leitura.motivo_erro:
+        leitura.motivo_legivel = mensagem_motivo_bdo(leitura.motivo_erro)
+    return {
+        "leitura_eace": leitura,
+        "leitura_eace_em_andamento": bool(leitura and leitura.em_andamento),
+        "total_municipios_boletim": boletim.municipios.count(),
+        "conferencia_eace": conferencia_eace_boletim(boletim),
+    }
+
+
+def _voltar_para_bdo(request, boletim):
+    destino = request.POST.get("next") or ""
+    if destino and url_has_allowed_host_and_scheme(destino, allowed_hosts={request.get_host()}):
+        return redirect(destino)
+    return redirect(f"{reverse('bdo')}?{urlencode({'boletim': boletim.numero, 'agrupar': 'municipio'})}")
+
+
+@login_required
+@require_POST
+def bdo_leitura_eace_view(request, pk):
+    """Botão "Atualizar do portal EACE" (pedido do usuário, 2026-10-16):
+    só coloca a leitura do Boletim na fila do RPA EACE."""
+    boletim = get_object_or_404(BoletimBdo, pk=pk)
+    if not boletim.numero.isdigit():
+        messages.error(request, f"O Boletim {boletim.numero} não é um número de pedido do portal EACE.")
+        return _voltar_para_bdo(request, boletim)
+    _leitura, criada = enfileirar_leitura_eace_bdo(boletim, request.user)
+    if criada:
+        messages.success(
+            request, f"Leitura do Boletim {boletim.numero} no portal EACE colocada na fila. "
+            "A tela se atualiza sozinha quando terminar.",
+        )
+    else:
+        messages.info(request, f"O Boletim {boletim.numero} já está sendo lido do portal EACE - aguarde terminar.")
+    return _voltar_para_bdo(request, boletim)
+
+
+@login_required
+def bdo_leitura_eace_status_view(request, pk):
+    """Fragmento do status da leitura (polling HTMX a cada 3 s enquanto
+    estiver em andamento); quando termina, `HX-Refresh` recarrega a tela
+    para o grid mostrar os dados novos."""
+    boletim = get_object_or_404(BoletimBdo, pk=pk)
+    contexto = _contexto_leitura_eace(boletim)
+    if request.GET.get("acompanhando") and not contexto["leitura_eace_em_andamento"]:
+        resposta = HttpResponse(status=204)
+        resposta["HX-Refresh"] = "true"
+        return resposta
+    return render(request, "escolas/_bdo_leitura_eace.html", {
+        **contexto, "boletim": boletim, "url_retorno": request.headers.get("HX-Current-URL", ""),
+    })
 
 
 @login_required
@@ -848,7 +935,13 @@ def _contexto_recebiveis(dados):
     mesmo rateio do card "Valor total". Do INEP Contestado entra só o valor
     recebido (Valor assinatura − desconto da Pro rata, pedido do usuário
     de 2026-10-15); o faltando fica para outro Boletim. Município sem nenhum INEP no período
-    fica de fora."""
+    fica de fora.
+
+    Pedido do usuário (2026-10-16): o valor do município é o "Valor total a
+    ser emitido" do card dele no portal EACE (`MunicipioBdo.valor_eace`, da
+    Leitura EACE do BDO), no lugar do rateio acima - que só fica na tela
+    para o município ainda sem valor EACE (`sem_valor_eace`), e nesse caso
+    a Medição não é gerada (`recebiveis_eace_confere`)."""
     boletins = list(BoletimBdo.objects.all())
     numeros = set(dados.getlist("boletim"))
     selecionados = [boletim for boletim in boletins if boletim.numero in numeros]
@@ -891,6 +984,9 @@ def _contexto_recebiveis(dados):
         municipio.valor_recebivel = (
             municipio.valor_total * nao_contestados / municipio.quantidade_ineps + recebido_contestados[municipio.pk]
         ).quantize(Decimal("0.01")) if municipio.quantidade_ineps else Decimal("0.00")
+        municipio.sem_valor_eace = municipio.valor_eace is None
+        if not municipio.sem_valor_eace:
+            municipio.valor_recebivel = municipio.valor_eace
         municipio.quantidade_ineps = len(municipio.lista_ineps)
     municipios = [municipio for municipio in municipios if municipio.quantidade_ineps]
     retirados &= {municipio.pk for municipio in municipios}
@@ -910,9 +1006,11 @@ def _contexto_recebiveis(dados):
         grupo["linhas"] += 1
         grupo["quantidade_ineps"] += municipio.quantidade_ineps
         grupo["valor_total"] += municipio.valor_recebivel
+        grupo["sem_valor_eace"] = grupo.get("sem_valor_eace", False) or municipio.sem_valor_eace
     for grupo in agrupados.values():
         grupo["ids"] = ",".join(grupo.pop("ids"))
         grupo["quantidade_municipios"] = len(grupo.pop("nomes"))
+    conferencias = [conferencia_eace_boletim(boletim) for boletim in selecionados]
 
     return {
         "recebiveis_boletins": boletins,
@@ -929,6 +1027,8 @@ def _contexto_recebiveis(dados):
         "recebiveis_data_final": data_final,
         "recebiveis_contestados": len(contestados),
         "recebiveis_recebido_contestados": sum(recebido_contestados.values(), Decimal("0.00")),
+        "recebiveis_conferencias_eace": conferencias,
+        "recebiveis_eace_confere": all(conferencia["confere"] for conferencia in conferencias),
     }
 
 
@@ -964,7 +1064,14 @@ def bdo_medicao_view(request):
     fica fora do Visualizador."""
     if request.user.is_visualizador:
         return HttpResponseForbidden("Visualizador não pode gerar a Medição.")
-    linhas = _contexto_recebiveis(request.POST)["recebiveis_linhas"]
+    contexto = _contexto_recebiveis(request.POST)
+    linhas = contexto["recebiveis_linhas"]
+    if linhas and not contexto["recebiveis_eace_confere"]:
+        problemas = " ".join(c["mensagem"] for c in contexto["recebiveis_conferencias_eace"] if not c["confere"])
+        messages.error(
+            request, f"Medição não gerada: {problemas} Atualize do portal EACE na tela BDO (Boletim escolhido).",
+        )
+        return redirect("bdo")
     if not linhas:
         messages.error(request, "Medição não gerada: escolha um Boletim no Recebíveis e mantenha pelo menos um município.")
         return redirect("bdo")

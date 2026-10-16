@@ -17,7 +17,8 @@ from apps.escolas.bdo import (
     ler_planilha_pro_rata, valor_proporcional,
 )
 from apps.escolas.models import (
-    BoletimBdo, Escola, InepBdo, LogStatusDivergenciaBdo, MedicaoBdo, MunicipioBdo, PrimeiroFaturamentoInep,
+    BoletimBdo, Escola, InepBdo, LeituraEaceBdo, LogStatusDivergenciaBdo, MedicaoBdo, MunicipioBdo,
+    PrimeiroFaturamentoInep,
 )
 from apps.ri.models import KitPadrao, Ri
 
@@ -881,7 +882,7 @@ class RecebiveisBdoTests(TestCase):
         self.assertEqual(resp.context["recebiveis_quantidade_ineps"], 12)
         self.assertEqual(resp.context["recebiveis_valor_total"], Decimal("32582.33"))
         self.assertEqual(resp.context["recebiveis_contestados"], 2)
-        self.assertContains(resp, "Do INEP Contestado entra só o valor recebido (valor pago): 2 INEP(s), R$ 100,00")
+        self.assertContains(resp, "Sem valor EACE")  # sem leitura EACE: rateio só para conferência
 
     def test_nada_e_gravado(self):
         antes = (BoletimBdo.objects.count(), MunicipioBdo.objects.count(), InepBdo.objects.count())
@@ -1317,8 +1318,44 @@ class MedicaoBdoTests(TestCase):
         PrimeiroFaturamentoInep.objects.create(tipo="RE", inep="99000001", data=datetime.date(2026, 7, 9))
         self.client.force_login(self.analista)
 
+    @staticmethod
+    def _conferir_eace(boletins=None, valores=None):
+        """Leitura EACE com Sucesso que confere (1 card por município), com
+        o valor do card = Valor total da planilha, salvo `valores[municipio]`."""
+        for boletim in boletins or BoletimBdo.objects.all():
+            for municipio in boletim.municipios.all():
+                municipio.valor_eace = (valores or {}).get(municipio.municipio, municipio.valor_total)
+                municipio.status_eace = "Aprovado"
+                municipio.save()
+            LeituraEaceBdo.objects.create(
+                boletim=boletim, status=LeituraEaceBdo.SUCESSO, cards_lidos=boletim.municipios.count(),
+                municipios_atualizados=boletim.municipios.count(),
+            )
+
     def _gerar(self, **dados):
+        if not LeituraEaceBdo.objects.exists():
+            self._conferir_eace()
         return self.client.post(reverse("bdo_medicao"), dados)
+
+    def test_valor_da_medicao_e_o_do_card_do_eace(self):
+        self._conferir_eace(valores={"Itu": Decimal("31.50")})
+        _aba, linhas = self._linhas(self._gerar(boletim="4000").content)
+        self.assertEqual(linhas[0][:4][3], 31.5)
+
+    def test_sem_leitura_eace_nao_gera_a_medicao(self):
+        resp = self.client.post(reverse("bdo_medicao"), {"boletim": "4000"})
+        self.assertRedirects(resp, reverse("bdo"), fetch_redirect_response=False)
+        self.assertFalse(MedicaoBdo.objects.exists())
+        mensagens = [str(m) for m in resp.wsgi_request._messages]
+        self.assertIn("Boletim 4000 ainda não lido do portal EACE.", mensagens[0])
+
+    def test_quantidade_de_municipios_diferente_da_de_cards_nao_gera(self):
+        self._conferir_eace()
+        LeituraEaceBdo.objects.update(cards_lidos=2)
+        resp = self.client.post(reverse("bdo_medicao"), {"boletim": "4000"})
+        self.assertFalse(MedicaoBdo.objects.exists())
+        mensagens = [str(m) for m in resp.wsgi_request._messages]
+        self.assertIn("3 município(s) na planilha importada e 2 card(s) no portal EACE", mensagens[0])
 
     def _linhas(self, conteudo):
         aba = openpyxl.load_workbook(io.BytesIO(conteudo)).worksheets[0]
@@ -1384,6 +1421,7 @@ class MedicaoBdoTests(TestCase):
         resp = self.client.post(reverse("bdo_medicao"), {}, follow=True)
         self.assertContains(resp, "Medição não gerada: escolha um Boletim")
         BoletimBdo.objects.filter(numero="4000").update(tipo="")
+        self._conferir_eace()
         resp = self.client.post(reverse("bdo_medicao"), {"boletim": "4000"}, follow=True)
         self.assertContains(resp, "Boletim sem tipo (RE/RI): 4000")
         self.assertFalse(MedicaoBdo.objects.exists())

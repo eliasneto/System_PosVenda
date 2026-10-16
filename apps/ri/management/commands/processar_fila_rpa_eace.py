@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 
+from apps.escolas.leitura_eace_bdo import processar_proxima_leitura_eace_bdo, recuperar_leituras_interrompidas
 from apps.escolas.rpa_mip_lote import (
     processar_proximo_rpa_mip,
     proximo_enfileirado_rpa_mip_em,
@@ -27,7 +28,9 @@ class Command(BaseCommand):
     por passada, o mais antigo entre RI e MIP (ordem de chegada), então
     continua no máximo 1 execução do portal por vez em todo o sistema.
     Com os envios (RI/MIP) vazios, processa a Validação MIP (NF) (leitura
-    de status do portal, só leitura) - pedido do usuário, 2026-09-29."""
+    de status do portal, só leitura) - pedido do usuário, 2026-09-29.
+    Antes dela, a Leitura EACE do BDO (botão "Atualizar do portal EACE" da
+    tela BDO, só leitura) - pedido do usuário, 2026-10-16."""
 
     help = (
         "Processa 1 item da fila do RPA EACE (RN-058) - RI ou MIP, o mais "
@@ -60,6 +63,14 @@ class Command(BaseCommand):
             tipo = "RI"
 
         if resultado is None:
+            recuperar_leituras_interrompidas()
+            leitura = processar_proxima_leitura_eace_bdo()
+            if leitura is not None:
+                self.stdout.write(self.style.SUCCESS(
+                    f"Leitura EACE do BDO #{leitura.pk}: {leitura.get_status_display()}"
+                    f"{f' ({leitura.motivo_erro})' if leitura.motivo_erro else ''}"
+                ))
+                return
             # Pedido do usuário (2026-09-29): com a fila de envios (RI/MIP)
             # vazia, o mesmo worker processa a Validação MIP (NF) - leitura
             # de status do portal, `apps.escolas.validacao_nf_mip` - em vez

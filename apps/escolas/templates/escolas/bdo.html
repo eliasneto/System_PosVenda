@@ -179,6 +179,8 @@ topo seguem os filtros.
     </a>
 </div>
 
+{% if boletim %}{% include "escolas/_bdo_leitura_eace.html" %}{% endif %}
+
 {% if diferenca_filtro %}
 <div class="mb-4 px-5 py-3 rounded-2xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4" role="status">
     <p class="text-[11px] font-bold text-red-700 dark:text-red-300 flex-1">
@@ -245,6 +247,7 @@ topo seguem os filtros.
                     <th class="px-4 py-2 text-right">INEPs</th>
                     <th class="px-4 py-2 whitespace-nowrap" title="INEPs do município já faturados em qualquer Boletim RE e RI (cada INEP uma vez) e os que faltam entre todas as escolas do município no sistema">Faturados / Faltam</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor bruto: soma do valor proporcional dos INEPs do município no Boletim, sem outros descontos; do INEP Contestado entra só o valor recebido (valor pago). A Dif. é Total MEGA − Valor total da planilha do cliente">Total MEGA</th>
+                    <th class="px-4 py-2 whitespace-nowrap" title="Card do município na seção Notas Fiscais do Boletim no portal EACE: Status, Valor total a ser emitido e Arquivo da Nota Fiscal. Atualize com o botão Atualizar do portal EACE (escolha um Boletim). A Dif. é o valor do portal − Valor total da planilha">Portal EACE</th>
                     {% else %}
                     <th class="px-4 py-2">UF</th>
                     <th class="px-4 py-2 text-right">Municípios</th>
@@ -338,6 +341,7 @@ topo seguem os filtros.
                         {% if linha.ineps_sem_valor_mega %}<span class="block text-[10px] font-bold text-amber-600 dark:text-amber-400" title="INEPs sem valor assinatura, sem data de ativação ou ativados depois do mês de referência ficam fora da soma">{{ linha.ineps_sem_valor_mega }} INEP(s) sem valor</span>{% endif %}
                         {% if linha.ineps_contestados_mega %}<span class="block text-[10px] font-bold text-amber-600 dark:text-amber-400" title="Do INEP Contestado, o valor recebido fica no Total MEGA e o faltando é contestado para vir em outro Boletim">{{ linha.ineps_contestados_mega }} contestado(s): faltando R$ {{ linha.total_contestado_mega|intcomma }}</span>{% endif %}
                     </td>
+                    <td class="px-4 py-2 min-w-[180px]">{% include "escolas/_bdo_portal_eace.html" %}</td>
                     {% include "escolas/_bdo_valores.html" with valores=linha.valores_em_ordem %}
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.boletim }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.tipo|default:"—" }}</span></td>

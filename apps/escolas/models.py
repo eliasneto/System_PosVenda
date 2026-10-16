@@ -947,6 +947,15 @@ class MunicipioBdo(models.Model):
         "Valor descontos proporcionais", max_digits=14, decimal_places=2, null=True, blank=True,
     )
     valor_total = models.DecimalField("Valor total", max_digits=14, decimal_places=2)
+    # Card do município na seção "Notas Fiscais" do Boletim no portal EACE
+    # (pedido do usuário, 2026-10-16), lido pela `LeituraEaceBdo` - vazio
+    # antes da 1ª leitura ou quando o portal não tem card do município.
+    status_eace = models.CharField("Status EACE", max_length=60, blank=True)
+    valor_eace = models.DecimalField(
+        "Valor total a ser emitido (EACE)", max_digits=14, decimal_places=2, null=True, blank=True,
+    )
+    arquivo_nf_eace = models.CharField("Arquivo da Nota Fiscal (EACE)", max_length=255, blank=True)
+    eace_lido_em = models.DateTimeField("Lido do EACE em", null=True, blank=True)
 
     CAMPOS_VALORES = (
         "valor_servicos", "valor_creditos", "valor_descontos", "valor_descontos_proporcionais", "valor_total",
@@ -1000,6 +1009,56 @@ class InepBdo(models.Model):
 
     def __str__(self):
         return self.inep
+
+
+class LeituraEaceBdo(models.Model):
+    """Pedido do usuário (2026-10-16): 1 leitura, no portal EACE, dos cards
+    de município da seção "Notas Fiscais" do Boletim (pedido = número do
+    Boletim, `apps.integracoes.eace.rpa_bdo`, só leitura - nunca anexa
+    nada). Grava Status, Valor e Arquivo da NF em cada `MunicipioBdo`.
+    Botão "Atualizar do portal EACE" da tela BDO só enfileira - quem executa
+    é o worker da fila do RPA EACE (`processar_fila_rpa_eace`), 1 por vez,
+    quando não há envio de NF (RI/MIP) esperando."""
+
+    NA_FILA = "na_fila"
+    PROCESSANDO = "processando"
+    SUCESSO = "sucesso"
+    ERRO = "erro"
+    STATUS_CHOICES = [
+        (NA_FILA, "Na fila"),
+        (PROCESSANDO, "Processando"),
+        (SUCESSO, "Sucesso"),
+        (ERRO, "Erro"),
+    ]
+
+    boletim = models.ForeignKey(BoletimBdo, on_delete=models.CASCADE, related_name="leituras_eace")
+    status = models.CharField("Status", max_length=20, choices=STATUS_CHOICES, default=NA_FILA)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    iniciado_em = models.DateTimeField("Iniciado em", null=True, blank=True)
+    finalizado_em = models.DateTimeField("Finalizado em", null=True, blank=True)
+    motivo_erro = models.CharField("Motivo do erro", max_length=255, blank=True)
+    etapa_atual = models.CharField("Etapa atual", max_length=100, blank=True)
+    progresso_pct = models.PositiveSmallIntegerField("Progresso (%)", default=0)
+    cards_lidos = models.PositiveIntegerField("Cards lidos", default=0)
+    municipios_atualizados = models.PositiveIntegerField("Municípios atualizados", default=0)
+    # Cards do portal sem município correspondente no Boletim importado
+    # ("Município/UF", separados por vírgula) - para conferência.
+    cards_sem_municipio = models.TextField("Cards sem município no Boletim", blank=True)
+
+    class Meta:
+        verbose_name = "Leitura EACE do BDO"
+        verbose_name_plural = "Leituras EACE do BDO"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"Leitura EACE do Boletim {self.boletim_id} - {self.get_status_display()}"
+
+    @property
+    def em_andamento(self):
+        return self.status in (self.NA_FILA, self.PROCESSANDO)
 
 
 class LogStatusDivergenciaBdo(models.Model):

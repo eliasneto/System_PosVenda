@@ -1,0 +1,51 @@
+{% comment %}
+Leitura EACE do BDO (pedido do usuário, 2026-10-16): última leitura do
+Boletim no portal EACE e o botão "Atualizar do portal EACE" (só enfileira).
+Em andamento, se reatualiza a cada 3 s (HTMX); ao terminar, a view responde
+`HX-Refresh` e a tela recarrega com os dados novos no grid.
+{% endcomment %}
+<div id="bdo-leitura-eace"
+     class="mb-4 px-5 py-3 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm flex flex-col md:flex-row md:items-center gap-3"
+     {% if leitura_eace_em_andamento %}hx-get="{% url 'bdo_leitura_eace_status' boletim.pk %}?acompanhando=1" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+    <div class="flex-1 min-w-0">
+        <p class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider mb-1">Portal EACE — Notas Fiscais do Boletim {{ boletim.numero }}</p>
+        {% if not leitura_eace %}
+        <p class="text-[11px] font-bold text-gray-600 dark:text-gray-400">Ainda não lido do portal. Clique em "Atualizar do portal EACE" para trazer o Status, o Valor total a ser emitido e o Arquivo da Nota Fiscal de cada município.</p>
+        {% elif leitura_eace.status == "processando" %}
+        <div class="flex flex-col gap-1">
+            <div class="w-48 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                <div class="h-full bg-purple-600 dark:bg-purple-500" style="width: {{ leitura_eace.progresso_pct }}%"></div>
+            </div>
+            <span class="text-[11px] font-bold text-purple-700 dark:text-purple-400">Lendo o portal: {{ leitura_eace.progresso_pct }}%{% if leitura_eace.etapa_atual %} — {{ leitura_eace.etapa_atual }}{% endif %}</span>
+        </div>
+        {% elif leitura_eace.status == "na_fila" %}
+        <p class="text-[11px] font-bold text-blue-700 dark:text-blue-400">⏳ Na fila do RPA EACE (roda depois dos envios de NF que já estão na fila).</p>
+        {% elif leitura_eace.status == "erro" %}
+        <p class="text-[11px] font-bold text-red-600 dark:text-red-400">✗ Erro na leitura de {{ leitura_eace.finalizado_em|date:"d/m/Y H:i" }}: {{ leitura_eace.motivo_legivel }}</p>
+        {% else %}
+        <p class="text-[11px] font-bold text-gray-700 dark:text-gray-300">
+            <span class="text-emerald-700 dark:text-emerald-400 font-black">✓</span>
+            Lido em {{ leitura_eace.finalizado_em|date:"d/m/Y H:i" }}{% if leitura_eace.solicitado_por %} por {{ leitura_eace.solicitado_por.get_full_name|default:leitura_eace.solicitado_por.username }}{% endif %}:
+            {{ leitura_eace.cards_lidos }} card{{ leitura_eace.cards_lidos|pluralize }} no portal, {{ leitura_eace.municipios_atualizados }} de {{ total_municipios_boletim }} município{{ total_municipios_boletim|pluralize }} do Boletim encontrados.
+        </p>
+        {% if leitura_eace.cards_sem_municipio %}
+        <p class="text-[11px] font-bold text-amber-600 dark:text-amber-400 mt-1" title="{{ leitura_eace.cards_sem_municipio }}">Cards do portal sem município no Boletim: {{ leitura_eace.cards_sem_municipio|truncatechars:200 }}</p>
+        {% endif %}
+        {% endif %}
+        {% if conferencia_eace.leitura %}
+        {# Pedido do usuário (2026-10-16): municípios da planilha = cards no EACE; senão a Medição não é gerada. #}
+        <p class="mt-1 text-[11px] font-black {% if conferencia_eace.confere %}text-emerald-700 dark:text-emerald-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+            {% if conferencia_eace.confere %}✓ Confere: {{ conferencia_eace.total_planilha }} município{{ conferencia_eace.total_planilha|pluralize }} na planilha = {{ conferencia_eace.cards_eace }} card{{ conferencia_eace.cards_eace|pluralize }} no EACE. O Recebíveis usa o valor dos cards do EACE.{% else %}✗ {{ conferencia_eace.mensagem }} A Medição do Recebíveis não é gerada enquanto não conferir.{% endif %}
+        </p>
+        {% endif %}
+    </div>
+    <form method="POST" action="{% url 'bdo_leitura_eace' boletim.pk %}" class="shrink-0">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ url_retorno|default:request.get_full_path }}">
+        <button type="submit" {% if leitura_eace_em_andamento %}disabled{% endif %}
+                class="w-full md:w-auto px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 focus-visible:ring-2 focus-visible:ring-amber-400 outline-none transition flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+            <i data-lucide="{% if leitura_eace_em_andamento %}loader{% else %}refresh-cw{% endif %}" class="w-4 h-4 {% if leitura_eace_em_andamento %}animate-spin{% endif %}" aria-hidden="true"></i>
+            {% if leitura_eace_em_andamento %}Lendo o portal…{% else %}Atualizar do portal EACE{% endif %}
+        </button>
+    </form>
+</div>
