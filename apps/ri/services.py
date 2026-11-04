@@ -9,6 +9,7 @@ import io
 import logging
 import os
 import re
+import unicodedata
 import zipfile
 from collections import OrderedDict, defaultdict
 from datetime import datetime, time, timedelta
@@ -701,6 +702,17 @@ def _item_lpu_esperado(item, catalogo, lote):
     return texto_item_lpu
 
 
+def _normalizar_item_lpu(texto):
+    """Chave de comparação do "ITEM LPU" — sem acento, sem diferença de
+    maiúsculas e espaços (pedido do usuário, 2026-10-29, INEP 35281177/NF
+    2982): o SAP do financeiro tira o acento ao imprimir o DANFE ("Conversor
+    de midia Gigabit Ethernet") e o Relatório EACE mantém ("mídia"); com a
+    comparação literal o conversor nunca casava."""
+    sem_acento = unicodedata.normalize("NFKD", texto or "")
+    sem_acento = "".join(c for c in sem_acento if not unicodedata.combining(c))
+    return " ".join(sem_acento.split()).casefold()
+
+
 def _itens_relatorio_eace_candidatos_por_item_lpu(ri, item_lpu_pdf, catalogo):
     """Fallback de casamento (pedido do usuário, 2026-09-17 — INEP
     53005090/NF 1622: Descrição, Quantidade e Valor batiam certinho, mas o
@@ -716,7 +728,7 @@ def _itens_relatorio_eace_candidatos_por_item_lpu(ri, item_lpu_pdf, catalogo):
     lote = ri.escola.lote
     return [
         item for item in ri.itens_relatorio_eace.filter(nota_fiscal="")
-        if _item_lpu_esperado(item, catalogo, lote) == item_lpu_pdf
+        if _normalizar_item_lpu(_item_lpu_esperado(item, catalogo, lote)) == _normalizar_item_lpu(item_lpu_pdf)
     ]
 
 
@@ -794,7 +806,11 @@ def _comparar_nota_fiscal_com_relatorio_eace(ri, documento, dados, catalogo):
     itens_lpu_esperados = sorted(
         {_item_lpu_esperado(item, catalogo, ri.escola.lote) for item in itens_sistema}
     )
-    if item_lpu_pdf and itens_lpu_esperados and item_lpu_pdf not in itens_lpu_esperados:
+    if (
+        item_lpu_pdf
+        and itens_lpu_esperados
+        and _normalizar_item_lpu(item_lpu_pdf) not in {_normalizar_item_lpu(t) for t in itens_lpu_esperados}
+    ):
         motivos.append(
             f'Produto/Equipamento: NF traz "{item_lpu_pdf}", sistema espera '
             f"{' ou '.join(itens_lpu_esperados)}."
@@ -2347,7 +2363,7 @@ def _registrar_execucao_rpa_eace(log):
         f"R$ {log.valor_pdf or '?'} | Portal: R$ {log.valor_portal or '?'}"
     )
     if log.motivo_erro:
-        resumo += f" | Motivo: {log.motivo_erro}"
+        resumo += f" | Motivo: {log.motivo_erro_legivel} ({log.motivo_erro})"
     RiHistorico.objects.create(
         ri=log.ri,
         tipo=RiHistorico.LOG_CAMPO,

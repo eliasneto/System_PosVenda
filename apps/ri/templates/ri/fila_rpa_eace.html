@@ -132,7 +132,7 @@ lista inteira de logs.
                         {% elif log.resultado == 'sucesso' %}
                         {% if log.concluido_manualmente %}Concluído manualmente{% else %}{{ log.produto_pdf|default:"—" }}{% endif %}
                         {% elif log.resultado == 'erro' %}
-                        <span class="text-red-500 dark:text-red-400">{{ log.motivo_erro|default:"—" }}</span>
+                        <span class="text-red-500 dark:text-red-400">{{ log.motivo_erro_legivel|default:"—" }}</span>
                         {% endif %}
                     </td>
                     <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold whitespace-nowrap">

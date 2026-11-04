@@ -56,6 +56,7 @@ MENSAGENS_MOTIVO = {
     "login": "O portal EACE recusou o login.",
     "selecao_perfil": "O portal não respondeu ao selecionar o perfil Fornecedor.",
     "abrir_medicoes": "Card \"Medições\" não encontrado no portal.",
+    "termo_de_uso_pendente": "O portal EACE pede o aceite do novo Termo de uso. Alguém autorizado precisa entrar no portal com a conta da automação, marcar \"Li e concordo com o termo de uso\" e depois clicar em Tentar novamente.",
     "abrir_mips": "Botão \"Ver MIPs\" não encontrado no portal.",
     "pedidos_nao_encontrados": "Nenhum pedido encontrado no grid de MIPs.",
     "pedido_nao_encontrado": "O pedido informado não está no grid de MIPs.",

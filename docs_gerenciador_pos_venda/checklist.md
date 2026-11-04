@@ -4285,6 +4285,40 @@ LOTE (a NF é por município), processado pela FEAT-054.
 
 ---
 
+### FEAT-057 — API do Módulo Financeiro: planilhas de faturamento de implantação por LOTE
+
+**Descrição:** API só de leitura para o Módulo Financeiro (Entrada › IXC)
+buscar as planilhas de faturamento de implantação dos LOTEs do MIP — o
+IXC não deixa outro sistema baixar os anexos do atendimento. Pedido do
+usuário (2026-11-03), executado pelo agente Dev.
+**Tipo:** backend-only
+**Status:** 🔍 Aguardando QA
+**Prioridade:** Alta.
+**Critérios de aceite:**
+- `GET /api/financeiro/mip/lotes/?status=&data=`: LOTEs do status
+  (padrão Em Faturamento) com nome, município/cidade e valor de cada
+  planilha (as mesmas de "Baixar planilha", com rateio). ✅
+- `GET /api/financeiro/mip/lotes/<id>/planilhas/?data=`: as planilhas
+  (.xlsx em base64); VENCIMENTO = `data` + 30 dias. ✅
+- Token `Authorization: Bearer` (`FINANCEIRO_API_TOKEN`); sem token
+  configurado a API fica desligada (503); token errado 401. ✅
+- Só GET; nenhum dado do LOTE é alterado. ✅
+**Regras relacionadas:** a formalizar pelo Orquestrador (reusa a regra
+da planilha de faturamento de implantação por LOTE da FEAT-045).
+**Dependências:** FEAT-045, FEAT-046.
+**Tipo de validação:** QA — permissão (token) e conteúdo da planilha.
+**Entrega do Dev:**
+- `apps/escolas/api_financeiro.py` (views), rotas em
+  `apps/escolas/urls.py`, `FINANCEIRO_API_TOKEN` em `config/settings.py`,
+  testes em `apps/escolas/tests_api_financeiro.py` (6 testes, ok).
+- Testado de ponta a ponta com o Módulo Financeiro local (153 LOTEs
+  listados em 3 s). Em produção: definir `FINANCEIRO_API_TOKEN` no `.env`
+  e liberar o host usado pelo financeiro em `ALLOWED_HOSTS`.
+**Pendência atual:** aguardando QA; Orquestrador formalizar a RN e
+registrar a integração em `architecture.md`.
+
+---
+
 ## Histórico de Alterações
 | Data | Alteração |
 |---|---|

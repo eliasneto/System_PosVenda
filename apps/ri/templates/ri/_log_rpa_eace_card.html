@@ -88,7 +88,7 @@ individual, onde `forloop` não existe.
         </p>
         {% if log.tentativas %}
         <p class="mt-1 text-amber-600 dark:text-amber-400">
-            Tentativa anterior falhou por um motivo técnico ({{ log.motivo_erro }}) — reprocessando automaticamente.
+            Tentativa anterior falhou por um motivo técnico ({{ log.motivo_erro_legivel }}) — reprocessando automaticamente.
         </p>
         {% endif %}
     </div>
@@ -141,7 +141,7 @@ individual, onde `forloop` não existe.
 
         {% if log.resultado == 'erro' %}
         <p class="text-[11px] font-bold text-red-500 dark:text-red-400 mt-2">
-            Motivo: {{ log.motivo_erro }}
+            {% if log.erro_do_portal %}Falha no portal EACE (não é erro da Nota Fiscal){% else %}Erro de validação da Nota Fiscal{% endif %}: {{ log.motivo_erro_legivel }}
             {% if log.inep_pdf or log.valor_pdf %}
             (NF lida: INEP {{ log.inep_pdf|default:"?" }}, valor {{ log.valor_pdf|default:"?" }}{% if log.valor_portal %}, valor no portal {{ log.valor_portal }}{% endif %})
             {% endif %}

@@ -1,5 +1,5 @@
 """
-Configuracoes do Gerenciador Pos-Venda (v1.1.0).
+Configuracoes do Gerenciador Pos-Venda (v1.1.2).
 
 Reaproveita o padrao de configuracao via variaveis de ambiente do
 `modulo-posVenda` original (python-decouple + .env, RNF-05), mas com banco
@@ -270,3 +270,8 @@ LOGGING = {
 # planilha) quando ligada — usada na validação local; em produção fica
 # desligada (padrão) e a tela não mostra nem lê a planilha.
 MIP_CONFERENCIA_PLANILHA = config("MIP_CONFERENCIA_PLANILHA", default=False, cast=bool)
+
+# API do Módulo Financeiro (apps/escolas/api_financeiro.py): token Bearer que o
+# Módulo Financeiro (Entrada > IXC) usa para buscar as planilhas de
+# faturamento de implantação dos LOTEs do MIP. Vazio = API desligada.
+FINANCEIRO_API_TOKEN = config("FINANCEIRO_API_TOKEN", default="")

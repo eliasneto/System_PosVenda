@@ -13,9 +13,10 @@ A NF enviada é a comum a TODOS os INEPs do LOTE (decisão do usuário,
 ela referencia); INEP rateado pode ter NF de outro município também, por
 isso "comum a todos", não "qualquer uma".
 
-Rateio manual (decisão do usuário, 2026-10-15): cada parte do INEP vira
-1 NF própria, então o LOTE pode ter mais de 1 NF - 1 envio por NF, todas
-enfileiradas no mesmo clique; o valor do PDF escolhe o card no portal.
+Rateio manual (decisão do usuário, 2026-10-15; 2026-10-23: 1 NF por
+Cidade, não por parte - `notas_fiscais_do_lote`): o LOTE pode ter mais de
+1 NF - 1 envio por NF, todas enfileiradas no mesmo clique; o valor do PDF
+escolhe o card no portal.
 """
 
 from __future__ import annotations
@@ -76,10 +77,17 @@ def nota_fiscal_comum_do_lote(notas_por_escola: list[list[NotaFiscalMip]]) -> tu
 
 def notas_fiscais_do_lote(lote: Lote) -> tuple[list[NotaFiscalMip], str]:
     """NFs que o LOTE envia ao portal: a comum aos INEPs sem rateio manual
-    (`nota_fiscal_comum_do_lote`) + 1 por parte de cada INEP com rateio
-    manual (`Lote.rateio_manual`). Devolve `(notas, "")`, ou `([], motivo)`
-    quando faltar ou sobrar NF. Usa o prefetch da tela (`escolas` +
-    `notas_fiscais_mip`) quando houver - sem consulta extra por LOTE."""
+    (`nota_fiscal_comum_do_lote`) e, com rateio manual (`Lote.rateio_manual`),
+    1 NF por Cidade do LOTE - pedido do usuário (2026-10-23): o portal tem
+    1 card por Cidade, então a parte na Cidade do LOTE vai na mesma NF dos
+    INEPs sem rateio e cada outra Cidade soma as partes de todos os INEPs
+    (mesma divisão de `planilhas_faturamento_implantacao_lote`). A NF de
+    vários INEPs fica gravada em cada um deles, então conta pelo nome.
+    Devolve `(notas, "")`, ou `([], motivo)` quando faltar ou sobrar NF.
+    Usa o prefetch da tela (`escolas` + `notas_fiscais_mip`) quando houver -
+    sem consulta extra por LOTE."""
+    from .services import chave_cidade_rateio
+
     escolas = list(lote.escolas.all())
     if not escolas:
         return [], "O LOTE não tem INEPs."
@@ -91,20 +99,24 @@ def notas_fiscais_do_lote(lote: Lote) -> tuple[list[NotaFiscalMip], str]:
         if nota is None:
             return [], motivo
         notas[_chave_nome_nf(nota.nome_original)] = nota
-    for escola in escolas:
-        partes = len(rateio_manual.get(escola.inep) or [])
-        if not partes:
-            continue
-        das_partes = {
+    com_rateio = [escola for escola in escolas if rateio_manual.get(escola.inep)]
+    if not com_rateio:
+        return list(notas.values()), ""
+
+    cidades = {chave_cidade_rateio(lote.municipio): lote.municipio} if sem_rateio else {}
+    for escola in com_rateio:
+        for parte in rateio_manual[escola.inep]:
+            cidades.setdefault(chave_cidade_rateio(parte["cidade"]), parte["cidade"])
+    for escola in com_rateio:
+        notas.update({
             chave: nota for chave, nota in _por_nome(lote.notas_fiscais_da_escola(escola)).items()
             if chave not in notas
-        }
-        if len(das_partes) != partes:
-            return [], (
-                f"O INEP {escola.inep} tem rateio em {partes} partes, mas {len(das_partes)} "
-                "Nota(s) Fiscal(is) sincronizada(s) - precisa de 1 por parte."
-            )
-        notas.update(das_partes)
+        })
+    if len(notas) != len(cidades):
+        return [], (
+            f"O rateio do LOTE é em {len(cidades)} Cidade(s) ({', '.join(cidades.values())}) - precisa de "
+            f"1 Nota Fiscal por Cidade, mas há {len(notas)} sincronizada(s)."
+        )
     return sorted(notas.values(), key=lambda nota: nota.nome_original), ""
 
 

@@ -30,8 +30,8 @@ verdade acontece na hora de baixar a planilha de faturamento
 
 Rateio manual (pedido do usuário, 2026-10-13): INEP SEM rateio automático
 ganha o botão "Ratear" — divide o valor total do INEP em N partes (Cidade +
-valor, mínimo 2), soma sempre igual ao total; cada parte vira uma planilha
-de faturamento própria. Campos `rateio_cidade_<pk>`/`rateio_valor_<pk>`,
+valor, mínimo 2), soma sempre igual ao total; as partes de mesma Cidade de
+todos os INEPs somam numa planilha de faturamento só (1 NF por Cidade). Campos `rateio_cidade_<pk>`/`rateio_valor_<pk>`,
 validados de novo em `apps.escolas.services.criar_lote_mip`.
 
 Parâmetros: `escolas_elegiveis_lote` (lista de `Escola`, usada só para o
@@ -108,7 +108,7 @@ contador), `escolas_elegiveis_lote_detalhe` (lista de dicts
                             </span>
                             {% if not item.rateio and item.valor_total is not None %}
                             <button type="button" data-toggle-rateio-manual
-                                    title="Dividir o valor deste INEP em partes — cada parte gera uma planilha própria"
+                                    title="Dividir o valor deste INEP em partes — partes de mesma Cidade de todos os INEPs somam numa planilha (1 NF por Cidade)"
                                     class="inline-flex items-center gap-1 px-2 h-6 text-[9px] font-black uppercase text-gray-500 dark:text-gray-400 shrink-0 rounded-lg hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-900/20 dark:hover:text-amber-400 transition">
                                 <i data-lucide="split" class="w-3 h-3"></i>
                                 <span data-rateio-manual-rotulo>Ratear</span>
@@ -141,7 +141,7 @@ contador), `escolas_elegiveis_lote_detalhe` (lista de dicts
                              data-valor-total="{{ item.valor_total|stringformat:'s' }}"
                              data-cidade-padrao="{{ municipio_filtro }}">
                             <p class="text-[9px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                                Ratear R$ {{ item.valor_total|intcomma }} — cada parte vira uma planilha
+                                Ratear R$ {{ item.valor_total|intcomma }} — 1 planilha (NF) por Cidade, somando os INEPs
                             </p>
                             <div class="space-y-1.5" data-rateio-manual-partes></div>
                             <div class="flex items-center justify-between gap-2 pt-1">

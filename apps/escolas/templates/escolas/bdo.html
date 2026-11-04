@@ -247,7 +247,10 @@ topo seguem os filtros.
                     <th class="px-4 py-2 text-right">INEPs</th>
                     <th class="px-4 py-2 whitespace-nowrap" title="INEPs do município já faturados em qualquer Boletim RE e RI (cada INEP uma vez) e os que faltam entre todas as escolas do município no sistema">Faturados / Faltam</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor bruto: soma do valor proporcional dos INEPs do município no Boletim, sem outros descontos; do INEP Contestado entra só o valor recebido (valor pago). A Dif. é Total MEGA − Valor total da planilha do cliente">Total MEGA</th>
-                    <th class="px-4 py-2 whitespace-nowrap" title="Card do município na seção Notas Fiscais do Boletim no portal EACE: Status, Valor total a ser emitido e Arquivo da Nota Fiscal. Atualize com o botão Atualizar do portal EACE (escolha um Boletim). A Dif. é o valor do portal − Valor total da planilha">Portal EACE</th>
+                    <th class="px-4 py-2 whitespace-nowrap" title="Card do município na seção Notas Fiscais do Boletim no portal EACE: Status, Valor total a ser emitido e Arquivo da Nota Fiscal. Atualize com o botão Atualizar do portal EACE (escolha um Boletim).">Portal EACE</th>
+                    {# Pedido do usuário (2026-10-16): Valor total ao lado do Portal EACE, para comparar sem rolar o grid. #}
+                    <th class="px-4 py-2 text-right whitespace-nowrap">Valor total</th>
+                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor total a ser emitido do card no portal EACE − Valor total da planilha do cliente">Dif. EACE − Valor total</th>
                     {% else %}
                     <th class="px-4 py-2">UF</th>
                     <th class="px-4 py-2 text-right">Municípios</th>
@@ -257,7 +260,7 @@ topo seguem os filtros.
                     <th class="px-4 py-2 text-right">Valor créditos</th>
                     <th class="px-4 py-2 text-right">Valor descontos</th>
                     <th class="px-4 py-2 text-right">Valor descontos proporcionais</th>
-                    <th class="px-4 py-2 text-right">Valor total</th>
+                    {% if agrupar != "municipio" %}<th class="px-4 py-2 text-right">Valor total</th>{% endif %}
                     <th class="px-4 py-2">Boletim de desempenho</th>
                     <th class="px-4 py-2">Tipo</th>
                     {% if agrupar != "uf" %}<th class="px-4 py-2 whitespace-nowrap" title="Proporcional enquanto faltar alguma escola do município no faturamento do tipo do Boletim (RE ou RI); Integral quando não falta nenhuma">Faturamento</th>{% endif %}
@@ -342,7 +345,9 @@ topo seguem os filtros.
                         {% if linha.ineps_contestados_mega %}<span class="block text-[10px] font-bold text-amber-600 dark:text-amber-400" title="Do INEP Contestado, o valor recebido fica no Total MEGA e o faltando é contestado para vir em outro Boletim">{{ linha.ineps_contestados_mega }} contestado(s): faltando R$ {{ linha.total_contestado_mega|intcomma }}</span>{% endif %}
                     </td>
                     <td class="px-4 py-2 min-w-[180px]">{% include "escolas/_bdo_portal_eace.html" %}</td>
-                    {% include "escolas/_bdo_valores.html" with valores=linha.valores_em_ordem %}
+                    <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.valor_total is None %}—{% else %}R$ {{ linha.valor_total|intcomma }}{% endif %}</span></td>
+                    <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-black {% if linha.diferenca_eace is None %}text-gray-500 dark:text-gray-400{% elif linha.diferenca_eace == 0 %}text-emerald-700 dark:text-emerald-400{% else %}text-red-600 dark:text-red-400{% endif %}">{% if linha.diferenca_eace is None %}—{% else %}R$ {{ linha.diferenca_eace|intcomma }}{% endif %}</span></td>
+                    {% include "escolas/_bdo_valores.html" with valores=linha.valores_em_ordem|slice:":-1" sem_total=True %}
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.boletim }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.tipo|default:"—" }}</span></td>
                     <td class="px-4 py-2">{% include "escolas/_bdo_situacao_faturamento.html" with situacao=linha.situacao_faturamento titulo=linha.titulo_situacao %}</td>

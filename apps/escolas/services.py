@@ -1162,9 +1162,10 @@ def _converter_valor_rateio(valor):
 def _validar_rateio_manual_lote(escolas, rateio_manual):
     """Rateio manual do LOTE (pedido do usuário, 2026-10-13): o Valor Total
     (IXC) do INEP (`valor_total_lote_mip`, mesmo valor exibido no modal)
-    dividido em N partes de Cidade + valor — cada parte vira uma planilha de
-    faturamento própria. Regras: no mínimo 2 partes; toda parte com Cidade
-    e valor maior que zero, com no máximo 2 casas decimais; a soma das
+    dividido em N partes de Cidade + valor — as partes de mesma Cidade de
+    todos os INEPs somam numa planilha de faturamento só (2026-10-23,
+    `planilhas_faturamento_implantacao_lote`). Regras: no mínimo 2 partes;
+    toda parte com Cidade e valor maior que zero, com no máximo 2 casas decimais; a soma das
     partes nunca pode ser menor nem maior que o valor total do INEP; só
     para INEP sem rateio automático por Cidade
     (`escola_rateada_relatorio_eace_mip` — o automático continua valendo
@@ -1974,15 +1975,10 @@ def _nome_arquivo_planilha_faturamento_implantacao_rateio(lote, cidade):
     return f"FATURAMENTO IMPLANTAÇÃO EACE - {cidade_limpa}-{lote.estado} - {lote} (RATEIO).xlsx"
 
 
-def _nome_arquivo_planilha_faturamento_implantacao_rateio_manual(lote, escola, cidade, numero, total_partes):
-    """Nome do .xlsx de 1 parte do rateio manual (pedido do usuário,
-    2026-10-13) — INEP e número da parte no nome, para 2 partes da mesma
-    Cidade nunca gerarem arquivos com o mesmo nome no .zip."""
-    cidade_limpa = _CARACTERES_INVALIDOS_ARQUIVO_IMPLANTACAO.sub("", cidade or "").strip()
-    return (
-        f"FATURAMENTO IMPLANTAÇÃO EACE - {cidade_limpa}-{lote.estado} - {lote} "
-        f"(RATEIO {escola.inep} {numero}-{total_partes}).xlsx"
-    )
+def chave_cidade_rateio(cidade):
+    """Chave para juntar partes de rateio da mesma Cidade: sem acento,
+    caixa nem espaço ("Barueri 2" e "Barueri2" são a mesma Cidade)."""
+    return "".join(_normalizar_texto_cidade(cidade).split())
 
 
 def gerar_planilha_faturamento_implantacao(estado, municipio, data_envio):
@@ -2133,10 +2129,15 @@ def planilhas_faturamento_implantacao_lote(lote, data_envio):
     Município do LOTE — nunca é descartado (CLAUDE.md §9: nunca perde
     valor lançado).
 
-    Rateio manual (pedido do usuário, 2026-10-13, `Lote.rateio_manual`):
-    cada parte do INEP vira 1 planilha só dela (Cidade + valor da parte),
-    no fim da lista — mesmo com Cidade repetida, nunca soma com outra
-    parte; o INEP não entra na planilha do Município do LOTE.
+    Rateio manual (`Lote.rateio_manual`) — pedido do usuário (2026-10-23),
+    substitui o "1 planilha por parte" de 2026-10-13: o portal EACE tem 1
+    card (1 NF) por Cidade, então as partes se juntam por Cidade igual ao
+    rateio automático — a parte da Cidade do LOTE entra na planilha do
+    Município do LOTE (com os INEPs sem rateio) e cada outra Cidade soma
+    as partes de todos os INEPs numa planilha só (caso real, LOTE-0300
+    Brasília: 2 INEPs em "Brasília"/"Brasília2" geravam 4 NFs, o portal
+    pedia 2 — 59.778,80 e 16.200,60). Cidade comparada por
+    `chave_cidade_rateio`.
 
     Sem nenhum INEP rateado, devolve sempre 1 único item na lista — mesmo
     conteúdo de `gerar_planilha_faturamento_implantacao_lote`. Devolve
@@ -2153,23 +2154,26 @@ def planilhas_faturamento_implantacao_lote(lote, data_envio):
         raise PlanilhaFaturamentoImplantacaoError(f"{lote} não tem nenhum INEP.")
 
     catalogo_kits = list(KitPadrao.objects.all())
-    municipio_lote_normalizado = _normalizar_texto_cidade(lote.municipio)
+
+    chave_municipio_lote = chave_cidade_rateio(lote.municipio)
 
     contribuicoes_municipio_lote = []
+    # {chave da Cidade: (Cidade como apareceu primeiro, [(escola, valor)])}
     contribuicoes_por_cidade_extra = {}
-    planilhas_rateio_manual = []
+
+    def contribuir(escola, cidade, valor):
+        if chave_cidade_rateio(cidade) == chave_municipio_lote:
+            contribuicoes_municipio_lote.append((escola, valor))
+        else:
+            contribuicoes_por_cidade_extra.setdefault(chave_cidade_rateio(cidade), (cidade, []))[1].append(
+                (escola, valor)
+            )
+
     for escola in escolas:
         partes_rateio_manual = (lote.rateio_manual or {}).get(escola.inep)
         if partes_rateio_manual:
-            for numero, parte in enumerate(partes_rateio_manual, start=1):
-                workbook = _montar_planilha_faturamento_implantacao_de_contribuicoes(
-                    [(escola, Decimal(parte["valor"]))], estado=lote.estado, municipio=parte["cidade"],
-                    data_envio=data_envio,
-                )
-                nome_arquivo = _nome_arquivo_planilha_faturamento_implantacao_rateio_manual(
-                    lote, escola, parte["cidade"], numero, len(partes_rateio_manual)
-                )
-                planilhas_rateio_manual.append((nome_arquivo, workbook))
+            for parte in partes_rateio_manual:
+                contribuir(escola, parte["cidade"], Decimal(parte["valor"]))
             continue
 
         if not escola_rateada_relatorio_eace_mip(escola):
@@ -2181,12 +2185,7 @@ def planilhas_faturamento_implantacao_lote(lote, data_envio):
             continue
 
         for linha_rateio in rateio_relatorio_eace_mip_da_escola(escola):
-            cidade = linha_rateio["cidade"]
-            valor = linha_rateio["valor"]
-            if _normalizar_texto_cidade(cidade) == municipio_lote_normalizado:
-                contribuicoes_municipio_lote.append((escola, valor))
-            else:
-                contribuicoes_por_cidade_extra.setdefault(cidade, []).append((escola, valor))
+            contribuir(escola, linha_rateio["cidade"], linha_rateio["valor"])
 
         # Item sem Cidade preenchida não aparece em `rateio_relatorio_eace_
         # mip_da_escola` (só lista Cidade preenchida) — nunca descartado
@@ -2200,9 +2199,10 @@ def planilhas_faturamento_implantacao_lote(lote, data_envio):
             contribuicoes_municipio_lote.append((escola, valor_sem_cidade))
 
     planilhas = []
-    # LOTE em que todo INEP foi rateado à mão não tem o que pôr na planilha
-    # do Município do LOTE — ela só sai vazia quando não há nenhuma outra.
-    if contribuicoes_municipio_lote or not planilhas_rateio_manual:
+    # LOTE em que nenhuma parte ficou na Cidade do LOTE não tem o que pôr
+    # na planilha do Município do LOTE — ela só sai vazia quando não há
+    # nenhuma outra.
+    if contribuicoes_municipio_lote or not contribuicoes_por_cidade_extra:
         planilhas.append(
             (
                 nome_arquivo_planilha_faturamento_implantacao(lote),
@@ -2212,12 +2212,11 @@ def planilhas_faturamento_implantacao_lote(lote, data_envio):
                 ),
             )
         )
-    for cidade in sorted(contribuicoes_por_cidade_extra):
+    for cidade, contribuicoes in sorted(contribuicoes_por_cidade_extra.values(), key=lambda item: item[0]):
         workbook = _montar_planilha_faturamento_implantacao_de_contribuicoes(
-            contribuicoes_por_cidade_extra[cidade], estado=lote.estado, municipio=cidade, data_envio=data_envio
+            contribuicoes, estado=lote.estado, municipio=cidade, data_envio=data_envio
         )
         planilhas.append((_nome_arquivo_planilha_faturamento_implantacao_rateio(lote, cidade), workbook))
-    planilhas.extend(planilhas_rateio_manual)
     return planilhas
 
 
@@ -2261,7 +2260,11 @@ def _montar_planilha_faturamento_implantacao_de_contribuicoes(contribuicoes, *, 
     codigos_ineps = []
     for escola, valor in contribuicoes:
         total_valor_ixc += valor or Decimal("0.00")
-        codigos_ineps.append(f"{escola.inep}/{escola.cod_fornecedor}")
+        # 2 partes do mesmo INEP na mesma Cidade (rateio manual) somam o
+        # valor, mas o INEP aparece 1 vez só em "CÓDIGO INEPS".
+        codigo = f"{escola.inep}/{escola.cod_fornecedor}"
+        if codigo not in codigos_ineps:
+            codigos_ineps.append(codigo)
 
     data_vencimento = data_envio + datetime.timedelta(days=30)
     data_vencimento_str = data_vencimento.strftime("%d/%m/%Y")

@@ -1370,7 +1370,7 @@ class FilaRpaEaceViewTests(TestCase):
         self.assertCountEqual(
             logs_pagina, [self.log_na_fila, self.log_processando, self.log_sucesso, self.log_erro],
         )
-        self.assertContains(resp, "valor_divergente")
+        self.assertContains(resp, "O valor da Nota Fiscal é diferente do valor da linha no portal.")
 
     def test_filtro_status_especifico_mostra_so_ele(self):
         self.client.force_login(self.user)
@@ -1949,7 +1949,8 @@ class ProcessarFilaRpaEaceTests(TestCase):
         self.assertIsNone(primeira_entrada.autor)
         self.assertIn("Na fila", primeira_entrada.valor_novo)
         self.assertIn("tentativa 1", primeira_entrada.valor_novo)
-        self.assertIn("Motivo: login", primeira_entrada.valor_novo)
+        self.assertIn("Motivo: O portal EACE não aceitou o login", primeira_entrada.valor_novo)
+        self.assertIn("(login)", primeira_entrada.valor_novo)
 
         registros = Auditoria.objects.filter(
             acao=Auditoria.EXECUCAO_RPA_EACE, entidade="LogRpaEace", entidade_id=log.pk,
@@ -1959,7 +1960,7 @@ class ProcessarFilaRpaEaceTests(TestCase):
         self.assertIsNone(primeiro_registro.usuario)
         self.assertIn("Na fila", primeiro_registro.valor_novo)
         self.assertIn("tentativa 1", primeiro_registro.valor_novo)
-        self.assertIn("Motivo: login", primeiro_registro.valor_novo)
+        self.assertIn("(login)", primeiro_registro.valor_novo)
 
         sucesso = ResultadoRpaEace(sucesso=True, dados_pdf={"inep": "35083938", "valor": "1"})
         with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=sucesso):
@@ -1993,12 +1994,13 @@ class ProcessarFilaRpaEaceTests(TestCase):
         entrada = RiHistorico.objects.get(
             ri=self.ri, tipo=RiHistorico.LOG_CAMPO, campo=f"RPA EACE (Nota Fiscal #{log.pk})",
         )
-        self.assertIn("Motivo: fila_sem_osp_ou_documento", entrada.valor_novo)
+        self.assertIn("Motivo: RI sem OSP ou sem o par PDF+XML escolhido.", entrada.valor_novo)
+        self.assertIn("(fila_sem_osp_ou_documento)", entrada.valor_novo)
 
         registro = Auditoria.objects.get(
             acao=Auditoria.EXECUCAO_RPA_EACE, entidade="LogRpaEace", entidade_id=log.pk,
         )
-        self.assertIn("Motivo: fila_sem_osp_ou_documento", registro.valor_novo)
+        self.assertIn("(fila_sem_osp_ou_documento)", registro.valor_novo)
 
     def test_reporta_progresso_da_rpa_no_log_durante_a_execucao(self):
         """Pedido do usuário (2026-09-03): a barra de progresso da tela
@@ -7949,7 +7951,8 @@ class DashboardFinanceiroTests(TestCase):
     """FEAT-026 (RN-025/RN-026): cards do dashboard financeiro."""
 
     def setUp(self):
-        # Catálogo (LPU), Lote 9: Kit = 1.500,00 (1.000 + 500); Nobreak = 400,00 (300 + 100).
+        # Catálogo (LPU), Lote 9: meta conta só o equipamento (pedido do usuário,
+        # 2026-09-26, `valor_faturavel`): Kit = 1.000,00; Nobreak = 300,00.
         KitPadrao.objects.create(
             descricao="Kit Wi-Fi Indoor", lote=9, unidade="Escola",
             valor_equipamento="1000.00", valor_servico="500.00",
@@ -7965,7 +7968,7 @@ class DashboardFinanceiroTests(TestCase):
         Escola.objects.create(inep="10000001", nome="Escola A", kit_inicial="Kit Wi-Fi Indoor", lote=9)
         Escola.objects.create(inep="10000002", nome="Escola B", kit_inicial="Kit Wi-Fi Indoor", lote=9)
         resultado = montar_dashboard_financeiro()
-        self.assertEqual(resultado["valor_total_projeto"], Decimal("3800.00"))
+        self.assertEqual(resultado["valor_total_projeto"], Decimal("2600.00"))
 
     def test_escola_sem_correspondencia_no_catalogo_conta_zero(self):
         """RN-025: escola sem Kit/Nobreak no catálogo não trava o
@@ -8001,11 +8004,11 @@ class DashboardFinanceiroTests(TestCase):
             ri=ri, descricao_item="Produto X", quantidade=1, valor_unitario="500.00",
         )
         resultado = montar_dashboard_financeiro()
-        # total_projeto = 1900,00 (escola A: 1500+400) + 0 (escola B sem kit/nobreak) = 1900,00
-        self.assertEqual(resultado["valor_total_projeto"], Decimal("1900.00"))
+        # total_projeto = 1300,00 (escola A: 1000+300) + 0 (escola B sem kit/nobreak) = 1300,00
+        self.assertEqual(resultado["valor_total_projeto"], Decimal("1300.00"))
         self.assertEqual(resultado["valor_faturado"], Decimal("500.00"))
         self.assertFalse(resultado["meta_atingida"])
-        self.assertEqual(resultado["valor_faltante"], Decimal("1400.00"))
+        self.assertEqual(resultado["valor_faltante"], Decimal("800.00"))
         self.assertEqual(resultado["valor_excedente"], Decimal("0"))
 
     def test_meta_atingida_quando_faturado_ultrapassa_o_total(self):
@@ -8036,9 +8039,9 @@ class DashboardFinanceiroTests(TestCase):
             ri=ri, descricao_item="Kit Wi-Fi Indoor", quantidade=1, valor_unitario="3000.00",
         )
         resultado = montar_dashboard_financeiro()
-        self.assertEqual(resultado["valor_total_projeto"], Decimal("1500.00"))  # meta real
+        self.assertEqual(resultado["valor_total_projeto"], Decimal("1000.00"))  # meta real
         self.assertEqual(resultado["valor_faturado"], Decimal("3000.00"))
-        self.assertEqual(resultado["percentual_faturado_pct"], Decimal("200.00"))  # 3.000/1.500
+        self.assertEqual(resultado["percentual_faturado_pct"], Decimal("300.00"))  # 3.000/1.000
         self.assertEqual(resultado["percentual_faturado_css"], "100.00")  # barra capada
         self.assertEqual(resultado["percentual_faltante_css"], "0.00")
 
@@ -8196,7 +8199,8 @@ class DashboardFinanceiroPorEstadoTests(TestCase):
     "Faturado por Estado"."""
 
     def setUp(self):
-        # Catálogo (LPU), Lote 9: Kit = 1.500,00 (1.000 + 500); Nobreak = 400,00 (300 + 100).
+        # Catálogo (LPU), Lote 9: meta conta só o equipamento (pedido do usuário,
+        # 2026-09-26, `valor_faturavel`): Kit = 1.000,00; Nobreak = 300,00.
         KitPadrao.objects.create(
             descricao="Kit Wi-Fi Indoor", lote=9, unidade="Escola",
             valor_equipamento="1000.00", valor_servico="500.00",
@@ -8207,11 +8211,11 @@ class DashboardFinanceiroPorEstadoTests(TestCase):
         )
         self.escola_sp = Escola.objects.create(
             inep="20000001", nome="Escola SP", kit_inicial="Kit Wi-Fi Indoor", lote=9, estado="SP",
-        )  # Kit 1.500 + Nobreak 400 (padrão) = 1.900,00
+        )  # Kit 1.000 + Nobreak 300 (padrão) = 1.300,00
         self.escola_rj = Escola.objects.create(
             inep="20000002", nome="Escola RJ", kit_inicial="Kit Wi-Fi Indoor", lote=9, estado="RJ",
             nobreak_inicial="",
-        )  # Kit 1.500 + 0 (sem Nobreak) = 1.500,00
+        )  # Kit 1.000 + 0 (sem Nobreak) = 1.000,00
         ri_sp = Ri.objects.create(escola=self.escola_sp, status=Ri.FATURAMENTO_CONCLUIDO)
         ri_rj = Ri.objects.create(escola=self.escola_rj, status=Ri.FATURAMENTO_CONCLUIDO)
         RiItemRelatorioEace.objects.create(
@@ -8223,18 +8227,18 @@ class DashboardFinanceiroPorEstadoTests(TestCase):
 
     def test_sem_estado_soma_todas_as_escolas_e_ris(self):
         resultado = montar_dashboard_financeiro()
-        self.assertEqual(resultado["valor_total_projeto"], Decimal("3400.00"))
+        self.assertEqual(resultado["valor_total_projeto"], Decimal("2300.00"))
         self.assertEqual(resultado["valor_faturado"], Decimal("1000.00"))
         self.assertIsNone(resultado["estado_filtrado"])
 
     def test_estado_filtra_os_2_cards_por_uf(self):
         resultado_sp = montar_dashboard_financeiro(estado="SP")
-        self.assertEqual(resultado_sp["valor_total_projeto"], Decimal("1900.00"))
+        self.assertEqual(resultado_sp["valor_total_projeto"], Decimal("1300.00"))
         self.assertEqual(resultado_sp["valor_faturado"], Decimal("700.00"))
         self.assertEqual(resultado_sp["estado_filtrado"], "SP")
 
         resultado_rj = montar_dashboard_financeiro(estado="RJ")
-        self.assertEqual(resultado_rj["valor_total_projeto"], Decimal("1500.00"))
+        self.assertEqual(resultado_rj["valor_total_projeto"], Decimal("1000.00"))
         self.assertEqual(resultado_rj["valor_faturado"], Decimal("300.00"))
 
     def test_estado_sem_nenhuma_escola_ou_ri_conta_zero(self):
@@ -8248,16 +8252,16 @@ class DashboardFinanceiroPorEstadoTests(TestCase):
         linhas = montar_faturamento_por_estado()
         self.assertEqual([linha["estado"] for linha in linhas], ["SP", "RJ"])
         self.assertEqual(linhas[0]["valor"], Decimal("700.00"))
-        self.assertEqual(linhas[0]["meta"], Decimal("1900.00"))  # SP: Kit 1.500 + Nobreak 400
+        self.assertEqual(linhas[0]["meta"], Decimal("1300.00"))  # SP: Kit 1.000 + Nobreak 300
         self.assertEqual(linhas[1]["valor"], Decimal("300.00"))
-        self.assertEqual(linhas[1]["meta"], Decimal("1500.00"))  # RJ: só Kit (sem Nobreak)
+        self.assertEqual(linhas[1]["meta"], Decimal("1000.00"))  # RJ: só Kit (sem Nobreak)
 
     def test_faturamento_por_estado_percentual_css_usa_ponto_decimal(self):
         """A barra é proporcional ao quanto da META do próprio estado já
         foi faturado (não ao valor bruto comparado entre estados)."""
         linhas = montar_faturamento_por_estado()
-        self.assertEqual(linhas[0]["percentual_css"], "36.84")  # SP: 700 / 1.900 * 100
-        self.assertEqual(linhas[1]["percentual_css"], "20.00")  # RJ: 300 / 1.500 * 100
+        self.assertEqual(linhas[0]["percentual_css"], "53.85")  # SP: 700 / 1.300 * 100
+        self.assertEqual(linhas[1]["percentual_css"], "30.00")  # RJ: 300 / 1.000 * 100
 
     def test_estado_com_escola_mas_sem_faturamento_aparece_com_zero(self):
         Escola.objects.create(inep="20000003", nome="Escola MG", estado="MG", nobreak_inicial="")
@@ -8279,20 +8283,20 @@ class DashboardFinanceiroPorEstadoTests(TestCase):
         estado com valor bruto MAIOR mas % MENOR deve vir por último."""
         KitPadrao.objects.create(
             descricao="Kit Wi-Fi Indoor", lote=11, unidade="Escola",
-            valor_equipamento="18000.00", valor_servico="2000.00",  # meta = 20.000,00
+            valor_equipamento="18000.00", valor_servico="2000.00",  # meta = 18.000,00 (só equipamento)
         )
         escola_go = Escola.objects.create(
             inep="20000005", nome="Escola GO", kit_inicial="Kit Wi-Fi Indoor", lote=11,
             estado="GO", nobreak_inicial="",
-        )  # meta = 20.000,00
+        )  # meta = 18.000,00
         ri_go = Ri.objects.create(escola=escola_go, status=Ri.FATURAMENTO_CONCLUIDO)
         RiItemRelatorioEace.objects.create(
             ri=ri_go, descricao_item="Kit Wi-Fi Indoor", quantidade=1, valor_unitario="1000.00",
-        )  # GO: valor bruto 1.000 — maior que SP (700) e RJ (300) —, mas só 5% da meta
+        )  # GO: valor bruto 1.000 — maior que SP (700) e RJ (300) —, mas só 5,56% da meta
 
         linhas = montar_faturamento_por_estado()
         # Por valor bruto seria GO (1.000) > SP (700) > RJ (300); pela % (o
-        # critério real) é SP (36,84%) > RJ (20,00%) > GO (5,00%, por último
+        # critério real) é SP (53,85%) > RJ (30,00%) > GO (5,56%, por último
         # apesar do maior valor bruto).
         self.assertEqual(
             [linha["estado"] for linha in linhas], ["SP", "RJ", "GO"]
@@ -8346,7 +8350,7 @@ class DashboardFaturamentoPorMunicipioTests(TestCase):
         )
         campinas = next(linha for linha in linhas if linha["municipio"] == "Campinas")
         self.assertEqual(campinas["valor"], Decimal("900.00"))  # não soma o Campinas/RJ (1.500)
-        self.assertEqual(campinas["meta"], Decimal("1500.00"))  # Kit, sem Nobreak
+        self.assertEqual(campinas["meta"], Decimal("1000.00"))  # Kit (só equipamento), sem Nobreak
 
     def test_ordena_pela_maior_porcentagem_da_meta(self):
         linhas = montar_faturamento_por_municipio("SP")
@@ -8357,28 +8361,28 @@ class DashboardFaturamentoPorMunicipioTests(TestCase):
         com valor bruto MAIOR mas % MENOR da própria meta vem por último."""
         KitPadrao.objects.create(
             descricao="Kit Wi-Fi Indoor", lote=11, unidade="Escola",
-            valor_equipamento="18000.00", valor_servico="2000.00",  # meta = 20.000,00
+            valor_equipamento="18000.00", valor_servico="2000.00",  # meta = 18.000,00 (só equipamento)
         )
         escola_sorocaba = Escola.objects.create(
             inep="40000004", nome="Escola Sorocaba", kit_inicial="Kit Wi-Fi Indoor", lote=11,
             estado="SP", municipio="Sorocaba", nobreak_inicial="",
-        )  # meta = 20.000,00
+        )  # meta = 18.000,00
         ri_sorocaba = Ri.objects.create(escola=escola_sorocaba, status=Ri.FATURAMENTO_CONCLUIDO)
         RiItemRelatorioEace.objects.create(
             ri=ri_sorocaba, descricao_item="Kit Wi-Fi Indoor", quantidade=1, valor_unitario="1000.00",
-        )  # valor bruto 1.000 — maior que Campinas (900) —, mas só 5% da meta de 20.000
+        )  # valor bruto 1.000 — maior que Campinas (900) —, mas só 5,56% da meta de 18.000
 
         linhas = montar_faturamento_por_municipio("SP")
         # Por valor bruto seria Sorocaba (1.000) > Campinas (900) > Santos
-        # (150); pela % (o critério real) é Campinas (60,00%) > Santos
-        # (10,00%) > Sorocaba (5,00%, por último apesar do maior valor bruto).
+        # (150); pela % (o critério real) é Campinas (90,00%) > Santos
+        # (15,00%) > Sorocaba (5,56%, por último apesar do maior valor bruto).
         self.assertEqual(
             [linha["municipio"] for linha in linhas], ["Campinas", "Santos", "Sorocaba"]
         )
 
     def test_municipio_filtra_os_2_cards_junto_com_o_estado(self):
         resultado = montar_dashboard_financeiro(estado="SP", municipio="Santos")
-        self.assertEqual(resultado["valor_total_projeto"], Decimal("1500.00"))
+        self.assertEqual(resultado["valor_total_projeto"], Decimal("1000.00"))
         self.assertEqual(resultado["valor_faturado"], Decimal("150.00"))
         self.assertEqual(resultado["municipio_filtrado"], "Santos")
 
@@ -8387,7 +8391,7 @@ class DashboardFaturamentoPorMunicipioTests(TestCase):
         se repete entre UFs) — a view já impede isso, mas o service também
         não aplica o filtro sozinho, por segurança."""
         resultado = montar_dashboard_financeiro(municipio="Santos")
-        self.assertEqual(resultado["valor_total_projeto"], Decimal("4500.00"))  # todas as escolas
+        self.assertEqual(resultado["valor_total_projeto"], Decimal("3000.00"))  # todas as escolas
         self.assertIsNone(resultado["municipio_filtrado"])
 
 
@@ -9906,6 +9910,28 @@ class ValidarNotasFiscaisFinanceiroServiceTests(TestCase):
         self.assertEqual(resultados[0]["motivos"], [])
         self.assertTrue(any("ITEM LPU" in aviso for aviso in resultados[0]["avisos"]))
 
+    def test_casa_por_item_lpu_sem_diferenciar_acento(self):
+        """Caso real (2026-10-29, INEP 35281177, NF 2982): o DANFE traz
+        "Conversor de midia Gigabit Ethernet" (sem acento) e o Relatório
+        EACE "Conversor de mídia Gigabit Ethernet" — o conversor nunca
+        casava pelo ITEM LPU."""
+        self.item.descricao_item = "Conversor de mídia Gigabit Ethernet"
+        self.item.nota_fiscal = ""
+        self.item.save(update_fields=["descricao_item", "nota_fiscal"])
+        dados = self._dados_pdf(numero_nf="2982", item_lpu="Conversor de midia  Gigabit ETHERNET")
+        resultados = self._validar(dados)
+        self.assertTrue(resultados[0]["ok"])
+        self.assertEqual(resultados[0]["motivos"], [])
+
+    def test_item_lpu_sem_acento_nao_vira_produto_divergente(self):
+        """Mesmo caso, com a Nota Fiscal já vinculada pelo Sincronizador: a
+        diferença de acento não pode acusar "Produto/Equipamento"."""
+        self.item.descricao_item = "Conversor de mídia Gigabit Ethernet"
+        self.item.save(update_fields=["descricao_item"])
+        resultados = self._validar(self._dados_pdf(item_lpu="Conversor de midia Gigabit Ethernet"))
+        self.assertTrue(resultados[0]["ok"])
+        self.assertEqual(resultados[0]["motivos"], [])
+
     def test_nao_casa_por_item_lpu_quando_ambiguo(self):
         """2 itens sem Nota Fiscal vinculada com o mesmo ITEM LPU — casamento
         ambíguo, não arrisca escolher o item errado."""
@@ -10307,3 +10333,35 @@ class CardImplantacaoEaceValorLado1Tests(TestCase):
         )
 
         self.assertEqual(montar_dashboard_financeiro()["valor_total_projeto"], Decimal("1000.00"))
+
+
+class LogRpaEaceMotivoLegivelTests(TestCase):
+    """Pedido do usuário (2026-10-29, INEP 35496029/NF 2994): falha do
+    portal EACE ao "Enviar notas" aparecia só como "enviar_notas" ao lado
+    dos valores, e parecia que o valor não batia."""
+
+    def setUp(self):
+        escola = Escola.objects.create(inep="35496029", nome="Escola Motivo", lote=9)
+        self.ri = Ri.objects.create(escola=escola, status=Ri.AGUARDANDO_ANEXO_PORTAL_EACE)
+
+    def _log(self, **campos):
+        return LogRpaEace.objects.create(ri=self.ri, resultado=LogRpaEace.ERRO, **campos)
+
+    def test_falha_do_portal_com_dados_conferindo(self):
+        log = self._log(motivo_erro="enviar_notas", inep_pdf="35496029", valor_pdf="1.551,93", valor_portal="1.551,93")
+        self.assertTrue(log.erro_do_portal)
+        self.assertIn("Enviar notas", log.motivo_erro_legivel)
+        self.assertIn("instabilidade do portal EACE", log.motivo_erro_legivel)
+
+    def test_falha_do_portal_sem_dados_lidos_nao_afirma_que_conferem(self):
+        log = self._log(motivo_erro="login")
+        self.assertTrue(log.erro_do_portal)
+        self.assertNotIn("conferem", log.motivo_erro_legivel)
+
+    def test_erro_de_negocio_nao_e_falha_do_portal(self):
+        log = self._log(motivo_erro="valor_divergente", inep_pdf="35496029", valor_pdf="1.551,93", valor_portal="1.454,62")
+        self.assertFalse(log.erro_do_portal)
+        self.assertEqual(log.motivo_erro_legivel, LogRpaEace.MENSAGENS_MOTIVO["valor_divergente"])
+
+    def test_motivo_desconhecido_mostra_o_codigo(self):
+        self.assertEqual(self._log(motivo_erro="algo_novo").motivo_erro_legivel, "algo_novo")

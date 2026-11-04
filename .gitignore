@@ -66,3 +66,6 @@ doc/LIBERAÇÃO 22 -- PEDIDO 506.zip
 # mesmo criterio acima, dado real de negocio (municipio/valor de
 # contrato por INEP), nunca versionar.
 doc/_Base contrato_taxa_instalação RI -MEGA - 22-09-2026 NOVA.xlsx
+
+# Credenciais de servidores (nunca versionar)
+Servidor.md

@@ -1,7 +1,8 @@
 """Rateio manual do LOTE (pedido do usuário, 2026-10-13): no modal "Revisar
 INEPs do LOTE", o valor total de um INEP é dividido em N partes (Cidade +
-valor); cada parte vira uma planilha de faturamento própria. A soma nunca
-pode ser menor nem maior que o valor total do INEP."""
+valor); as partes de mesma Cidade de todos os INEPs somam numa planilha de
+faturamento só (2026-10-23). A soma nunca pode ser menor nem maior que o
+valor total do INEP."""
 import datetime
 from decimal import Decimal
 
@@ -109,11 +110,16 @@ class CriarLoteRateioManualTests(_BaseRateioManual):
 
 
 class PlanilhasRateioManualTests(_BaseRateioManual):
-    """Cada parte do rateio manual vira 1 planilha só dela."""
+    """Pedido do usuário (2026-10-23): 1 planilha (1 NF) por Cidade, somando
+    as partes de todos os INEPs - o portal EACE tem 1 card por Cidade."""
 
     data_envio = datetime.date(2026, 10, 13)
 
-    def test_cada_parte_gera_1_planilha_com_o_valor_da_parte(self):
+    @staticmethod
+    def _valores(planilhas):
+        return {nome: wb.worksheets[0]["H10"].value for nome, wb in planilhas}
+
+    def test_parte_na_cidade_do_lote_soma_com_os_ineps_sem_rateio(self):
         escola_normal, _ri = _criar_escola_elegivel_lote("20000020")
         escola_rateada, _ri2 = _criar_escola_elegivel_lote("20000021")
         lote = self._criar(
@@ -123,27 +129,43 @@ class PlanilhasRateioManualTests(_BaseRateioManual):
 
         planilhas = planilhas_faturamento_implantacao_lote(lote, self.data_envio)
 
-        self.assertEqual(len(planilhas), 4)
         nomes = [nome for nome, _wb in planilhas]
+        self.assertEqual(len(planilhas), 2)
         self.assertEqual(nomes[0], nome_arquivo_planilha_faturamento_implantacao(lote))
-        # Planilha do Município do LOTE: só o INEP sem rateio manual.
-        self.assertEqual(planilhas[0][1].worksheets[0]["H10"].value, 300.00)
-        self.assertEqual(len(set(nomes)), 4)
-        self.assertIn("(RATEIO 20000021 1-3)", nomes[1])
-        self.assertIn("(RATEIO 20000021 3-3)", nomes[3])
-        self.assertIn("Brasília", nomes[3])
-        valores = [wb.worksheets[0]["H10"].value for _nome, wb in planilhas[1:]]
-        self.assertEqual(valores, [100.00, 50.00, 150.00])
-        self.assertEqual(sum(Decimal(str(v)) for v in valores), Decimal("300.00"))
+        self.assertIn("Brasília", nomes[1])
+        self.assertIn("(RATEIO)", nomes[1])
+        # 300 do INEP sem rateio + 100 + 50 da parte "Abadiânia".
+        self.assertEqual(list(self._valores(planilhas).values()), [450.00, 150.00])
 
-    def test_lote_com_todos_os_ineps_rateados_nao_gera_planilha_vazia_do_municipio(self):
-        escola, _ri = _criar_escola_elegivel_lote("20000022")
-        lote = self._criar([escola], {str(escola.pk): [("Abadiânia", "120.00"), ("Brasília", "180.00")]})
+    def test_lote_0300_2_ineps_rateados_geram_1_planilha_por_cidade(self):
+        """Caso real (LOTE-0300 Brasília): 2 INEPs em "Brasília"/"Brasília2"
+        geravam 4 planilhas/NFs - o portal pedia 2."""
+        escola_a, _ri = _criar_escola_elegivel_lote("20000023")
+        escola_b, _ri2 = _criar_escola_elegivel_lote("20000024")
+        lote = self._criar(
+            [escola_a, escola_b],
+            {
+                str(escola_a.pk): [("Abadiânia", "200.00"), ("Abadiânia2", "100.00")],
+                str(escola_b.pk): [("ABADIANIA", "290.00"), ("Abadiânia 2", "10.00")],
+            },
+        )
 
         planilhas = planilhas_faturamento_implantacao_lote(lote, self.data_envio)
 
         self.assertEqual(len(planilhas), 2)
-        self.assertTrue(all("RATEIO 20000022" in nome for nome, _wb in planilhas))
+        self.assertEqual(planilhas[0][0], nome_arquivo_planilha_faturamento_implantacao(lote))
+        self.assertIn("Abadiânia2", planilhas[1][0])
+        self.assertEqual(list(self._valores(planilhas).values()), [490.00, 110.00])
+
+    def test_lote_sem_parte_na_cidade_do_lote_nao_gera_planilha_vazia_do_municipio(self):
+        escola, _ri = _criar_escola_elegivel_lote("20000022")
+        lote = self._criar([escola], {str(escola.pk): [("Formosa", "120.00"), ("Brasília", "180.00")]})
+
+        planilhas = planilhas_faturamento_implantacao_lote(lote, self.data_envio)
+
+        self.assertEqual(len(planilhas), 2)
+        self.assertTrue(all("(RATEIO)" in nome for nome, _wb in planilhas))
+        self.assertEqual(sorted(self._valores(planilhas).values()), [120.00, 180.00])
 
 
 class MipLoteCriarViewRateioManualTests(_BaseRateioManual):

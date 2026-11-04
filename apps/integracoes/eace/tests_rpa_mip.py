@@ -509,6 +509,64 @@ class AnexarPdfMipTests(SimpleTestCase):
         mocks["expandir"].assert_not_called()
         mocks["cards"].assert_not_called()
 
+    # Execucao real (2026-10-23): NFs de 13/10 ja "Aprovado" no pedido 526
+    # voltaram para a fila e caiam em `municipio_nao_encontrado` no 548.
+    def test_nf_ja_aprovada_em_pedido_anterior_vira_documento_ja_enviado(self):
+        cards_por_pedido = {
+            7: [_card(municipio="ITU")],  # 506, o mais recente
+            6: [_card(municipio="PAULINIA", status="Aprovado", valor="9,99")],  # 492
+            5: [_card(municipio="PAULINIA", status="Aprovado", posicao=3)],  # 473
+        }
+        resultado, mocks = self._rodar({
+            **self._caminho(),
+            "cards": patch(
+                "apps.integracoes.eace.rpa_mip.listar_cards_municipio",
+                side_effect=lambda pagina, posicao=None: cards_por_pedido.get(posicao, []),
+            ),
+            "upload": self._upload(),
+        })
+        self.assertEqual(resultado.motivo, "documento_ja_enviado")
+        self.assertEqual(resultado.pedido, "473")
+        self.assertEqual(resultado.status_portal, "Aprovado")
+        self.assertEqual(resultado.valor_portal, "16.109,00")
+        self.assertEqual([c.args[1] for c in mocks["expandir"].call_args_list], [7, 6, 5])
+        mocks["upload"].assert_not_called()
+
+    def test_nf_em_lugar_nenhum_mantem_o_erro_do_pedido_mais_recente(self):
+        resultado, mocks = self._rodar({
+            **self._caminho(),
+            "cards": self._cards([_card(valor="1,00")]),
+            "upload": self._upload(),
+        })
+        self.assertEqual(resultado.motivo, "valor_divergente")
+        self.assertEqual(resultado.pedido, "506")
+        # 506 + os 4 anteriores (MAX_PEDIDOS_ANTERIORES)
+        self.assertEqual([c.args[1] for c in mocks["expandir"].call_args_list], [7, 6, 5, 4, 3])
+        mocks["upload"].assert_not_called()
+
+    def test_valor_igual_no_pedido_mais_recente_nao_procura_nos_anteriores(self):
+        resultado, mocks = self._rodar({
+            **self._caminho(),
+            "cards": self._cards([_card(status="Aprovado")]),
+            "upload": self._upload(),
+        })
+        self.assertEqual(resultado.motivo, "documento_ja_enviado")
+        self.assertEqual(resultado.pedido, "506")
+        self.assertEqual(mocks["expandir"].call_count, 1)
+
+    def test_pedido_pendente_em_pedido_anterior_nao_e_anexado(self):
+        resultado, mocks = self._rodar({
+            **self._caminho(),
+            "cards": patch(
+                "apps.integracoes.eace.rpa_mip.listar_cards_municipio",
+                side_effect=lambda pagina, posicao=None: [] if posicao == 7 else [_card()],
+            ),
+            "upload": self._upload(),
+        })
+        self.assertEqual(resultado.motivo, "municipio_nao_encontrado")
+        self.assertEqual(resultado.pedido, "506")
+        mocks["upload"].assert_not_called()
+
 class ConfirmarEnvioCardTests(SimpleTestCase):
     """`confirmar_envio_card` rele o card ate o status sair de "Pendente"."""
 

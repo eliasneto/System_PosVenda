@@ -104,6 +104,7 @@ class ResultadoRpaMip:
 #   login                    - login recusado pelo portal
 #   selecao_perfil           - modal "Fornecedor" nao respondeu
 #   abrir_medicoes           - card "Medições" nao encontrado
+#   termo_de_uso_pendente    - modal "Nosso Termo de uso mudou" na frente da tela (aceitar manualmente no portal)
 #   abrir_mips               - botao "Ver MIPs" nao encontrado no modal de Medições
 #   pedidos_nao_encontrados  - grid de pedidos (coluna "Pedido") vazio ou nao carregou
 #   pedido_nao_encontrado    - numero de pedido informado nao esta no grid de MIPs
@@ -246,13 +247,14 @@ def anexar_pdf_mip(
     if not simular and not (caminho_pdf and municipio):
         raise ValueError("Anexar de verdade exige municipio e caminho_pdf - so a simulacao aceita sem eles.")
     municipio = municipio or ""
+    pedido_informado = bool(pedido)
     progresso = ProgressoRpaMip(progresso_callback)
     capturas = CapturasRpaMip(pasta_capturas) if pasta_capturas else None
     try:
         import pdfplumber  # noqa: F401  (so para falhar cedo se faltar)
         from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
-        from .dashboard import abrir_medicoes
+        from .dashboard import abrir_medicoes, motivo_falha_navegacao
         from .login import fazer_login, selecionar_perfil_fornecedor
     except ImportError as exc:
         raise RpaMipIndisponivel(
@@ -316,6 +318,29 @@ def anexar_pdf_mip(
                     capturas.salvar(atual["pagina"], f"Erro {motivo}")
                 return _falhar(atual["pagina"], municipio, motivo, dados_pdf, valor_portal, pedido=pedido)
 
+            def enviada_em_pedido_anterior(cards, pedido, todos_os_cards):
+                """Execucao real (2026-10-23, pedido 548): NFs de 13/10 ja
+                "Aprovado" no pedido 526 voltaram para a fila e caiam em
+                `municipio_nao_encontrado` no pedido mais recente. Sem card
+                de mesmo valor no pedido aberto, procura a NF ja enviada nos
+                anteriores (so quando o pedido nao foi informado)."""
+                if not caminho_pdf or pedido_informado or any(
+                    valores_iguais(dados_pdf["valor"], card["valor"]) for card in cards
+                ):
+                    return None
+                encontrado = procurar_nf_em_pedidos_anteriores(atual, pedido, municipio, dados_pdf["valor"])
+                if not encontrado:
+                    return None
+                pedido_anterior, card = encontrado
+                logger.error(
+                    "RPA MIP encerrado com erro (documento_ja_enviado) - municipio %s: NF ja esta '%s' no pedido %s.",
+                    municipio, card["status"], pedido_anterior,
+                )
+                return ResultadoRpaMip(
+                    sucesso=False, motivo="documento_ja_enviado", dados_pdf=dados_pdf, valor_portal=card["valor"],
+                    pedido=pedido_anterior, status_portal=card["status"], cards_encontrados=todos_os_cards,
+                )
+
             try:
                 pagina.goto(cfg.url, wait_until="load", timeout=60_000)
                 avancar()  # "Abrindo o portal EACE"
@@ -328,7 +353,7 @@ def anexar_pdf_mip(
                 avancar()  # "Selecionando o perfil Fornecedor"
 
                 if not abrir_medicoes(pagina):
-                    return falhar("abrir_medicoes")
+                    return falhar(motivo_falha_navegacao(pagina, "abrir_medicoes"))
                 avancar()  # "Abrindo Medições"
 
                 motivo, pedido = _navegar_caminho_mip(atual, municipio, avancar, cfg.timeout_ms, pedido)
@@ -336,9 +361,12 @@ def anexar_pdf_mip(
                     return falhar(motivo, pedido=pedido)
                 pagina = atual["pagina"]
 
-                todos_os_cards = listar_cards_municipio(pagina)
+                todos_os_cards = listar_cards_municipio(pagina, atual.get("posicao_pedido"))
                 cards = cards_do_municipio(todos_os_cards, municipio)
                 if not cards:
+                    resultado = enviada_em_pedido_anterior(cards, pedido, todos_os_cards)
+                    if resultado:
+                        return resultado
                     resultado = falhar("municipio_nao_encontrado", pedido=pedido)
                     resultado.cards_encontrados = todos_os_cards
                     return resultado
@@ -360,6 +388,10 @@ def anexar_pdf_mip(
                     )
 
                 card_alvo, motivo = localizar_card_pendente(cards, dados_pdf["valor"])
+                if motivo:
+                    resultado = enviada_em_pedido_anterior(cards, pedido, todos_os_cards)
+                    if resultado:
+                        return resultado
                 if motivo:
                     resultado = falhar(motivo, card_alvo["valor"] if card_alvo else None, pedido)
                     resultado.cards_encontrados = todos_os_cards
@@ -439,12 +471,49 @@ def _navegar_caminho_mip(
             return "pedidos_nao_encontrados", None
     pedido = pedidos[posicao]
     logger.info("Pedidos no grid de MIPs: %s - escolhido: %s.", pedidos, pedido)
+    atual["pedidos"], atual["posicao_pedido"] = pedidos, posicao
     avancar()  # "Lendo os pedidos"
 
     if not expandir_pedido_mip(pagina_mips, posicao):
         return "expandir_pedido", pedido
     avancar()  # "Expandindo o pedido"
     return None, pedido
+
+
+# Quantos pedidos anteriores ao mais recente `procurar_nf_em_pedidos_anteriores`
+# abre (cada um leva ~20-40 s para expandir e rolar os cards). Em 2026-10-23
+# as NFs reenfileiradas estavam no pedido 526, 2 antes do 548.
+MAX_PEDIDOS_ANTERIORES = 4
+
+
+def procurar_nf_em_pedidos_anteriores(
+    atual: dict, pedido_atual: str | None, municipio: str, valor_pdf: str,
+) -> tuple[str, dict] | None:
+    """A NF nao bate com nenhum card do pedido mais recente: procura, do
+    pedido mais novo para o mais antigo (ate `MAX_PEDIDOS_ANTERIORES`), um
+    card do `municipio` ja enviado ("Aguardando Aprovação"/"Aprovado"/"NF
+    anexada") com o mesmo valor do PDF - a NF ja foi enviada naquele
+    pedido. Devolve `(pedido, card)` ou `None`. So le: nunca anexa nada em
+    pedido anterior."""
+    pagina = atual["pagina"]
+    pedidos = atual.get("pedidos") or []
+    anteriores = sorted(
+        (
+            (int(texto), posicao) for posicao, texto in enumerate(pedidos)
+            if texto.isdigit() and pedido_atual and pedido_atual.isdigit() and int(texto) < int(pedido_atual)
+        ),
+        reverse=True,
+    )[:MAX_PEDIDOS_ANTERIORES]
+    for numero, posicao in anteriores:
+        if not expandir_pedido_mip(pagina, posicao):
+            continue
+        cards = cards_do_municipio(listar_cards_municipio(pagina, posicao), municipio)
+        for card in cards:
+            if status_enviado(card["status"]) and valores_iguais(valor_pdf, card["valor"]):
+                return str(numero), card
+    logger.info("NF do municipio %s (valor %s) nao encontrada nos pedidos anteriores: %s.",
+                municipio, valor_pdf, [numero for numero, _ in anteriores])
+    return None
 
 
 def abrir_mips(pagina, timeout_nova_aba_ms: int = 15_000):
@@ -568,14 +637,17 @@ def expandir_pedido_mip(pagina, posicao: int) -> bool:
     return True
 
 
-def listar_cards_municipio(pagina, timeout_ms: int = 30_000) -> list[dict]:
+def listar_cards_municipio(pagina, posicao_pedido: int | None = None, timeout_ms: int = 30_000) -> list[dict]:
     """Le os cards de municipio do pedido expandido.
 
     Cada card e o `.group-item` mais interno que contem "Município:" e
     "Valor total a ser emitido" (o `.group-item` da linha do pedido tambem
     contem esses textos depois de expandido, por isso so o mais interno
-    conta). Retorna [{"posicao", "municipio", "uf", "ibge", "status",
-    "valor"}, ...] - ver `interpretar_card_municipio`.
+    conta). Com `posicao_pedido`, so os cards dentro da linha desse pedido
+    (`procurar_nf_em_pedidos_anteriores` deixa mais de 1 pedido expandido);
+    se a linha nao tiver nenhum, vale a pagina toda. Retorna [{"posicao",
+    "municipio", "uf", "ibge", "status", "valor"}, ...] - ver
+    `interpretar_card_municipio`.
     """
     from playwright.sync_api import TimeoutError as PWTimeout
 
@@ -585,20 +657,19 @@ def listar_cards_municipio(pagina, timeout_ms: int = 30_000) -> list[dict]:
         logger.error("Cards de municipio do pedido nao apareceram.")
         return []
 
-    _carregar_todos_os_cards(pagina)
+    escopo = {"linha": _ATRIBUTO_LINHA_PEDIDO, "posicao": posicao_pedido}
+    _carregar_todos_os_cards(pagina, escopo)
 
     textos: list[str] = pagina.evaluate(
-        """(atributo) => {
-            const ehCard = el => el.innerText.includes('Município:')
-                && el.innerText.includes('Valor total a ser emitido');
-            const cards = [...document.querySelectorAll('.group-item')]
-                .filter(el => ehCard(el) && ![...el.querySelectorAll('.group-item')].some(ehCard));
+        """({atributo, linha, posicao}) => {
+            """ + _JS_CARDS_DO_PEDIDO + """
+            document.querySelectorAll('[' + atributo + ']').forEach(el => el.removeAttribute(atributo));
             return cards.map((card, posicao) => {
                 card.setAttribute(atributo, String(posicao));
                 return card.innerText;
             });
         }""",
-        _ATRIBUTO_CARD_MUNICIPIO,
+        {"atributo": _ATRIBUTO_CARD_MUNICIPIO, **escopo},
     ) or []
 
     cards = []
@@ -610,11 +681,22 @@ def listar_cards_municipio(pagina, timeout_ms: int = 30_000) -> list[dict]:
     return cards
 
 
-_JS_CONTAR_E_ROLAR_CARDS = """() => {
+# Monta `cards` (os cards mais internos) dentro da linha do pedido
+# `posicao` (atributo `linha`) - ou da pagina toda, sem posicao ou se a
+# linha nao tiver nenhum card.
+_JS_CARDS_DO_PEDIDO = """
     const ehCard = el => el.innerText.includes('Município:')
         && el.innerText.includes('Valor total a ser emitido');
-    const cards = [...document.querySelectorAll('.group-item')]
+    const doEscopo = raiz => [...raiz.querySelectorAll('.group-item')]
         .filter(el => ehCard(el) && ![...el.querySelectorAll('.group-item')].some(ehCard));
+    const raizPedido = posicao === null || posicao === undefined
+        ? null : document.querySelector('[' + linha + '="' + posicao + '"]');
+    let cards = raizPedido ? doEscopo(raizPedido) : [];
+    if (!cards.length) cards = doEscopo(document);
+"""
+
+_JS_CONTAR_E_ROLAR_CARDS = """({linha, posicao}) => {
+    """ + _JS_CARDS_DO_PEDIDO + """
     if (cards.length) {
         const ultimo = cards[cards.length - 1];
         ultimo.scrollIntoView({ block: 'end' });
@@ -626,15 +708,16 @@ _JS_CONTAR_E_ROLAR_CARDS = """() => {
 }"""
 
 
-def _carregar_todos_os_cards(pagina, max_rolagens: int = 20, espera_ms: int = 1_500) -> int:
+def _carregar_todos_os_cards(pagina, escopo: dict | None = None, max_rolagens: int = 20, espera_ms: int = 1_500) -> int:
     """O RepeatingGroup do Bubble.io so renderiza mais cards conforme a
     pagina rola (execucao real, 2026-09-28: 17 de 29 cards do pedido 506
     sem rolar). Rola ate o ultimo card ate a quantidade parar de crescer
     por 2 rodadas seguidas; devolve a quantidade final."""
+    escopo = escopo or {"linha": _ATRIBUTO_LINHA_PEDIDO, "posicao": None}
     anterior, estavel = -1, 0
     total = 0
     for _ in range(max_rolagens):
-        total = pagina.evaluate(_JS_CONTAR_E_ROLAR_CARDS) or 0
+        total = pagina.evaluate(_JS_CONTAR_E_ROLAR_CARDS, escopo) or 0
         if total == anterior:
             estavel += 1
             if estavel >= 2:

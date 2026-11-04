@@ -369,6 +369,35 @@ class AnexarNotaFiscalValidacaoContraOPortalTests(SimpleTestCase):
         mock_contar.assert_called_once()
         mock_expandir.assert_not_called()
 
+    def test_modal_termo_de_uso_vira_motivo_termo_de_uso_pendente(self):
+        with patch("playwright.sync_api.sync_playwright", return_value=self._mock_sync_playwright()), \
+                patch("apps.integracoes.eace.login.fazer_login", return_value=True), \
+                patch("apps.integracoes.eace.login.selecionar_perfil_fornecedor", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_medicoes", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_osps", return_value=False), \
+                patch("apps.integracoes.eace.dashboard.termo_de_uso_pendente", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.pesquisar_osp") as mock_pesquisar:
+            resultado = anexar_nota_fiscal(
+                osp="3929", inep="35083938", indice=1,
+                caminho_pdf=str(self.pdf), caminho_xml=str(self.xml),
+            )
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "termo_de_uso_pendente")
+        mock_pesquisar.assert_not_called()
+
+    def test_abrir_osps_sem_modal_mantem_motivo_abrir_osps(self):
+        with patch("playwright.sync_api.sync_playwright", return_value=self._mock_sync_playwright()), \
+                patch("apps.integracoes.eace.login.fazer_login", return_value=True), \
+                patch("apps.integracoes.eace.login.selecionar_perfil_fornecedor", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_medicoes", return_value=True), \
+                patch("apps.integracoes.eace.dashboard.abrir_osps", return_value=False), \
+                patch("apps.integracoes.eace.dashboard.termo_de_uso_pendente", return_value=False):
+            resultado = anexar_nota_fiscal(
+                osp="3929", inep="35083938", indice=1,
+                caminho_pdf=str(self.pdf), caminho_xml=str(self.xml),
+            )
+        self.assertEqual(resultado.motivo, "abrir_osps")
+
     def test_documento_ja_enviado_aborta_sem_upload(self):
         linha_ja_enviada = [
             {"inep": "35083938", "status": "Aprovado", "descricao": "Kit", "valor": "22.644,43", "indice": 1},

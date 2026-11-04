@@ -60,6 +60,7 @@ class ResultadoRpaEace:
 #   selecao_perfil          - modal "Fornecedor" nao respondeu
 #   abrir_medicoes          - card "Medições" nao encontrado
 #   abrir_osps              - botao "Ver OSPs" nao encontrado
+#   termo_de_uso_pendente   - modal "Nosso Termo de uso mudou" na frente da tela (aceitar manualmente no portal)
 #   osp_nao_encontrada      - portal mostra "0 pedido(s)" pra essa OSP
 #   expandir_resultado_osp  - resultado da OSP nao expandiu (OSP existe, UI travou)
 #   expandir_notas_fiscais  - secao "Notas Fiscais" nao expandiu
@@ -186,6 +187,7 @@ def anexar_nota_fiscal(
         from .dashboard import (
             abrir_medicoes,
             abrir_osps,
+            motivo_falha_navegacao,
             clicar_enviar_notas,
             contar_pedidos_osp,
             expandir_notas_fiscais,
@@ -279,11 +281,11 @@ def anexar_nota_fiscal(
                 progresso.avancar()  # "Selecionando o perfil Fornecedor"
 
                 if not abrir_medicoes(pagina):
-                    return _falhar(pagina, inep, "abrir_medicoes", dados_pdf)
+                    return _falhar(pagina, inep, motivo_falha_navegacao(pagina, "abrir_medicoes"), dados_pdf)
                 progresso.avancar()  # "Abrindo Medições"
 
                 if not abrir_osps(pagina):
-                    return _falhar(pagina, inep, "abrir_osps", dados_pdf)
+                    return _falhar(pagina, inep, motivo_falha_navegacao(pagina, "abrir_osps"), dados_pdf)
                 progresso.avancar()  # "Abrindo OSPs"
 
                 if not pesquisar_osp(pagina, osp):
@@ -461,6 +463,7 @@ def consultar_pendencias_eace(
         from .dashboard import (
             abrir_medicoes,
             abrir_osps,
+            motivo_falha_navegacao,
             contar_pedidos_osp,
             expandir_notas_fiscais,
             expandir_resultado_osp,
@@ -502,9 +505,9 @@ def consultar_pendencias_eace(
                 if not selecionar_perfil_fornecedor(pagina):
                     return ResultadoConsultaPendencias(sucesso=False, motivo="selecao_perfil")
                 if not abrir_medicoes(pagina):
-                    return ResultadoConsultaPendencias(sucesso=False, motivo="abrir_medicoes")
+                    return ResultadoConsultaPendencias(sucesso=False, motivo=motivo_falha_navegacao(pagina, "abrir_medicoes"))
                 if not abrir_osps(pagina):
-                    return ResultadoConsultaPendencias(sucesso=False, motivo="abrir_osps")
+                    return ResultadoConsultaPendencias(sucesso=False, motivo=motivo_falha_navegacao(pagina, "abrir_osps"))
                 if not pesquisar_osp(pagina, osp):
                     return ResultadoConsultaPendencias(sucesso=False, motivo="pesquisar_osp")
 

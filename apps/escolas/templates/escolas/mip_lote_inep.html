@@ -377,7 +377,7 @@
                                             {% endif %}
                                             {% if item.rateio_manual %}
                                             {# Rateio manual feito ao criar o LOTE (pedido do usuário, 2026-10-13) — 1 planilha por parte. #}
-                                            <div class="mt-1 space-y-0.5" title="Rateio manual — cada parte gera uma planilha de faturamento própria">
+                                            <div class="mt-1 space-y-0.5" title="Rateio manual — partes de mesma Cidade de todos os INEPs somam numa planilha de faturamento (1 NF por Cidade)">
                                                 <span class="flex items-center gap-1 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
                                                     <i data-lucide="split" class="w-3 h-3"></i>Rateio manual ({{ item.rateio_manual|length }})
                                                 </span>

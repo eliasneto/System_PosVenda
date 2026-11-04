@@ -96,8 +96,10 @@ class HomeViewTests(TestCase):
 
     def test_dashboard_mostra_os_2_cards_com_os_valores_calculados(self):
         KitPadrao.objects.create(
+            # Meta = só o equipamento (pedido do usuário, 2026-09-26,
+            # `valor_faturavel`): 1.500,00 — o serviço (500,00) não entra.
             descricao="Kit Wi-Fi Indoor", lote=9, unidade="Escola",
-            valor_equipamento="1000.00", valor_servico="500.00",
+            valor_equipamento="1500.00", valor_servico="500.00",
         )
         Escola.objects.create(inep="10000001", nome="Escola A", kit_inicial="Kit Wi-Fi Indoor", lote=9,
                                nobreak_inicial="")
@@ -131,8 +133,10 @@ class HomeViewTests(TestCase):
         """Correção (2026-08-27, pedido do usuário): faturado acima da
         meta mostra "200%" no badge, não trava em "100%"."""
         KitPadrao.objects.create(
+            # Meta = só o equipamento (pedido do usuário, 2026-09-26,
+            # `valor_faturavel`): 1.500,00 — o serviço (500,00) não entra.
             descricao="Kit Wi-Fi Indoor", lote=9, unidade="Escola",
-            valor_equipamento="1000.00", valor_servico="500.00",
+            valor_equipamento="1500.00", valor_servico="500.00",
         )
         escola_ri = Escola.objects.create(
             inep="10000003", nome="Escola C", kit_inicial="Kit Wi-Fi Indoor", nobreak_inicial="", lote=9,
@@ -161,8 +165,10 @@ class HomeFiltroPorKitEProdutoTests(TestCase):
         self.user = User.objects.create_user(username="analista", password="senha-teste-123")
         self.client.force_login(self.user)
         KitPadrao.objects.create(
+            # Meta = só o equipamento (pedido do usuário, 2026-09-26,
+            # `valor_faturavel`): 1.500,00 — o serviço (500,00) não entra.
             descricao="Kit Wi-Fi Indoor", lote=9, unidade="Escola",
-            valor_equipamento="1000.00", valor_servico="500.00",
+            valor_equipamento="1500.00", valor_servico="500.00",
         )
         self.escola = Escola.objects.create(
             inep="70000001", nome="Escola A", kit_inicial="Kit Wi-Fi Indoor", lote=9,
@@ -224,8 +230,10 @@ class DashboardFaturadoPorEstadoTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="analista", password="senha-teste-123")
         KitPadrao.objects.create(
+            # Meta = só o equipamento (pedido do usuário, 2026-09-26,
+            # `valor_faturavel`): 1.500,00 — o serviço (500,00) não entra.
             descricao="Kit Wi-Fi Indoor", lote=9, unidade="Escola",
-            valor_equipamento="1000.00", valor_servico="500.00",
+            valor_equipamento="1500.00", valor_servico="500.00",
         )
         self.escola_sp = Escola.objects.create(
             inep="30000001", nome="Escola SP", kit_inicial="Kit Wi-Fi Indoor", lote=9,

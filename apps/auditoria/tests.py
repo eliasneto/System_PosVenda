@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from apps.core.email_tracking import montar_codigo_rastreio
 from apps.escolas.models import Escola
-from apps.ri.models import Ri, RiItemIxc
+from apps.ri.models import Ri, RiItemIxc, RiItemRelatorioEace
 from apps.ri.services import sincronizar_respostas_financeiro
 from apps.ri.tests import _CONFIG_GRAPH_FINANCEIRO_TESTE, _montar_email_bytes, _RespostaGraphFake
 
@@ -168,6 +168,16 @@ class EnvioEmailAuditoriaTests(TestCase):
             cnpj_ficticio="11.111.111/0001-11",
         )
         RiItemIxc.objects.create(
+            ri=self.ri,
+            descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
+            quantidade=1,
+            valor_unitario="0",
+            eh_kit=True,
+        )
+        # RN-088 (2026-09-09): a planilha de faturamento usa o Lado
+        # Relatório EACE (3º lado) — sem ele o envio é bloqueado antes de
+        # gravar a auditoria.
+        RiItemRelatorioEace.objects.create(
             ri=self.ri,
             descricao_item="Kit Cobertura Wi-Fi - 4 Access Points",
             quantidade=1,

@@ -24,6 +24,29 @@ _STATUS_CONHECIDOS = ["Pendente", "Enviado", "Aprovado", "Reprovado", "Concluido
 _RE_MOEDA = re.compile(r"^R\$\s*[\d.,]+$")
 
 
+def termo_de_uso_pendente(pagina: Page) -> bool:
+    """True se o portal esta mostrando o modal "Nosso Termo de uso mudou".
+
+    Apareceu em 2026-11-03 (~14h40) por cima do dashboard e travava o
+    clique em 'Medições'/'Ver OSPs'. Decisao do usuario: o RPA NAO aceita
+    o termo sozinho - alguem autorizado aceita no portal com a conta do
+    RPA; aqui so identificamos o bloqueio para a mensagem dizer o que fazer.
+    """
+    try:
+        return pagina.get_by_text("Nosso Termo de uso mudou").first.is_visible()
+    except Exception:
+        return False
+
+
+def motivo_falha_navegacao(pagina: Page, motivo: str) -> str:
+    """Troca o motivo generico de navegacao por `termo_de_uso_pendente`
+    quando o modal do termo de uso e o que esta bloqueando a tela."""
+    if termo_de_uso_pendente(pagina):
+        logger.error("Portal EACE pede o aceite do novo Termo de uso - aceitar manualmente no portal.")
+        return "termo_de_uso_pendente"
+    return motivo
+
+
 def abrir_medicoes(pagina: Page) -> bool:
     """Aguarda o dashboard carregar e clica no card 'Medições'.
 

@@ -151,7 +151,7 @@ def anexar_pdf_bdo(
         import pdfplumber  # noqa: F401  (so para falhar cedo se faltar)
         from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
-        from .dashboard import abrir_medicoes
+        from .dashboard import abrir_medicoes, motivo_falha_navegacao
         from .login import fazer_login, selecionar_perfil_fornecedor
     except ImportError as exc:
         raise RpaBdoIndisponivel(
@@ -222,7 +222,7 @@ def anexar_pdf_bdo(
                 avancar()  # "Selecionando o perfil Fornecedor"
 
                 if not abrir_medicoes(pagina):
-                    return falhar("abrir_medicoes")
+                    return falhar(motivo_falha_navegacao(pagina, "abrir_medicoes"))
                 avancar()  # "Abrindo Medições"
 
                 motivo = _navegar_caminho_bdo(atual, pedido, avancar, cfg.timeout_ms)

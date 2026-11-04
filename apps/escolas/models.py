@@ -601,8 +601,9 @@ class Lote(models.Model):
     )
     # Pedido do usuário (2026-10-13): rateio manual feito no modal "Revisar
     # INEPs do LOTE" — o valor total do INEP dividido em N partes (Cidade +
-    # valor), cada parte vira uma planilha de faturamento própria
-    # (`planilhas_faturamento_implantacao_lote`). Só para INEP sem rateio
+    # valor); as partes de mesma Cidade de todos os INEPs somam numa
+    # planilha de faturamento só (`planilhas_faturamento_implantacao_lote`,
+    # 2026-10-23). Só para INEP sem rateio
     # automático por Cidade. {INEP: [{"cidade": "...", "valor": "..."}]}.
     rateio_manual = models.JSONField("Rateio manual por INEP", default=dict, blank=True)
     motivo_reprovacao = models.TextField("Motivo da reprovação", blank=True)

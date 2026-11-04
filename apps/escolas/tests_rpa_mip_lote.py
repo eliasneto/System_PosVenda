@@ -453,8 +453,10 @@ class NfAnteriorAoLoteTests(BaseLoteComNf):
 
 
 class RateioManualTests(BaseLoteComNf):
-    """Decisão do usuário (2026-10-15): no rateio manual cada parte tem
-    a própria NF - 1 envio por NF, todas no mesmo clique."""
+    """Decisão do usuário (2026-10-15, ajustada em 2026-10-23): no rateio
+    manual vai 1 NF por Cidade - a parte na Cidade do LOTE ("Goiânia") vai
+    na NF comum dos INEPs sem rateio (377), "Goiânia 1" tem a sua (754).
+    1 envio por NF, todas no mesmo clique."""
 
     def setUp(self):
         super().setUp()
@@ -463,44 +465,68 @@ class RateioManualTests(BaseLoteComNf):
         }
         self.lote.save(update_fields=["rateio_manual"])
         self._nf(self.escola_b, "754_14-10-2026_NOME_MEGA INFRA.pdf")
-        self._nf(self.escola_b, "755_14-10-2026_NOME_MEGA INFRA.pdf")
 
-    def test_enfileira_a_nf_comum_e_1_por_parte_do_rateio(self):
+    def test_enfileira_1_nf_por_cidade_do_rateio(self):
         logs = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         self.assertEqual(
             [log.nome_nota_fiscal for log in logs],
-            ["377_22-09-2026_NOME_MEGA INFRA.pdf", "754_14-10-2026_NOME_MEGA INFRA.pdf",
-             "755_14-10-2026_NOME_MEGA INFRA.pdf"],
+            ["377_22-09-2026_NOME_MEGA INFRA.pdf", "754_14-10-2026_NOME_MEGA INFRA.pdf"],
         )
         self.assertEqual({log.municipio for log in logs}, {"Goiânia"})
         self.assertEqual(sorted(logs, key=lambda log: log.enfileirado_em), logs)
 
     def test_lote_so_com_inep_rateado(self):
-        NotaFiscalMip.objects.filter(nome_original__startswith="377").delete()
         self.lote.escolas.set([self.escola_b])
         logs = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
         self.assertEqual(len(logs), 2)
 
-    def test_nf_sobrando_no_inep_rateado_bloqueia(self):
-        self.lote.escolas.set([self.escola_b])
-        with self.assertRaisesMessage(EnvioRpaMipRecusado, "rateio em 2 partes, mas 3"):
+    def test_lote_0300_1_nf_por_parte_de_cada_inep_bloqueia(self):
+        """Caso real (LOTE-0300 Brasília): 2 INEPs rateados em 2 Cidades
+        com 4 NFs (1 por parte) - o portal tem 2 cards, então recusa."""
+        NotaFiscalMip.objects.all().delete()
+        self.lote.rateio_manual = {
+            escola.inep: [{"cidade": "Goiânia", "valor": "1.00"}, {"cidade": "Goiânia2", "valor": "1.00"}]
+            for escola in (self.escola_a, self.escola_b)
+        }
+        self.lote.save(update_fields=["rateio_manual"])
+        for numero, escola in enumerate((self.escola_a, self.escola_a, self.escola_b, self.escola_b)):
+            self._nf(escola, f"80{numero}_22-10-2026_NOME_MEGA INFRA.pdf")
+        with self.assertRaisesMessage(EnvioRpaMipRecusado, "rateio do LOTE é em 2 Cidade(s) (Goiânia, Goiânia2)"):
             enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
 
-    def test_falta_nf_de_uma_parte_bloqueia(self):
-        NotaFiscalMip.objects.filter(nome_original__startswith="755").delete()
-        with self.assertRaisesMessage(EnvioRpaMipRecusado, "rateio em 2 partes, mas 1"):
+    def test_lote_0300_com_1_nf_por_cidade_enfileira_2(self):
+        NotaFiscalMip.objects.all().delete()
+        self.lote.rateio_manual = {
+            escola.inep: [{"cidade": "Goiânia", "valor": "1.00"}, {"cidade": "Goiânia2", "valor": "1.00"}]
+            for escola in (self.escola_a, self.escola_b)
+        }
+        self.lote.save(update_fields=["rateio_manual"])
+        for escola in (self.escola_a, self.escola_b):  # a NF de 2 INEPs fica gravada em cada um
+            self._nf(escola, "900_22-10-2026_NOME_MEGA INFRA.pdf")
+            self._nf(escola, "901_22-10-2026_NOME_MEGA INFRA.pdf")
+        logs = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        self.assertEqual(len(logs), 2)
+
+    def test_nf_sobrando_no_inep_rateado_bloqueia(self):
+        self._nf(self.escola_b, "755_14-10-2026_NOME_MEGA INFRA.pdf")
+        with self.assertRaisesMessage(EnvioRpaMipRecusado, "1 Nota Fiscal por Cidade, mas há 3"):
+            enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+
+    def test_falta_nf_de_uma_cidade_bloqueia(self):
+        NotaFiscalMip.objects.filter(nome_original__startswith="754").delete()
+        with self.assertRaisesMessage(EnvioRpaMipRecusado, "1 Nota Fiscal por Cidade, mas há 1"):
             enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
 
     def test_so_fica_verde_com_todas_enviadas_e_reenvia_so_as_pendentes(self):
         logs = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
-        LogRpaEaceMip.objects.filter(pk__in=[logs[0].pk, logs[1].pk]).update(resultado=LogRpaEaceMip.SUCESSO)
-        LogRpaEaceMip.objects.filter(pk=logs[2].pk).update(resultado=LogRpaEaceMip.ERRO, motivo_erro="valor_divergente")
+        LogRpaEaceMip.objects.filter(pk=logs[0].pk).update(resultado=LogRpaEaceMip.SUCESSO)
+        LogRpaEaceMip.objects.filter(pk=logs[1].pk).update(resultado=LogRpaEaceMip.ERRO, motivo_erro="valor_divergente")
         estado = estados_rpa_mip_dos_lotes([self._lote_prefetch()])[self.lote.pk]
         self.assertFalse(estado.enviado)
         self.assertTrue(estado.pode_enviar)
         self.assertIn("valor", estado.motivo_erro_legivel.lower())
         [novo] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
-        self.assertEqual(novo.nome_nota_fiscal, "755_14-10-2026_NOME_MEGA INFRA.pdf")
+        self.assertEqual(novo.nome_nota_fiscal, "754_14-10-2026_NOME_MEGA INFRA.pdf")
         LogRpaEaceMip.objects.filter(pk=novo.pk).update(resultado=LogRpaEaceMip.SUCESSO)
         estado = estados_rpa_mip_dos_lotes([self._lote_prefetch()])[self.lote.pk]
         self.assertTrue(estado.enviado)
@@ -510,6 +536,6 @@ class RateioManualTests(BaseLoteComNf):
     def test_botao_mostra_as_nfs_do_rateio_na_confirmacao(self):
         self.client.force_login(self.usuario)
         resposta = self.client.get(reverse("rpa_mip_lote_status", kwargs={"pk": self.lote.pk}))
-        self.assertContains(resposta, "As 3 Notas Fiscais do rateio")
+        self.assertContains(resposta, "As 2 Notas Fiscais do rateio")
         self.client.post(reverse("rpa_mip_lote_enviar", kwargs={"pk": self.lote.pk}))
-        self.assertEqual(LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count(), 3)
+        self.assertEqual(LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count(), 2)

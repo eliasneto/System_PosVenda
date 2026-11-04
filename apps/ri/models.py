@@ -755,6 +755,68 @@ class LogRpaEace(models.Model):
     def __str__(self):
         return f"Log RPA EACE #{self.pk} - RI {self.ri_id} ({self.get_resultado_display()})"
 
+    # Pedido do usuário (2026-10-29, INEP 35496029/NF 2994): a tela mostrava
+    # só o código ("enviar_notas") ao lado dos valores lidos, e o usuário
+    # entendia que o valor não batia — mas era o portal EACE fora do ar.
+    # Motivos em `apps.integracoes.eace.rpa` (comentário no topo).
+    MENSAGENS_MOTIVO = {
+        "pdf_ilegivel": "Não foi possível ler o PDF da Nota Fiscal.",
+        "pdf_sem_inep": "O PDF da Nota Fiscal não traz o INEP.",
+        "pdf_sem_valor": "O PDF da Nota Fiscal não traz o \"Valor Total da Nota\".",
+        "inep_divergente_do_pdf": "O INEP do PDF é diferente do INEP deste RI.",
+        "pdf_sem_cnpj_eace": "O PDF da Nota Fiscal não traz o CNPJ da EACE.",
+        "xml_sem_cnpj_eace": "O XML não traz o CNPJ da EACE.",
+        "osp_nao_encontrada": "A OSP não foi encontrada no portal EACE.",
+        "inep_nao_encontrado": "O INEP não aparece no grid da OSP no portal (pode já ter sido enviado).",
+        "indice_invalido": "Linha da Nota Fiscal fora do grid do INEP no portal.",
+        "documento_ja_enviado": "A linha no portal não está mais \"Pendente\" (NF já enviada).",
+        "valor_divergente": "O valor da Nota Fiscal é diferente do valor da linha no portal.",
+        "valor_ambiguo": "Mais de uma linha pendente do INEP tem o mesmo valor da NF — resolver manualmente.",
+        "credenciais_ausentes": "Usuário/senha do portal EACE não configurados.",
+        "login": "O portal EACE não aceitou o login (portal instável ou fora do ar).",
+        "selecao_perfil": "O portal EACE não respondeu ao selecionar o perfil Fornecedor.",
+        "abrir_medicoes": "O portal EACE não carregou o card \"Medições\".",
+        "abrir_osps": "O portal EACE não carregou o botão \"Ver OSPs\".",
+        "termo_de_uso_pendente": "O portal EACE pede o aceite do novo Termo de uso. Alguém autorizado precisa entrar no portal com a conta da automação, marcar \"Li e concordo com o termo de uso\" e depois clicar em Tentar novamente.",
+        "expandir_resultado_osp": "O portal EACE não expandiu o resultado da OSP.",
+        "expandir_notas_fiscais": "O portal EACE não expandiu a seção \"Notas Fiscais\".",
+        "upload": "O portal EACE não aceitou o anexo do PDF/XML.",
+        "enviar_notas": "O portal EACE não respondeu ao clicar em \"Enviar notas\".",
+        "erro_playwright": "Erro do navegador da automação (rede ou portal EACE fora do ar).",
+        "ambiente_indisponivel": "Navegador da automação não instalado no servidor.",
+        "interrompido": "Execução interrompida (o worker parou no meio).",
+        "fila_sem_osp_ou_documento": "RI sem OSP ou sem o par PDF+XML escolhido.",
+        "erro_inesperado": "Erro inesperado na rotina.",
+    }
+
+    @property
+    def erro_do_portal(self):
+        """Falha técnica/do portal EACE (não é a NF que está errada) — o
+        mesmo critério da fila para reprocessar sozinha (RN-058)."""
+        from apps.integracoes.eace.rpa import MOTIVOS_REGRA_DE_NEGOCIO
+
+        return bool(self.motivo_erro) and self.motivo_erro not in MOTIVOS_REGRA_DE_NEGOCIO
+
+    @property
+    def dados_conferem_com_portal(self):
+        """INEP e valor lidos do PDF batem com o RI e com a linha do portal."""
+        from apps.integracoes.eace.extrair_dados_pdf import valores_iguais
+
+        return (
+            self.inep_pdf == self.ri.escola.inep
+            and bool(self.valor_pdf and self.valor_portal)
+            and valores_iguais(self.valor_pdf, self.valor_portal)
+        )
+
+    @property
+    def motivo_erro_legivel(self):
+        if not self.motivo_erro:
+            return ""
+        texto = self.MENSAGENS_MOTIVO.get(self.motivo_erro, self.motivo_erro)
+        if self.erro_do_portal and self.dados_conferem_com_portal and self.motivo_erro != "termo_de_uso_pendente":
+            texto += " Os dados da Nota Fiscal conferem com o portal — é instabilidade do portal EACE; tente novamente mais tarde."
+        return texto
+
 
 class RiHistorico(models.Model):
     """Linha do tempo de comunicação do RI (RN-008, FEAT-014) — mensagem
