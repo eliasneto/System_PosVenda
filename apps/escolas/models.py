@@ -587,6 +587,11 @@ class Lote(models.Model):
     notas_fiscais_zip_enviado_em = models.DateTimeField(
         "Notas Fiscais (.zip) enviado em", null=True, blank=True
     )
+    # Pedido do usuário (2026-11-07): o Módulo Financeiro envia a NFS-e de cada município assim que ela fica pronta
+    # (API `POST /api/financeiro/mip/lotes/<id>/notas-fiscais/`, botão "Enviar NFS-e ao pós-venda"), sem esperar o
+    # atendimento ser finalizado no IXC. Card "NF do financeiro" da tela "Projeto > MIP (LOTE)".
+    nf_financeiro_recebida_em = models.DateTimeField("NF do financeiro recebida em", null=True, blank=True)
+    nf_financeiro_numeros = models.CharField("NFS-e recebidas do financeiro", max_length=200, blank=True)
     # Pedido do usuário (2026-09-29): LOTE criado pelo comando
     # `importar_lotes_mip_em_massa` (planilha "BASE CONSOLIDADA MIP"), não
     # pelo botão "Criar LOTE" — sinalizado na tela "Projeto > MIP (LOTE)".

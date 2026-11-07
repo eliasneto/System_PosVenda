@@ -688,6 +688,9 @@ def mip_lote_inep_view(request):
     nf_filtro = (request.GET.get("nf") or "").strip()
     if nf_filtro not in ("com", "sem"):
         nf_filtro = ""
+    # Pedido do usuário (2026-11-07): card "NF do financeiro" - LOTEs que já receberam a NFS-e enviada pelo Módulo
+    # Financeiro (`Lote.nf_financeiro_recebida_em`, API `mip_lot_invoice_view`); clicar filtra (`?nf_financeiro=1`).
+    nf_financeiro_filtro = request.GET.get("nf_financeiro") == "1"
 
     estados_disponiveis = list(
         Lote.objects.exclude(estado="").order_by("estado").values_list("estado", flat=True).distinct()
@@ -711,7 +714,7 @@ def mip_lote_inep_view(request):
             par
             for par in (
                 ("estado", estado_filtro), ("municipio", municipio_filtro),
-                ("inep", inep_filtro), ("nf", nf_filtro),
+                ("inep", inep_filtro), ("nf", nf_filtro), ("nf_financeiro", "1" if nf_financeiro_filtro else ""),
             )
             if par[1]
         ]
@@ -835,6 +838,9 @@ def mip_lote_inep_view(request):
             }
         )
 
+    total_nf_financeiro = sum(1 for linha in linhas_lote_todos if linha["lote"].nf_financeiro_recebida_em)
+    if nf_financeiro_filtro:
+        linhas_lote_todos = [linha for linha in linhas_lote_todos if linha["lote"].nf_financeiro_recebida_em]
     linhas_lote_filtradas = (
         [linha for linha in linhas_lote_todos if linha["lote"].status == status_filtro]
         if status_filtro
@@ -875,6 +881,8 @@ def mip_lote_inep_view(request):
             "municipio_filtro": municipio_filtro,
             "inep_filtro": inep_filtro,
             "nf_filtro": nf_filtro,
+            "nf_financeiro_filtro": nf_financeiro_filtro,
+            "total_nf_financeiro": total_nf_financeiro,
             "estados_disponiveis": estados_disponiveis,
             "municipios_disponiveis": municipios_disponiveis,
             "querystring_extra": querystring_extra,

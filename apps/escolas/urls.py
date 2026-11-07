@@ -5,6 +5,8 @@ from . import api_financeiro, views, views_bdo, views_rpa_mip_lote, views_valida
 urlpatterns = [
     # API do Módulo Financeiro (Entrada > IXC): planilhas de faturamento de implantação dos LOTEs (token Bearer)
     path("api/financeiro/mip/lotes/", api_financeiro.mip_lots_view, name="api_financeiro_mip_lotes"),
+    path("api/financeiro/mip/lotes/<int:pk>/notas-fiscais/", api_financeiro.mip_lot_invoice_view,
+         name="api_financeiro_mip_lote_notas_fiscais"),
     path("api/financeiro/mip/lotes/<int:pk>/planilhas/", api_financeiro.mip_lot_spreadsheets_view,
          name="api_financeiro_mip_lote_planilhas"),
     path("mip/", views.mip_inep_view, name="mip_inep"),
