@@ -2810,6 +2810,50 @@ class RiEnvioFinanceiroTests(TestCase):
         aba = workbook[next(n for n in workbook.sheetnames if n.strip() == "NF KIT")]
         self.assertEqual(aba["E10"].value.date(), timezone.localdate() + timedelta(days=30))
 
+    def _cfops_do_anexo(self, conteudo):
+        workbook = openpyxl.load_workbook(BytesIO(conteudo))
+        return {(aba["C10"].value, aba["D16"].value) for aba in workbook.worksheets}
+
+    def test_enviar_email_sem_escolher_cfop_mantem_5117(self):
+        """Pedido do usuário (2026-11-09): a lista do CFOP abre no 5117 —
+        sem o campo no POST (tela antiga) também fica o 5117."""
+        self._enviar_email()
+        _, conteudo_anexo, _ = mail.outbox[0].attachments[0]
+        self.assertEqual(self._cfops_do_anexo(conteudo_anexo), {(5117, 5117)})
+        self.assertIn("(CFOP 5117)", RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.EMAIL).mensagem)
+
+    def test_enviar_email_com_cfop_novo_grava_5102_004_no_destinatario_e_no_local_de_entrega(self):
+        self._enviar_email(cfop="5102-004")
+        _, conteudo_anexo, _ = mail.outbox[0].attachments[0]
+        self.assertEqual(self._cfops_do_anexo(conteudo_anexo), {("5102-004", "5102-004")})
+        self.assertIn("(CFOP 5102-004)", RiHistorico.objects.get(ri=self.ri, tipo=RiHistorico.EMAIL).mensagem)
+
+    def test_enviar_email_bloqueado_com_cfop_fora_da_lista(self):
+        self._enviar_email(cfop="5102")  # so 5117 ou 5102-004
+        self.assertEqual(len(mail.outbox), 0)
+        self.ri.refresh_from_db()
+        self.assertEqual(self.ri.status, Ri.ENVIO_EMAIL_FATURAMENTO)
+
+    def test_baixar_planilha_usa_o_cfop_escolhido_na_janela(self):
+        self.client.force_login(self.user)
+        url = reverse("ri_baixar_planilha_financeiro", kwargs={"pk": self.ri.pk})
+        self.assertEqual(self._cfops_do_anexo(self.client.get(url).content), {(5117, 5117)})
+        self.assertEqual(self._cfops_do_anexo(self.client.get(url, {"cfop": "5102-004"}).content),
+                         {("5102-004", "5102-004")})
+
+    def test_janela_de_envio_tem_a_lista_do_cfop_com_5117_marcado(self):
+        from django.template.loader import render_to_string
+
+        from .services import CFOPS_PLANILHA_FATURAMENTO
+
+        html = render_to_string("ri/_modal_enviar_email.html", {
+            "ri": self.ri, "escola": self.escola, "next_url": "/", "assunto_sugerido": "",
+            "cfops_planilha_faturamento": CFOPS_PLANILHA_FATURAMENTO,
+        })
+        self.assertIn('name="cfop"', html)
+        self.assertIn('<option value="5117" selected>5117 – antigo (entrega futura)</option>', html)
+        self.assertIn('<option value="5102-004">5102-004 – novo (venda)</option>', html)
+
 
 class GerarPlanilhaFaturamentoTests(TestCase):
     """FEAT-017/RN-013/RN-088: geração da planilha de faturamento a partir

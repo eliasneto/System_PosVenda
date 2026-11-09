@@ -334,7 +334,20 @@ def _titulos_abas_por_osp(grupos):
     return titulos
 
 
-def gerar_planilha_faturamento(ri, data_vencimento):
+# CFOP escrito nas células C10 (dados do destinatário) e D16 (local de
+# entrega) de cada aba — escolhido na janela "Enviar e-mail" (pedido do
+# usuário, 2026-11-09): 5117 é o de sempre (o mesmo do modelo, entrega
+# futura); 5102-004 é o do faturamento novo (venda, processo especial do
+# Módulo Financeiro). Padrão 5117 — quem não mexe continua como antes.
+CFOP_ANTIGO = "5117"
+CFOP_NOVO = "5102-004"
+CFOPS_PLANILHA_FATURAMENTO = (
+    (CFOP_ANTIGO, "5117 – antigo (entrega futura)"),
+    (CFOP_NOVO, "5102-004 – novo (venda)"),
+)
+
+
+def gerar_planilha_faturamento(ri, data_vencimento, cfop=CFOP_ANTIGO):
     """RN-013: cópia preenchida da planilha-modelo do financeiro
     (`doc/FATURAMENTO MATERIAS EACE.xlsx`), uma aba por produto distinto
     lançado no Lado Relatório EACE daquele RI (KIT incluso, RN-011);
@@ -368,7 +381,15 @@ def gerar_planilha_faturamento(ri, data_vencimento):
     (select do Lado IXC, nasce no mês corrente — RiDataAtivacaoForm); sem
     valor salvo (RI antigo, nunca reaberto pelo Lado IXC), usa o mês
     corrente no momento de gerar. Ano NUNCA vem do RI — é sempre
-    `timezone.now().year`, para virar sozinho depois de 31/12."""
+    `timezone.now().year`, para virar sozinho depois de 31/12.
+
+    CFOP (pedido do usuário, 2026-11-09): `cfop` vai em C10 e D16 de todas
+    as abas (5117 antigo, padrão, ou 5102-004 novo — `CFOPS_PLANILHA_
+    FATURAMENTO`); outro valor levanta `PlanilhaFaturamentoError`."""
+    if cfop not in dict(CFOPS_PLANILHA_FATURAMENTO):
+        raise PlanilhaFaturamentoError(f"CFOP inválido: {cfop}. Escolha 5117 ou 5102-004.")
+    # 5117 continua número, como no modelo; "5102-004" vai como texto
+    valor_cfop = int(cfop) if cfop.isdigit() else cfop
     itens = list(ri.itens_ixc.all())
     faltando = itens_faltando_para_planilha_faturamento(ri, itens=itens)
     if faltando:
@@ -436,6 +457,8 @@ def gerar_planilha_faturamento(ri, data_vencimento):
             data_str=data_str,
         )
         aba["H10"] = float(dados["subtotal"])
+        aba["C10"] = valor_cfop
+        aba["D16"] = valor_cfop
         # RN-048: CNPJ/CNPJ Fictício do Lado IXC, digitados manualmente —
         # mesma linha 16 do Município/Estado/nome da escola abaixo.
         aba["A16"] = ri.cnpj

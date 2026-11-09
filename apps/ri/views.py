@@ -62,6 +62,8 @@ from .services import (
     cancelar_log_rpa_eace,
     criar_log_rpa_eace_manual,
     marcar_log_rpa_eace_concluido_manualmente,
+    CFOP_ANTIGO,
+    CFOPS_PLANILHA_FATURAMENTO,
     gerar_planilha_faturamento,
     # FEAT-037: relatório "Administrador > Relatório > Faturamento EACE
     # Materiais" — monta as linhas (RN-082/RN-083) e a versão .xlsx delas.
@@ -708,6 +710,7 @@ def grid_inep_view(request):
             # sempre o remetente do sistema (não editável), Para/Cc/Assunto
             # o usuário pode editar antes de enviar.
             "remetente_financeiro": settings.DEFAULT_FROM_EMAIL,
+            "cfops_planilha_faturamento": CFOPS_PLANILHA_FATURAMENTO,
             "para_financeiro_sugestao": ", ".join(DESTINATARIOS_FINANCEIRO),
             "cc_financeiro_sugestao": ", ".join(COPIA_FINANCEIRO),
         },
@@ -808,6 +811,7 @@ def _fragmento_status_detail_htmx(request, ri, next_url):
             "next_url": next_url,
             "assunto_sugerido": _assunto_sugerido_email(ri.escola, timezone.localdate()),
             "remetente_financeiro": settings.DEFAULT_FROM_EMAIL,
+            "cfops_planilha_faturamento": CFOPS_PLANILHA_FATURAMENTO,
             "para_financeiro_sugestao": ", ".join(DESTINATARIOS_FINANCEIRO),
             "cc_financeiro_sugestao": ", ".join(COPIA_FINANCEIRO),
         },
@@ -1577,11 +1581,13 @@ def ri_enviar_email_financeiro_view(request, pk):
         # RN-013: sem a planilha não há o que anexar/enviar — bloqueia
         # antes de mexer em qualquer outro dado do RI (mesma mensagem
         # objetiva do botão "Baixar planilha").
+        cfop = form.cleaned_data["cfop"]
         try:
             planilha_bytes = gerar_planilha_faturamento(
                 ri,
                 data_vencimento=timezone.localdate()
                 + timedelta(days=DIAS_VENCIMENTO_PLANILHA_FATURAMENTO),
+                cfop=cfop,
             )
         except PlanilhaFaturamentoError as erro:
             messages.error(request, str(erro))
@@ -1647,7 +1653,7 @@ def ri_enviar_email_financeiro_view(request, pk):
             ri=ri,
             tipo=RiHistorico.EMAIL,
             autor=request.user,
-            mensagem=f"E-mail enviado ao financeiro. Assunto: {assunto}",
+            mensagem=f"E-mail enviado ao financeiro (CFOP {cfop}). Assunto: {assunto}",
         )
         entrada_email.anexo.save(nome_planilha, ContentFile(planilha_bytes), save=False)
         entrada_email.save()
@@ -1674,6 +1680,8 @@ def ri_baixar_planilha_financeiro_view(request, pk):
             ri,
             data_vencimento=timezone.localdate()
             + timedelta(days=DIAS_VENCIMENTO_PLANILHA_FATURAMENTO),
+            # mesmo CFOP escolhido na janela (o link leva o valor da lista)
+            cfop=request.GET.get("cfop") or CFOP_ANTIGO,
         )
     except PlanilhaFaturamentoError as erro:
         messages.error(request, str(erro))
@@ -2238,6 +2246,7 @@ def ri_detail_view(request, inep):
             "usuario_administrador": request.user.is_administrador,
             "assunto_sugerido": _assunto_sugerido_email(escola, timezone.localdate()) if ri else "",
             "remetente_financeiro": settings.DEFAULT_FROM_EMAIL,
+            "cfops_planilha_faturamento": CFOPS_PLANILHA_FATURAMENTO,
             "para_financeiro_sugestao": ", ".join(DESTINATARIOS_FINANCEIRO),
             "cc_financeiro_sugestao": ", ".join(COPIA_FINANCEIRO),
             # FEAT-033 (Fase 2/3, RN-056/RN-057/RN-058): logs de anexo no

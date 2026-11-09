@@ -6,7 +6,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from .models import KitPadrao, PlanilhaEace, Ri, RiHistorico, RiItemIxc, RiItemRelatorioEace
-from .services import detectar_delimitador_planilha_eace
+from .services import CFOP_ANTIGO, CFOPS_PLANILHA_FATURAMENTO, detectar_delimitador_planilha_eace
 
 CAMPO_TEXTO = (
     "w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none "
@@ -446,6 +446,12 @@ class RiEmailFinanceiroForm(forms.Form):
     assunto = forms.CharField(label="Assunto", max_length=255)
     mensagem = forms.CharField(label="Mensagem", required=False, widget=forms.Textarea)
     anexo_extra = forms.FileField(label="Anexo", required=False)
+    # Pedido do usuário (2026-11-09): CFOP da planilha (C10 e D16 de todas
+    # as abas). Sem o campo no POST (tela antiga aberta) fica o 5117.
+    cfop = forms.ChoiceField(label="CFOP", choices=CFOPS_PLANILHA_FATURAMENTO, required=False)
+
+    def clean_cfop(self):
+        return self.cleaned_data.get("cfop") or CFOP_ANTIGO
 
     def clean_para(self):
         return _limpar_lista_emails(self.cleaned_data.get("para"), obrigatorio=True)

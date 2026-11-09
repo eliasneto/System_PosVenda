@@ -52,6 +52,15 @@ efetivamente envia o form.
                         <input type="text" name="assunto" value="{{ assunto_sugerido }}" required
                                class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
                     </div>
+                    {# Pedido do usuário (2026-11-09): CFOP da planilha (C10 e D16 de todas as abas); abre no 5117 (o de sempre). #}
+                    <div>
+                        <label for="cfop-{{ ri.pk }}" class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">CFOP da planilha</label>
+                        <select id="cfop-{{ ri.pk }}" name="cfop" data-cfop-planilha
+                                class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                            {% for valor, rotulo in cfops_planilha_faturamento %}<option value="{{ valor }}"{% if forloop.first %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+                        </select>
+                        <p class="text-[10px] text-gray-400 dark:text-gray-500 mt-1">Vai no CFOP do destinatário e do local de entrega de todas as abas da planilha.</p>
+                    </div>
                     <div>
                         <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Anexo</label>
                         <p class="text-[10px] text-gray-400 dark:text-gray-500 mb-1">A planilha de faturamento com os itens do lado IXC é gerada e anexada automaticamente (use "Baixar planilha" para conferir antes). Este campo é opcional, para anexar mais um arquivo.</p>
@@ -69,6 +78,7 @@ efetivamente envia o form.
                     </button>
                     {# FEAT-017/RN-013: baixa a mesma planilha que seria anexada, sem enviar nada — para validar antes de confirmar o envio. #}
                     <a href="{% url 'ri_baixar_planilha_financeiro' pk=ri.pk %}?next={{ next_url|urlencode }}"
+                       onclick="this.href = this.href.replace(/&cfop=[^&]*/, '') + '&cfop=' + encodeURIComponent(document.getElementById('cfop-{{ ri.pk }}').value)"
                        target="_blank"
                        class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition inline-flex items-center gap-1.5">
                         <i data-lucide="download" class="w-3.5 h-3.5"></i>
