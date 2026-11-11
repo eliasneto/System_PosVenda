@@ -27,7 +27,7 @@ import logging
 import re
 from datetime import datetime
 
-from .config import SCREENSHOTS_DIR, ConfigEace
+from .config import SCREENSHOTS_DIR, ConfigEace, args_chromium
 from .rpa_mip import (
     CapturasRpaMip,
     ResultadoRpaMip,
@@ -185,7 +185,7 @@ def anexar_pdf_bdo(
             navegador = p.chromium.launch(
                 headless=headless,
                 slow_mo=lento_ms,
-                args=[] if headless else ["--start-maximized"],
+                args=args_chromium(headless),
             )
             viewport_fixo = headless or gravar_video
             opcoes_contexto = {

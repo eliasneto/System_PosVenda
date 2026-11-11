@@ -115,9 +115,15 @@ def processar_proxima_leitura_eace_bdo() -> LeituraEaceBdo | None:
         )
         if leitura is None:
             return None
+        # ADR-009 (robôs em paralelo): troca condicional - se outro robô já
+        # pegou esta leitura, nenhuma linha muda e este não executa.
+        agora = timezone.now()
+        if not LeituraEaceBdo.objects.filter(pk=leitura.pk, status=LeituraEaceBdo.NA_FILA).update(
+            status=LeituraEaceBdo.PROCESSANDO, iniciado_em=agora,
+        ):
+            return None
         leitura.status = LeituraEaceBdo.PROCESSANDO
-        leitura.iniciado_em = timezone.now()
-        leitura.save(update_fields=["status", "iniciado_em"])
+        leitura.iniciado_em = agora
 
     def reportar_progresso(etapa, percentual):
         with _orm_liberado_dentro_do_playwright():

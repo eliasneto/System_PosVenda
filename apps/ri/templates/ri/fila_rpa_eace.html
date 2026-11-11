@@ -26,7 +26,7 @@ lista inteira de logs.
         <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
             Fila
         </h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal no portal EACE, RN-058) — RI e MIP (LOTE), 1 por vez</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal no portal EACE, RN-058) — RI e MIP (LOTE), 1 robô por INEP</p>
     </div>
 
     <div class="flex gap-4">
@@ -126,6 +126,7 @@ lista inteira de logs.
                                 <div class="h-full bg-purple-600 dark:bg-purple-500" style="width: {{ log.progresso_pct }}%"></div>
                             </div>
                             <span>{{ log.progresso_pct }}%{% if log.etapa_atual %} — {{ log.etapa_atual }}{% endif %}</span>
+                            {% if log.robo %}<span class="text-gray-400 dark:text-gray-500">{{ log.robo.nome }}</span>{% endif %}
                         </div>
                         {% elif log.resultado == 'na_fila' %}
                         {% if log.posicao_na_fila == 1 %}Próxima a ser processada{% elif log.posicao_na_fila %}Posição {{ log.posicao_na_fila }} na fila{% else %}Aguardando a vez{% endif %}
@@ -238,6 +239,7 @@ lista inteira de logs.
                                 <div class="h-full bg-purple-600 dark:bg-purple-500" style="width: {{ log.progresso_pct }}%"></div>
                             </div>
                             <span>{{ log.progresso_pct }}%{% if log.etapa_atual %} — {{ log.etapa_atual }}{% endif %}</span>
+                            {% if log.robo %}<span class="text-gray-400 dark:text-gray-500">{{ log.robo.nome }}</span>{% endif %}
                         </div>
                         {% elif log.resultado == 'na_fila' %}
                         Aguardando a vez{% if log.motivo_erro %} (reprocessando: {{ log.motivo_erro_legivel }}){% endif %}

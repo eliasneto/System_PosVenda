@@ -282,18 +282,23 @@ def _registrar_execucao(log: LogRpaEaceMip) -> None:
     )
 
 
-def recuperar_envios_mip_interrompidos() -> list[int]:
+def recuperar_envios_mip_interrompidos(filtro=None) -> list[int]:
     """Mesmo critério de `apps.ri.services._recuperar_logs_processando_
     orfaos` (RN-058): um envio ainda "Processando" no começo de uma passada
     só pode ser de uma passada anterior que morreu no meio - volta para a
     fila 1 vez, ou vira Erro ("interrompido") na 2ª."""
     with transaction.atomic():
-        orfaos = list(LogRpaEaceMip.objects.select_for_update().filter(resultado=LogRpaEaceMip.PROCESSANDO))
+        # ADR-009: `filtro` restringe aos envios de robôs que não estão
+        # rodando (`apps.ri.fila_rpa_eace`).
+        orfaos_qs = LogRpaEaceMip.objects.select_for_update().filter(resultado=LogRpaEaceMip.PROCESSANDO)
+        if filtro is not None:
+            orfaos_qs = orfaos_qs.filter(filtro)
+        orfaos = list(orfaos_qs)
         for log in orfaos:
             log.tentativas += 1
             if log.tentativas < 2:
+                # Emenda RN-058 (2026-11-11): mantém o lugar na fila.
                 log.resultado = LogRpaEaceMip.NA_FILA
-                log.enfileirado_em = timezone.now()
             else:
                 log.resultado = LogRpaEaceMip.ERRO
             log.motivo_erro = "interrompido"
@@ -329,6 +334,13 @@ def processar_proximo_rpa_mip() -> dict | None:
         log.etapa_atual = ""
         log.progresso_pct = 0
         log.save(update_fields=["resultado", "etapa_atual", "progresso_pct"])
+    return executar_envio_mip(log)
+
+
+def executar_envio_mip(log: LogRpaEaceMip) -> dict:
+    """Executa o envio de um `LogRpaEaceMip` já reservado ("Processando")
+    - separado da reserva para os robôs paralelos (ADR-009)."""
+    from apps.integracoes.eace.rpa_mip import MOTIVOS_REGRA_DE_NEGOCIO_MIP, RpaMipIndisponivel, anexar_pdf_mip
 
     def reportar_progresso(etapa, percentual):
         with _orm_liberado_dentro_do_playwright():
@@ -373,9 +385,9 @@ def processar_proximo_rpa_mip() -> dict | None:
         log.resultado = LogRpaEaceMip.ERRO
         log.motivo_erro = motivo or "erro_inesperado"
     else:
+        # Emenda RN-058 (2026-11-11): nova tentativa mantém o lugar na fila.
         log.resultado = LogRpaEaceMip.NA_FILA
         log.motivo_erro = motivo or "erro_inesperado"
-        log.enfileirado_em = timezone.now()
 
     log.save()
     _registrar_execucao(log)
@@ -391,7 +403,7 @@ def logs_mip_para_fila(status_filtro: str, inep_filtro: str = "", data_processam
     from django.db.models import Case, IntegerField, Value, When
     from django.db.models.functions import Coalesce
 
-    qs = LogRpaEaceMip.objects.select_related("lote", "solicitado_por")
+    qs = LogRpaEaceMip.objects.select_related("lote", "solicitado_por", "robo")
     if status_filtro == "todos":
         pass
     elif status_filtro == "andamento":

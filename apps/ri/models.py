@@ -745,6 +745,15 @@ class LogRpaEace(models.Model):
         related_name="+", verbose_name="Cancelado por",
     )
     cancelado_em = models.DateTimeField("Cancelado em", null=True, blank=True)
+    # ADR-009 (pedido do usuário, 2026-11-10): robô que pegou o log da fila
+    # - vazio = robô padrão do `.env`. Também decide quem recupera o log se
+    # ele ficar preso em "Processando" (cada robô só recupera os seus).
+    robo = models.ForeignKey(
+        # PROTECT: robô que já trabalhou é desativado, não excluído - um log
+        # "Processando" sem robô seria tomado como órfão por engano.
+        "core.RoboRpaEace", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="+", verbose_name="Robô",
+    )
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:

@@ -1424,7 +1424,7 @@ def fila_rpa_eace_view(request):
         status_filtro = STATUS_FILTRO_FILA_RPA_EACE_ANDAMENTO
     data_processamento_filtro = _parse_data_processamento_filtro(request.GET.get("data_processamento"))
 
-    qs = LogRpaEace.objects.select_related("ri", "ri__escola", "documento_pdf")
+    qs = LogRpaEace.objects.select_related("ri", "ri__escola", "documento_pdf", "robo")
 
     if status_filtro == STATUS_FILTRO_FILA_RPA_EACE_TODOS:
         qs = qs.filter(resultado__in=(LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO, LogRpaEace.SUCESSO, LogRpaEace.ERRO))

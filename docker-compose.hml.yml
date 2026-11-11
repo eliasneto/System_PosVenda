@@ -111,10 +111,13 @@ services:
              done"
 
   rpa_eace_worker:
-    # FEAT-033 (Fase 3, RN-058/ADR-005): mesmo papel do container local -
-    # processo consumidor unico da fila do RPA EACE. RN-058 exige no
-    # maximo 1 execucao por vez em todo o sistema - manter só 1 réplica
-    # deste serviço, aqui e no ambiente local.
+    # FEAT-033 (RN-058) + ADR-009 (2026-11-10): mesmo papel do container
+    # local - o supervisor (`supervisionar_robos_rpa_eace`) sobe 1 processo
+    # por robô ativo do admin ("Robôs do RPA EACE"), cada um com navegador
+    # e login próprios, em paralelo; sem robô ativo, 1 robô com o login do
+    # .env. O paralelismo é configurado no admin - manter só 1 réplica
+    # deste serviço (2 supervisores tomariam os envios um do outro como
+    # órfãos).
     build: .
     restart: unless-stopped
     env_file:
@@ -130,11 +133,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # `exec`: o supervisor vira o processo principal e recebe o SIGTERM do
+    # `docker compose stop`, encerrando os robôs antes de sair.
     command: >
-      sh -c "sleep 15 && while true; do
-               python manage.py processar_fila_rpa_eace || true;
-               sleep ${RPA_EACE_POLL_INTERVAL_SECONDS:-5};
-             done"
+      sh -c "sleep 15 && exec python manage.py supervisionar_robos_rpa_eace
+               --intervalo ${RPA_EACE_POLL_INTERVAL_SECONDS:-5}
+               --max-robos ${RPA_EACE_MAX_ROBOS:-3}"
 
   ixc_worker:
     # FEAT-053 (ADR-007, emenda 2026-09-23): processo consumidor unico das

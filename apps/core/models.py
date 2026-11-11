@@ -74,3 +74,49 @@ class User(AbstractUser):
         """RN-093/FEAT-040: superuser/Administrador nunca cai aqui, mesmo
         que o campo `perfil` esteja (por engano) como Visualizador."""
         return not self.is_administrador and self.perfil == self.PERFIL_VISUALIZADOR
+
+
+class RoboRpaEace(models.Model):
+    """Robôs do RPA EACE (pedido do usuário, 2026-11-10; emenda a RN-058/
+    ADR-008 - ver ADR-009): cada robô ativo cadastrado aqui vira 1 processo
+    próprio no container `rpa_eace_worker` (supervisor
+    `supervisionar_robos_rpa_eace`), com o próprio navegador Chromium e o
+    próprio login no portal EACE - todos consomem a mesma fila (RI e MIP,
+    ordem de chegada), em paralelo.
+
+    Dois robôs nunca trabalham no mesmo INEP ao mesmo tempo
+    (`apps.ri.fila_rpa_eace.reservar_proximo_envio`).
+
+    Sem nenhum robô ativo, o supervisor roda 1 robô só com o login do
+    `.env` (`EACE_USUARIO`/`EACE_SENHA`) - mesmo comportamento de antes."""
+
+    nome = models.CharField("Nome", max_length=60, unique=True)
+    usuario = models.CharField("Usuário (e-mail) no portal EACE", max_length=150)
+    senha = models.CharField("Senha no portal EACE", max_length=150)
+    ativo = models.BooleanField(
+        "Ativo",
+        default=True,
+        help_text="Desmarcado, o robô termina o item em andamento e não pega mais nenhum.",
+    )
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "Robô do RPA EACE"
+        verbose_name_plural = "Robôs do RPA EACE"
+        ordering = ["nome"]
+
+    def __str__(self):
+        return self.nome
+
+
+class TravaFilaRpaEace(models.Model):
+    """Linha única (pk=1) travada com `select_for_update` só durante a
+    reserva do próximo item da fila do RPA EACE - garante que 2 robôs não
+    escolham ao mesmo tempo o mesmo item nem 2 itens do mesmo INEP. A trava
+    é liberada antes de abrir o navegador (a execução em si roda em
+    paralelo)."""
+
+    class Meta:
+        verbose_name = "Trava da fila do RPA EACE"
+        verbose_name_plural = "Trava da fila do RPA EACE"

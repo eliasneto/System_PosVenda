@@ -869,6 +869,13 @@ class LogRpaEaceMip(models.Model):
         related_name="+",
         verbose_name="Solicitado por",
     )
+    # ADR-009: robô que pegou o envio da fila (vazio = robô padrão do .env).
+    robo = models.ForeignKey(
+        # PROTECT: robô que já trabalhou é desativado, não excluído - um log
+        # "Processando" sem robô seria tomado como órfão por engano.
+        "core.RoboRpaEace", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="+", verbose_name="Robô",
+    )
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:

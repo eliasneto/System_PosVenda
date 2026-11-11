@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from .config import SCREENSHOTS_DIR, ConfigEace
+from .config import SCREENSHOTS_DIR, ConfigEace, args_chromium
 from .extrair_dados_pdf import extrair_dados_nota_fiscal, valores_iguais, xml_contem_cnpj_eace
 
 logger = logging.getLogger(__name__)
@@ -257,7 +257,7 @@ def anexar_nota_fiscal(
         with sync_playwright() as p:
             navegador = p.chromium.launch(
                 headless=cfg.headless,
-                args=[] if cfg.headless else ["--start-maximized"],
+                args=args_chromium(cfg.headless),
             )
             # Em headless nao ha janela fisica - viewport explicito garante que
             # o portal renderize as colunas no tamanho esperado (getBoundingClientRect).
@@ -488,7 +488,7 @@ def consultar_pendencias_eace(
         with sync_playwright() as p:
             navegador = p.chromium.launch(
                 headless=cfg.headless,
-                args=[] if cfg.headless else ["--start-maximized"],
+                args=args_chromium(cfg.headless),
             )
             contexto = navegador.new_context(
                 no_viewport=not cfg.headless,

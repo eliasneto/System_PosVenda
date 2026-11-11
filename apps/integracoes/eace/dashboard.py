@@ -16,7 +16,6 @@ from pathlib import Path
 
 from playwright.sync_api import Page, TimeoutError as PWTimeout
 
-from .config import SCREENSHOTS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -298,12 +297,10 @@ def _confirmar_modal_pos_upload(pagina: Page, continuar_aviso_cnpj: bool = False
     if continuar_aviso_cnpj:
         _continuar_aviso_cnpj(pagina)
 
-    SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-    pagina.screenshot(
-        path=str(SCREENSHOTS_DIR / "debug_modal_pre_confirmacao.png"),
-        full_page=True,
-    )
-    logger.info("  [Modal] Screenshot salvo em debug_modal_pre_confirmacao.png")
+    # Correção (2026-11-11): sem o print de página inteira que era tirado
+    # em TODA execução - na página grande do portal ele pesava na memória
+    # do servidor (ver `config.ARGS_CHROMIUM_HEADLESS`). Erro continua com
+    # print (`rpa._falhar`).
 
     try:
         # O texto do portal tem acento ("Confirmar informações"); uniao de
@@ -315,7 +312,7 @@ def _confirmar_modal_pos_upload(pagina: Page, continuar_aviso_cnpj: bool = False
             "button:has-text('Salvar'), "
             "button:has-text('OK')"
         ).filter(visible=True).first
-        btn.wait_for(state="visible", timeout=10_000)
+        btn.wait_for(state="visible", timeout=20_000)
         btn.click()
         logger.info("  [Modal] Botao de confirmacao clicado.")
         pagina.wait_for_timeout(2_000)
@@ -423,17 +420,16 @@ def clicar_enviar_notas(pagina: Page) -> bool:
         # So pelo texto: a classe `baaNgaC3` e o estilo de botao verde do
         # Bubble, compartilhado com outros botoes da tela.
         btn = pagina.locator("button:has-text('Enviar notas')").filter(visible=True).first
-        btn.wait_for(state="visible", timeout=15_000)
+        # Correção (2026-11-11): 15 s -> 45 s. Com o servidor sem memória o
+        # botão aparecia na tela, mas depois do tempo de espera (print do
+        # erro mostrava o botão); falhar aqui deixa PDF+XML anexados e a
+        # linha "Pendente" no portal até a nova tentativa.
+        btn.wait_for(state="visible", timeout=45_000)
         btn.scroll_into_view_if_needed()
         btn.click()
         logger.info("'Enviar notas' clicado.")
         pagina.wait_for_timeout(2_000)
         _continuar_aviso_cnpj(pagina, timeout_ms=2_000)
-        try:
-            SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-            pagina.screenshot(path=str(SCREENSHOTS_DIR / "debug_pos_enviar_notas.png"), full_page=True)
-        except Exception:
-            pass
         return True
     except PWTimeout:
         logger.error("Timeout ao localizar botao 'Enviar notas'.")

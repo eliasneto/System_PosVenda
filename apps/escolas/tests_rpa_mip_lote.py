@@ -269,31 +269,31 @@ class ProcessarRpaMipTests(BaseLoteComNf):
 
 
 class WorkerFilaUnicaTests(BaseLoteComNf):
-    """`processar_fila_rpa_eace` (worker do RI) leva também o MIP - 1 item
-    por passada, o mais antigo entre os 2."""
+    """`processar_fila_rpa_eace` leva RI e MIP na mesma fila - 1 item por
+    passada, o mais antigo entre os 2 (ADR-008/ADR-009)."""
 
     CMD = "apps.ri.management.commands.processar_fila_rpa_eace"
 
-    def _rodar(self, ri_mais_antigo_em=None, validacao=None):
-        ri_qs = MagicMock()
-        ri_qs.filter.return_value.order_by.return_value.first.return_value = (
-            MagicMock(enfileirado_em=ri_mais_antigo_em) if ri_mais_antigo_em else None
-        )
+    def _rodar(self, validacao=None):
         saida = StringIO()
-        with patch(f"{self.CMD}.LogRpaEace.objects", ri_qs), \
-                patch(f"{self.CMD}.processar_proxima_validacao_nf_mip", return_value=validacao) as val, \
-                patch(f"{self.CMD}.processar_proximo_rpa_mip", return_value={"log_id": 1, "resultado": "sucesso", "motivo": ""}) as mip, \
-                patch(f"{self.CMD}.processar_proximo_da_fila_rpa_eace", return_value=None) as ri:
+        with patch(f"{self.CMD}.processar_proxima_validacao_nf_mip", return_value=validacao) as val,                 patch(f"{self.CMD}.executar_envio_reservado",
+                      side_effect=lambda tipo, pk: {"log_id": pk, "resultado": "sucesso", "motivo": ""}) as executar:
             call_command("processar_fila_rpa_eace", stdout=saida)
         self.validacao_mock = val
-        return mip, ri, saida.getvalue()
+        return executar, saida.getvalue()
+
+    def _log_ri(self, enfileirado_em):
+        from apps.ri.models import LogRpaEace, Ri
+
+        ri = Ri.objects.create(escola=Escola.objects.create(inep="52000099", nome="ESCOLA RI"))
+        return LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.NA_FILA, enfileirado_em=enfileirado_em)
 
     def test_com_os_envios_vazios_processa_a_validacao_mip(self):
         from apps.escolas.models import ValidacaoNfMip
 
         validacao = ValidacaoNfMip.objects.create(origem=ValidacaoNfMip.MANUAL, status=ValidacaoNfMip.SUCESSO)
-        _, ri, saida = self._rodar(validacao=validacao)
-        ri.assert_called_once()
+        executar, saida = self._rodar(validacao=validacao)
+        executar.assert_not_called()
         self.validacao_mock.assert_called_once()
         self.assertIn(f"Validação MIP (NF) #{validacao.pk}: Sucesso", saida)
 
@@ -310,37 +310,28 @@ class WorkerFilaUnicaTests(BaseLoteComNf):
 
         validacao, _ = enfileirar_validacao_nf_mip(ValidacaoNfMip.MANUAL, self.usuario, "506")
         resultado = ResultadoRpaMip(sucesso=True, pedido="506", simulado=True, dados_pdf={}, cards_encontrados=[])
-        with patch(RPA, return_value=resultado), \
-                patch(f"{self.CMD}.processar_proximo_da_fila_rpa_eace", return_value=None):
+        with patch(RPA, return_value=resultado):
             call_command("processar_fila_rpa_eace", stdout=StringIO())
         validacao.refresh_from_db()
         self.assertEqual(validacao.status, ValidacaoNfMip.SUCESSO)
 
     def test_so_mip_na_fila(self):
-        enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
-        mip, ri, saida = self._rodar()
-        mip.assert_called_once()
-        ri.assert_not_called()
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        executar, saida = self._rodar()
+        executar.assert_called_once_with("MIP", log.pk)
         self.assertIn("MIP", saida)
 
     def test_ri_mais_antigo_vai_primeiro(self):
         enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
-        mip, ri, _ = self._rodar(ri_mais_antigo_em=timezone.now() - timedelta(minutes=10))
-        ri.assert_called_once()
-        mip.assert_not_called()
+        log_ri = self._log_ri(timezone.now() - timedelta(minutes=10))
+        executar, _ = self._rodar()
+        executar.assert_called_once_with("RI", log_ri.pk)
 
     def test_mip_mais_antigo_vai_primeiro(self):
-        enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
-        mip, ri, _ = self._rodar(ri_mais_antigo_em=timezone.now() + timedelta(minutes=10))
-        mip.assert_called_once()
-        ri.assert_not_called()
-
-    def test_sem_mip_segue_so_o_ri(self):
-        mip, ri, saida = self._rodar()
-        ri.assert_called_once()
-        mip.assert_not_called()
-        self.assertIn("vazia", saida)
-
+        self._log_ri(timezone.now() + timedelta(minutes=10))
+        [log] = enfileirar_rpa_mip_lote(self._lote_prefetch(), self.usuario)
+        executar, _ = self._rodar()
+        executar.assert_called_once_with("MIP", log.pk)
 
 class EstadosDoBotaoTests(BaseLoteComNf):
 

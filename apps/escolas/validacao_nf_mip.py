@@ -171,9 +171,15 @@ def processar_proxima_validacao_nf_mip() -> ValidacaoNfMip | None:
         )
         if validacao is None:
             return None
+        # ADR-009 (robôs em paralelo): troca condicional - se outro robô já
+        # pegou esta validação, nenhuma linha muda e este não executa.
+        agora = timezone.now()
+        if not ValidacaoNfMip.objects.filter(pk=validacao.pk, status=ValidacaoNfMip.NA_FILA).update(
+            status=ValidacaoNfMip.PROCESSANDO, iniciado_em=agora,
+        ):
+            return None
         validacao.status = ValidacaoNfMip.PROCESSANDO
-        validacao.iniciado_em = timezone.now()
-        validacao.save(update_fields=["status", "iniciado_em"])
+        validacao.iniciado_em = agora
 
     def reportar_progresso(etapa, percentual):
         with _orm_liberado_dentro_do_playwright():

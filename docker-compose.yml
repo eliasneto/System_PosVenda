@@ -108,14 +108,15 @@ services:
       - db
 
   rpa_eace_worker:
-    # FEAT-033 (Fase 3, RN-058/ADR-005): processo consumidor unico da fila
-    # do RPA EACE - `processar_fila_rpa_eace` so faz 1 passada por chamada
-    # (apps/ri/services.py), entao quem repete no tempo e este container
-    # (mesma imagem do "web", sem dependencia nova como Celery/Redis).
-    # RN-058 exige no maximo 1 execucao do RPA por vez em todo o sistema -
-    # nao suba uma 2a instancia deste servico nem use "docker compose up
-    # --scale rpa_eace_worker=2" (o codigo tem select_for_update como
-    # segunda trava, mas o design pressupoe 1 processo so).
+    # FEAT-033 (RN-058) + ADR-009 (2026-11-10): supervisor dos robôs do RPA
+    # EACE - `supervisionar_robos_rpa_eace` sobe 1 processo por robô ativo
+    # do admin ("Robôs do RPA EACE"), cada um rodando
+    # `processar_fila_rpa_eace --robo <id>` em loop, com navegador e login
+    # próprios, em paralelo na mesma fila (nunca 2 robôs no mesmo INEP).
+    # Sem robô ativo, 1 robô com o login do .env (EACE_USUARIO/EACE_SENHA).
+    # O paralelismo é configurado no admin - não use "--scale
+    # rpa_eace_worker=2" (2 supervisores tomariam os envios um do outro
+    # como órfãos).
     build: .
     restart: unless-stopped
     environment:
@@ -143,10 +144,9 @@ services:
       # Documento (media/) que o "web" grava.
       - .:/app
     command: >
-      sh -c "sleep 15 && while true; do
-               python manage.py processar_fila_rpa_eace || true;
-               sleep ${RPA_EACE_POLL_INTERVAL_SECONDS:-5};
-             done"
+      sh -c "sleep 15 && exec python manage.py supervisionar_robos_rpa_eace
+               --intervalo ${RPA_EACE_POLL_INTERVAL_SECONDS:-5}
+               --max-robos ${RPA_EACE_MAX_ROBOS:-3}"
     depends_on:
       - db
 

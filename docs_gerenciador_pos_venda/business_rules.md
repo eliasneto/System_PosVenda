@@ -1097,6 +1097,20 @@ ilegível, lib ausente) só omite o complemento, nunca quebra a tela.
 
 ### RN-058 — Fila de execução do RPA EACE, com reprocessamento automático de erro não mapeado
 
+> **Emenda (2026-11-10, `ADR-009`):** "no máximo 1 execução por vez"
+> passa a ser "no máximo 1 execução por robô ativo" - os robôs são
+> cadastrados no admin ("Robôs do RPA EACE", cada um com login próprio no
+> portal) e consomem a mesma fila em paralelo, na ordem de chegada, nunca
+> 2 robôs no mesmo INEP (ou LOTE do MIP) ao mesmo tempo. Sem robô ativo,
+> roda 1 robô com o login do `.env`. FIFO e regras de reprocessamento
+> abaixo não mudam.
+>
+> **Emenda (2026-11-11):** a nova tentativa automática de erro não
+> mapeado **mantém o lugar original na fila** (não vai mais para o final)
+> - pedido do usuário com 385 itens na fila: a 1ª tentativa costuma falhar
+> depois de anexar PDF+XML no portal, e a linha ficava "Pendente" lá por
+> ~20 h até a nova tentativa.
+
 **Descrição:** A execução do RPA de anexo no portal EACE (RN-056) é
 serializada por uma fila — no máximo 1 execução por vez em todo o
 sistema, mesmo com várias pessoas disparando "Disparar RPA" ao mesmo
@@ -3978,6 +3992,8 @@ Validação no mesmo worker em vez de um container próprio.
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-11-11 | RN-058 emendada: nova tentativa automática mantém o lugar na fila | Fila de 385 itens no servidor; tentativas com "Enviar notas" falhando deixavam a nota anexada e "Pendente" no portal até voltar a vez |
+| 2026-11-10 | RN-058 emendada (`ADR-009`): robôs do RPA EACE em paralelo, cadastrados no admin com login próprio, 1 robô por INEP | Usuário pediu N robôs rodando juntos na mesma fila, cada um com usuário/senha próprios e navegador próprio, sem separar RI e MIP |
 | 2026-09-29 | RN-108 a RN-112 criadas (RPA EACE do MIP: anexo da NF do município com ciclo Pendente → Aguardando Aprovação → Aprovado; Validação MIP (NF) só leitura com execução automática desligada; NF comum a todos os INEPs do LOTE; ícone de envio por LOTE; fila única RI + MIP + Validação); RN-058 ganha referência cruzada (mesma fila e mesmas regras de reprocessamento para o MIP) | Usuário pediu o RPA do MIP, a tela de validação e o envio pelo LOTE nesta sessão, decidindo log próprio do MIP, NF comum a todos os INEPs, "documento já enviado" desabilitando o ícone e a Validação no worker da fila EACE; Orquestrador formaliza trabalho já entregue e testado pelo Dev |
 | 2026-09-23 | RN-105 criada (regra "tudo ou nada" da automação Atendimentos IXC); RN-106 criada (usuário responsável fixo `"76"` no IXC para Atendimentos abertos pela automação); RN-107 criada (2 execuções independentes por tela — Processamento 1/2); RN-004 ganha ampliação (Automações IXC também restritas a Administrador) | Dev implementou e testou `FEAT-053` (Automações IXC: Login/Endereços e Atendimentos) nesta mesma sessão, a partir de material trazido do projeto sgpspeed (pasta `IXC/`, removida do repositório depois de migrada) — Orquestrador formaliza as regras; usuário confirmou manter `USUARIO_IXC_PADRAO="76"` e escolheu processamento em chunks sem fila dedicada (ver `ADR-007`) quando perguntado |
 | 2026-09-16 | RN-103 criada (Grid de Equipamentos deixa de excluir INEP pelo `status_mip`; grid do MIP passa a mostrar toda Escola cadastrada, não só quem já passou pelo handoff; coluna/filtro "Status (MIP)" passa a mostrar o Status do RI real enquanto não há handoff; RN-092 ganha emenda registrando a revisão parcial) | Usuário pediu para o INEP deixar de "sumir" do Grid de Equipamentos ao entrar em "Aguardando Validação EACE" — quer o MIP como imagem do RI (todos os INEPs, mesmo card, mesmo histórico); Orquestrador registrou a regra e `ADR-006`/`FEAT-052` nesta sessão; implementação ainda não iniciada |

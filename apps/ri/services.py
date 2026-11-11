@@ -2467,7 +2467,7 @@ def _resolver_osp_da_nota_fiscal(ri, documento_pdf):
     return itens[0].num_osp
 
 
-def _recuperar_logs_processando_orfaos():
+def _recuperar_logs_processando_orfaos(filtro=None):
     """RN-058 (correção 2026-09-08 — bug real reportado pelo usuário: "2
     processamentos em paralelo"): o consumidor é 1 processo por
     invocação (`while true; do processar_fila_rpa_eace; sleep 5; done`,
@@ -2491,12 +2491,20 @@ def _recuperar_logs_processando_orfaos():
     pra erro não mapeado (RN-058): volta pra fila numa tentativa nova, ou
     vira erro definitivo (`motivo_erro="interrompido"`) na 2ª
     interrupção - nunca fica preso "Processando" de vez."""
-    orfaos = list(LogRpaEace.objects.select_for_update().filter(resultado=LogRpaEace.PROCESSANDO))
+    # ADR-009: com robôs em paralelo, `filtro` restringe aos logs de robôs
+    # que NÃO estão rodando (`apps.ri.fila_rpa_eace`) - senão um robô
+    # derrubaria o envio que outro ainda está fazendo.
+    orfaos_qs = LogRpaEace.objects.select_for_update().filter(resultado=LogRpaEace.PROCESSANDO)
+    if filtro is not None:
+        orfaos_qs = orfaos_qs.filter(filtro)
+    orfaos = list(orfaos_qs)
     for log in orfaos:
         log.tentativas += 1
         if log.tentativas < 2:
+            # Emenda RN-058 (2026-11-11): mantém o lugar na fila - a
+            # execução interrompida pode ter deixado PDF+XML anexados no
+            # portal sem o "Enviar notas".
             log.resultado = LogRpaEace.NA_FILA
-            log.enfileirado_em = timezone.now()
         else:
             log.resultado = LogRpaEace.ERRO
         log.motivo_erro = "interrompido"
@@ -2579,6 +2587,19 @@ def processar_proximo_da_fila_rpa_eace():
         log.save(update_fields=["resultado", "etapa_atual", "progresso_pct"])
     # Transação acima já comitada - "Processando" visível pra quem
     # consultar (tela via polling) mesmo antes da RPA terminar.
+    return executar_log_rpa_eace(log)
+
+
+def executar_log_rpa_eace(log):
+    """Executa o RPA de um `LogRpaEace` já reservado ("Processando") e
+    decide o próximo estado (RN-058) - separado da reserva para os robôs
+    paralelos (ADR-009, `apps.ri.fila_rpa_eace`), que reservam com a trava
+    da fila e executam fora dela."""
+    from apps.integracoes.eace.rpa import (
+        MOTIVOS_REGRA_DE_NEGOCIO,
+        RpaEaceIndisponivel,
+        anexar_nota_fiscal,
+    )
 
     def _reportar_progresso(etapa, percentual):
         # Update direto (sem carregar/salvar o objeto `log` inteiro) -
@@ -2657,10 +2678,13 @@ def processar_proximo_da_fila_rpa_eace():
         erro_de_regra_de_negocio = motivo in MOTIVOS_REGRA_DE_NEGOCIO
         if not erro_de_regra_de_negocio and log.tentativas < 2:
             # RN-058: erro não mapeado, ainda cabe reprocessamento - volta
-            # pro final da fila em vez de virar erro definitivo.
+            # pra fila em vez de virar erro definitivo. Emenda 2026-11-11
+            # (pedido do usuário, fila de 385 itens): mantém o lugar
+            # original (`enfileirado_em` não muda), então a nova tentativa
+            # vem logo em seguida - antes, ia pro fim e o PDF+XML já
+            # anexados ficavam "Pendente" no portal por ~20 h.
             log.resultado = LogRpaEace.NA_FILA
             log.motivo_erro = motivo or ""
-            log.enfileirado_em = timezone.now()
         else:
             log.resultado = LogRpaEace.ERRO
             log.motivo_erro = motivo or ""

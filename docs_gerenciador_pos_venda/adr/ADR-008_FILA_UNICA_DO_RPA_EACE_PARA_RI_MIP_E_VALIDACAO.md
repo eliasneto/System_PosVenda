@@ -3,6 +3,8 @@
 ## Status
 `Aprovado` (decisões do usuário em 2026-09-28 e 2026-09-29). Emenda a
 `ADR-005` (fila serializada do RPA EACE) — ponteiro registrado nela.
+Emendada pela `ADR-009` (2026-11-10): "1 worker só" passou a ser N robôs
+em paralelo, cadastrados no admin.
 
 ## Contexto
 O portal EACE passou a ter 3 tipos de execução automática, todos com o

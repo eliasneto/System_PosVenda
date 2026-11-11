@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .config import SCREENSHOTS_DIR, ConfigEace
+from .config import SCREENSHOTS_DIR, ConfigEace, args_chromium
 from .extrair_dados_pdf import extrair_inep, extrair_produto, extrair_texto_pdf, extrair_valor, valores_iguais
 
 logger = logging.getLogger(__name__)
@@ -288,7 +288,7 @@ def anexar_pdf_mip(
             navegador = p.chromium.launch(
                 headless=headless,
                 slow_mo=lento_ms,
-                args=[] if headless else ["--start-maximized"],
+                args=args_chromium(headless),
             )
             # Em headless nao ha janela fisica - viewport explicito garante que
             # o portal renderize as colunas no tamanho esperado (getBoundingClientRect).
