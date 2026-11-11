@@ -115,35 +115,53 @@ class PrevisaoFilaZerarTests(TestCase):
 
 class SaudeServidorTests(TestCase):
 
-    def _arquivos(self, livre_kb, carga):
+    def setUp(self):
+        from apps.ri import views_fila_tv
+
+        views_fila_tv._ULTIMA_AMOSTRA_CPU.clear()
+
+    def _arquivos(self, livre_kb, ocupado_pct):
         import tempfile
         from pathlib import Path
 
         pasta = Path(tempfile.mkdtemp())
         (pasta / "meminfo").write_text(
             f"MemTotal: 12205056 kB\nMemAvailable: {livre_kb} kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n", encoding="ascii")
-        (pasta / "loadavg").write_text(f"{carga} 1.0 1.0 1/100 1\n", encoding="ascii")
-        return str(pasta / "meminfo"), str(pasta / "loadavg")
+        stat = pasta / "stat"
+        stat.write_text("cpu  0 0 0 0 0 0 0 0 0 0\n", encoding="ascii")
+        return str(pasta / "meminfo"), str(stat), ocupado_pct
 
-    def test_niveis_e_alertas(self):
+    def _medir(self, meminfo, stat, ocupado_pct):
+        """1ª leitura zerada; durante a pausa, o arquivo passa a ter 1000
+        ticks, `ocupado_pct`% deles ocupados."""
         from unittest.mock import patch
 
         from apps.ri.views_fila_tv import saude_servidor
 
-        with patch("apps.ri.views_fila_tv.os.cpu_count", return_value=4):
-            ok = saude_servidor(*self._arquivos(5 * 1024 * 1024, 1.0))
-            self.assertEqual((ok["nivel_memoria"], ok["nivel_cpu"], ok["alertas"]), ("ok", "ok", []))
-            self.assertEqual((ok["livre_gb"], ok["total_gb"], ok["cpu_pct"]), ("5,0", "12", 25))
+        def pausa(_):
+            ocioso = 1000 - ocupado_pct * 10
+            open(stat, "w", encoding="ascii").write(f"cpu  {ocupado_pct * 10} 0 0 {ocioso} 0 0 0 0 0 0\n")
 
-            atencao = saude_servidor(*self._arquivos(int(1.7 * 1024 * 1024), 4.0))
-            self.assertEqual((atencao["nivel_memoria"], atencao["nivel_cpu"], atencao["alertas"]), ("atencao", "atencao", []))
+        with patch("apps.ri.views_fila_tv.time.sleep", side_effect=pausa):
+            return saude_servidor(meminfo, stat)
 
-            critico = saude_servidor(*self._arquivos(800 * 1024, 7.0))
-            self.assertEqual((critico["nivel_memoria"], critico["nivel_cpu"]), ("critico", "critico"))
-            self.assertEqual(len(critico["alertas"]), 2)
-            self.assertIn("Desative um robô", critico["alertas"][0])
+    def test_niveis_e_alertas(self):
+        ok = self._medir(*self._arquivos(5 * 1024 * 1024, 40))
+        self.assertEqual((ok["nivel_memoria"], ok["nivel_cpu"], ok["alertas"]), ("ok", "ok", []))
+        self.assertEqual((ok["livre_gb"], ok["total_gb"], ok["cpu_pct"]), ("5,0", "12", 40))
+
+        atencao = self._medir(*self._arquivos(int(1.7 * 1024 * 1024), 95))
+        self.assertEqual((atencao["nivel_memoria"], atencao["nivel_cpu"], atencao["alertas"]), ("atencao", "atencao", []))
+
+        critico = self._medir(*self._arquivos(800 * 1024, 99))
+        self.assertEqual((critico["nivel_memoria"], critico["nivel_cpu"]), ("critico", "critico"))
+        self.assertEqual(len(critico["alertas"]), 2)
+        self.assertIn("Desative um robô", critico["alertas"][0])
+
+    def test_uso_nunca_passa_de_100(self):
+        self.assertLessEqual(self._medir(*self._arquivos(5 * 1024 * 1024, 100))["cpu_pct"], 100)
 
     def test_fora_do_linux_nao_mostra(self):
         from apps.ri.views_fila_tv import saude_servidor
 
-        self.assertIsNone(saude_servidor("/nao/existe/meminfo", "/nao/existe/loadavg"))
+        self.assertIsNone(saude_servidor("/nao/existe/meminfo", "/nao/existe/stat"))

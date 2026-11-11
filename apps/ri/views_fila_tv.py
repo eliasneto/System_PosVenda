@@ -12,8 +12,8 @@ Sem `FILA_TV_TOKEN` configurado, ou com o código errado no endereço, responde
 from __future__ import annotations
 
 import math
-import os
 import secrets
+import time
 from datetime import timedelta
 
 from django.conf import settings
@@ -71,8 +71,15 @@ def _quando(item: dict):
 # dos robôs começa a ficar lento.
 MEMORIA_CRITICA_MB = 1024
 MEMORIA_ATENCAO_MB = 2048
-CARGA_ATENCAO = 0.9  # carga média de 1 min / núcleos
-CARGA_CRITICA = 1.5
+# Uso REAL do processador (0-100%, todos os núcleos), medido em /proc/stat
+# entre 2 leituras - correção 2026-11-11: antes era a carga média
+# (loadavg / núcleos), que conta também quem espera a vez e passava de 100%
+# (painel mostrava 152% com o processador em 95%).
+CPU_ATENCAO_PCT = 85
+CPU_CRITICA_PCT = 97
+# Última leitura de /proc/stat (por processo do gunicorn): a próxima
+# atualização do painel (~10 s depois) mede o uso nesse intervalo.
+_ULTIMA_AMOSTRA_CPU: dict[str, tuple[float, int, int]] = {}
 
 
 def _ler_meminfo(caminho="/proc/meminfo") -> dict[str, int]:
@@ -86,26 +93,50 @@ def _ler_meminfo(caminho="/proc/meminfo") -> dict[str, int]:
     return valores
 
 
-def saude_servidor(meminfo="/proc/meminfo", loadavg="/proc/loadavg") -> dict | None:
+def _amostra_cpu(caminho: str) -> tuple[int, int]:
+    """(total, ocioso) em ticks, somando todos os núcleos (linha "cpu")."""
+    with open(caminho, encoding="ascii") as arquivo:
+        campos = [int(v) for v in arquivo.readline().split()[1:9]]
+    user, nice, system, idle, iowait, irq, softirq, steal = (campos + [0] * 8)[:8]
+    return user + nice + system + idle + iowait + irq + softirq + steal, idle + iowait
+
+
+def uso_cpu_pct(caminho="/proc/stat", pausa=0.5) -> int:
+    """% do tempo em que os núcleos estiveram ocupados desde a leitura
+    anterior (se recente) ou numa janela curta de `pausa` segundos."""
+    agora = time.monotonic()
+    anterior = _ULTIMA_AMOSTRA_CPU.get(caminho)
+    if anterior is None or not (1 <= agora - anterior[0] <= 120):
+        total0, ocioso0 = _amostra_cpu(caminho)
+        time.sleep(pausa)
+        agora = time.monotonic()
+    else:
+        _, total0, ocioso0 = anterior
+    total1, ocioso1 = _amostra_cpu(caminho)
+    _ULTIMA_AMOSTRA_CPU[caminho] = (agora, total1, ocioso1)
+    delta_total = total1 - total0
+    if delta_total <= 0:
+        return 0
+    return max(0, min(100, round(100 * (delta_total - (ocioso1 - ocioso0)) / delta_total)))
+
+
+def saude_servidor(meminfo="/proc/meminfo", stat="/proc/stat") -> dict | None:
     """Memória livre e carga do processador do servidor, com o nível
     ("ok"/"atencao"/"critico") de cada uma e a mensagem do alerta. `None`
     fora do Linux (ex.: rodando direto no Windows)."""
     try:
         mem = _ler_meminfo(meminfo)
-        with open(loadavg, encoding="ascii") as arquivo:
-            carga_1min = float(arquivo.read().split()[0])
+        cpu_pct = uso_cpu_pct(stat)
     except (OSError, ValueError, IndexError):
         return None
-    nucleos = os.cpu_count() or 1
     livre_mb = mem.get("MemAvailable", 0) // 1024
     total_mb = mem.get("MemTotal", 0) // 1024
     swap_usado_mb = (mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)) // 1024
-    carga = carga_1min / nucleos
 
     nivel_memoria = (
         "critico" if livre_mb < MEMORIA_CRITICA_MB else "atencao" if livre_mb < MEMORIA_ATENCAO_MB else "ok"
     )
-    nivel_cpu = "critico" if carga >= CARGA_CRITICA else "atencao" if carga >= CARGA_ATENCAO else "ok"
+    nivel_cpu = "critico" if cpu_pct >= CPU_CRITICA_PCT else "atencao" if cpu_pct >= CPU_ATENCAO_PCT else "ok"
     alertas = []
     if nivel_memoria == "critico":
         alertas.append(
@@ -114,7 +145,7 @@ def saude_servidor(meminfo="/proc/meminfo", loadavg="/proc/loadavg") -> dict | N
         )
     if nivel_cpu == "critico":
         alertas.append(
-            f"Processador do servidor sobrecarregado ({round(carga * 100)}%) - as notas vão demorar mais. "
+            f"Processador do servidor no limite ({cpu_pct}%) - as notas vão demorar mais. "
             "Se continuar, desative um robô no admin."
         )
     return {
@@ -122,7 +153,7 @@ def saude_servidor(meminfo="/proc/meminfo", loadavg="/proc/loadavg") -> dict | N
         "total_gb": f"{total_mb / 1024:.0f}",
         "swap_usado_gb": f"{swap_usado_mb / 1024:.1f}".replace(".", ",") if swap_usado_mb > 256 else "",
         "nivel_memoria": nivel_memoria,
-        "cpu_pct": round(carga * 100),
+        "cpu_pct": cpu_pct,
         "nivel_cpu": nivel_cpu,
         "alertas": alertas,
     }
