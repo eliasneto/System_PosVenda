@@ -6,7 +6,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from .models import KitPadrao, PlanilhaEace, Ri, RiHistorico, RiItemIxc, RiItemRelatorioEace
-from .services import CFOP_ANTIGO, CFOPS_PLANILHA_FATURAMENTO, detectar_delimitador_planilha_eace
+from .services import CFOP_ANTIGO, CFOPS_PLANILHA_FATURAMENTO, PROCESSOS_NF, detectar_delimitador_planilha_eace
 
 CAMPO_TEXTO = (
     "w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none "
@@ -671,10 +671,26 @@ class RelatorioFaturamentoEaceMateriaisForm(forms.Form):
 
 
 class RelatorioFaturamentoEaceMateriaisNovoForm(RelatorioFaturamentoEaceMateriaisForm):
-    """Relatório "(NOVO)" - mesmo período, com Hora início/Hora fim
-    opcionais (pedido do usuário, 2026-10-15) para quebrar o relatório
-    dentro do mesmo dia: o período vai de Data início + Hora início até
-    Data fim + Hora fim (minuto inclusive). Sem hora, vale o dia inteiro."""
+    """Relatório "(NOVO)" - período pela data da NF (a mesma do Relatório do
+    modulo-financeiro filtrado pela autorização da NF-e, 2026-11-11), com
+    Hora início/Hora fim opcionais (pedido do usuário, 2026-10-15) para
+    quebrar o relatório dentro do mesmo dia pela hora da autorização na
+    SEFAZ (minuto inclusive), e o Processo (clássico/especial) da NF."""
+
+    data_inicio = forms.DateField(
+        label="Data da NF - início",
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"class": CAMPO_TEXTO, "type": "date"}),
+    )
+    data_fim = forms.DateField(
+        label="Data da NF - fim",
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"class": CAMPO_TEXTO, "type": "date"}),
+    )
+    processo = forms.ChoiceField(
+        label="Processo",
+        required=False,
+        choices=[("", "Todos"), *PROCESSOS_NF],
+        widget=forms.Select(attrs={"class": CAMPO_TEXTO}),
+    )
 
     hora_inicio = forms.TimeField(
         label="Hora início",

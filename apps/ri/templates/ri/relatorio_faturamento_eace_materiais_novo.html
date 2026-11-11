@@ -19,7 +19,7 @@
             Faturamento EACE Materiais (NOVO)
         </h1>
         <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">
-            INEPs que entraram em "Aguardando validação EACE" no período informado
+            Notas fiscais recebidas do financeiro, pela data da NF (mesmo valor do relatório do financeiro)
         </p>
     </div>
 </div>
@@ -48,6 +48,12 @@
             {{ form.hora_fim.label }}
         </label>
         {{ form.hora_fim }}
+    </div>
+    <div class="w-full lg:w-44">
+        <label for="{{ form.processo.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
+            {{ form.processo.label }}
+        </label>
+        {{ form.processo }}
     </div>
     <div class="flex gap-2 w-full lg:w-auto">
         <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
@@ -81,14 +87,14 @@
 <div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
     <div class="flex items-center gap-3 text-gray-400 dark:text-gray-500">
         <i data-lucide="calendar-range" class="w-5 h-5"></i>
-        <p class="text-sm font-semibold">Informe a Data início e a Data fim (e, se quiser, a Hora início e a Hora fim) e clique em "Gerar relatório".</p>
+        <p class="text-sm font-semibold">Informe o período da Data da NF (e, se quiser, a Hora início, a Hora fim e o Processo) e clique em "Gerar relatório".</p>
     </div>
 </div>
 {% elif not linhas %}
 <div class="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-8 shadow-sm">
     <div class="flex items-center gap-3 text-gray-400 dark:text-gray-500">
         <i data-lucide="inbox" class="w-5 h-5"></i>
-        <p class="text-sm font-semibold">Nenhum INEP entrou em "Aguardando validação EACE" nesse período.</p>
+        <p class="text-sm font-semibold">Nenhuma nota fiscal recebida do financeiro com data nesse período.</p>
     </div>
 </div>
 {% else %}
@@ -109,9 +115,10 @@
                 <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700 whitespace-nowrap">
                     <th class="px-3 py-2">INEP</th>
                     <th class="px-3 py-2">NF</th>
-                    <th class="px-3 py-2">Valor</th>
+                    <th class="px-3 py-2" title="Data da NF no financeiro (autorização da NF-e)">Data da NF</th>
+                    <th class="px-3 py-2">Processo</th>
+                    <th class="px-3 py-2" title="Valor da NF-e recebida do financeiro (XML)">Valor</th>
                     <th class="px-3 py-2">Nº OSP</th>
-                    <th class="px-3 py-2" title="Quando o INEP entrou em Aguardando validação EACE">Enviado em</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
@@ -119,9 +126,10 @@
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all divide-x divide-gray-300 dark:divide-gray-700 whitespace-nowrap">
                     <td class="px-3 py-2"><span class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[11px]">{{ linha.inep }}</span></td>
                     <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.nota_fiscal|default:"—" }}</td>
-                    <td class="px-3 py-2 text-[11px] font-black text-gray-900 dark:text-gray-100">R$ {{ linha.valor|intcomma }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_nf|date:"d/m/Y"|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.processo }}</td>
+                    <td class="px-3 py-2 text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.valor is not None %}R$ {{ linha.valor|intcomma }}{% else %}—{% endif %}</td>
                     <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.numero_osp|default:"—" }}</td>
-                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_transicao|date:"d/m/Y H:i" }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

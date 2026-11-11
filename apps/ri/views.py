@@ -72,11 +72,13 @@ from .services import (
     # Fiscal (documentos de verdade, não só o número da coluna).
     gerar_zip_arquivos_relatorio_faturamento_eace_materiais,
     montar_relatorio_faturamento_eace_materiais,
-    # Versão "(NOVO)" do relatório acima: mesma seleção de RI, só com as
-    # colunas INEP/NF/VALOR/Nº OSP, 1 linha por item (pedido do usuário,
-    # 2026-09-22).
+    # Versão "(NOVO)" do relatório acima: 1 linha por NF-e recebida do
+    # financeiro, pela data da NF (bate com o Relatório do financeiro,
+    # 2026-11-11).
     gerar_planilha_relatorio_faturamento_eace_materiais_novo,
+    gerar_zip_arquivos_relatorio_faturamento_eace_materiais_novo,
     montar_relatorio_faturamento_eace_materiais_novo,
+    total_valor_relatorio_faturamento_eace_materiais_novo,
     montar_corpo_email_financeiro,
     nome_arquivo_planilha_faturamento,
     sincronizar_divergencia_kit_relatorio,
@@ -2464,9 +2466,9 @@ def relatorio_faturamento_eace_materiais_novo_view(request):
     if form.is_bound and form.is_valid():
         dados = form.cleaned_data
         linhas = montar_relatorio_faturamento_eace_materiais_novo(
-            dados["data_inicio"], dados["data_fim"], dados["hora_inicio"], dados["hora_fim"],
+            dados["data_inicio"], dados["data_fim"], dados["hora_inicio"], dados["hora_fim"], dados["processo"],
         )
-        total_valor = sum((linha["valor"] for linha in linhas), Decimal("0"))
+        total_valor = total_valor_relatorio_faturamento_eace_materiais_novo(linhas)
         # Mesmo filtro repassado aos botões "Exportar Excel" e
         # "Exportar Arquivos (.zip)".
         filtro = {"data_inicio": f"{dados['data_inicio']:%Y-%m-%d}", "data_fim": f"{dados['data_fim']:%Y-%m-%d}"}
@@ -2474,6 +2476,8 @@ def relatorio_faturamento_eace_materiais_novo_view(request):
             filtro["hora_inicio"] = f"{dados['hora_inicio']:%H:%M}"
         if dados["hora_fim"]:
             filtro["hora_fim"] = f"{dados['hora_fim']:%H:%M}"
+        if dados["processo"]:
+            filtro["processo"] = dados["processo"]
         filtro_querystring = urlencode(filtro)
 
     return render(request, "ri/relatorio_faturamento_eace_materiais_novo.html", {
@@ -2501,7 +2505,9 @@ def relatorio_faturamento_eace_materiais_novo_exportar_view(request):
     data_fim = form.cleaned_data["data_fim"]
     hora_inicio = form.cleaned_data["hora_inicio"]
     hora_fim = form.cleaned_data["hora_fim"]
-    linhas = montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio, hora_fim)
+    linhas = montar_relatorio_faturamento_eace_materiais_novo(
+        data_inicio, data_fim, hora_inicio, hora_fim, form.cleaned_data["processo"],
+    )
     conteudo = gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas)
 
     resposta = HttpResponse(
@@ -2532,8 +2538,10 @@ def relatorio_faturamento_eace_materiais_novo_exportar_arquivos_view(request):
     data_fim = form.cleaned_data["data_fim"]
     hora_inicio = form.cleaned_data["hora_inicio"]
     hora_fim = form.cleaned_data["hora_fim"]
-    linhas = montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio, hora_fim)
-    conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas)
+    linhas = montar_relatorio_faturamento_eace_materiais_novo(
+        data_inicio, data_fim, hora_inicio, hora_fim, form.cleaned_data["processo"],
+    )
+    conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais_novo(linhas)
 
     resposta = HttpResponse(conteudo, content_type="application/zip")
     inicio = f"{data_inicio:%d-%m-%Y}" + (f" {hora_inicio:%Hh%M}" if hora_inicio else "")

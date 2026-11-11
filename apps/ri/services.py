@@ -3979,50 +3979,220 @@ def montar_relatorio_faturamento_eace_materiais(data_inicio, data_fim):
     return linhas
 
 
-# RN nova (a formalizar pelo Orquestrador; pedido do usuário, 2026-09-22):
-# versão "(NOVO)" do relatório "Faturamento EACE Materiais" — mesma
-# seleção de RI do relatório original (`_ris_relatorio_faturamento_eace_
-# materiais`, mesmo período/RN-082), só que resumida em 4 colunas (INEP,
-# Nota Fiscal, Valor, Nº OSP). Nota Fiscal e Nº OSP só existem por item no
-# Lado Relatório EACE (3º lado, RN-018/RN-022) — o relatório original junta
-# vários números num só texto por categoria de equipamento
-# (`_juntar_valores_unicos`); aqui, ao contrário, cada item vira 1 linha,
-# então um INEP com mais de 1 equipamento/Nota Fiscal/Nº OSP aparece
-# repetido, sem deduplicar. O Valor de cada linha é o do próprio item
-# (Quantidade × Valor Unitário, já resolvido pelo catálogo no lançamento —
-# RN-018), não a soma "Equipamentos R$" do RI inteiro do relatório
-# original (que usa o Lado IXC).
-def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio=None, hora_fim=None):
-    """FEAT-XXX: linhas do relatório "Faturamento EACE Materiais (NOVO)"
-    para o período [`data_inicio`, `data_fim`] (ambos `date`, inclusive) —
-    1 linha por item do Lado Relatório EACE (3º lado) de cada RI que
-    entrou em "Aguardando validação EACE" nesse período (mesma seleção do
-    relatório original, RN-082). `hora_inicio`/`hora_fim`: ver
-    `_ris_relatorio_faturamento_eace_materiais`."""
-    ris, data_transicao_por_ri = _ris_relatorio_faturamento_eace_materiais(
-        data_inicio, data_fim, hora_inicio, hora_fim,
-    )
-    if not ris:
-        return []
+# Correção pedida pelo usuário (2026-11-11): o relatório "(NOVO)" tem que
+# bater com o Relatório do modulo-financeiro (Indicadores › Relatório,
+# Data de referência "Autorização da NF-e") no mesmo período - o
+# financeiro fatura, o pós-venda recebe e lança o mesmo valor no portal do
+# cliente. Antes a linha vinha do Lado Relatório EACE (3º lado): o
+# Sincronizador em lote apaga o item que some da Planilha EACE ativa
+# (RN-062) e o KIT já faturado sumia do relatório (INEP 35010293 e mais 3
+# em 11/11/2026), e o período era o da conclusão do RI. Agora a fonte é a
+# própria NF-e recebida do financeiro (XML): número, valor (vNF), data e
+# processo vêm do arquivo - nenhum valor de catálogo nem estimado.
+_RE_DATA_NOME_ARQUIVO_NF = re.compile(r"^\d+_(\d{2})-(\d{2})-(\d{4})_")
+# Forma de pagamento (tPag) da NF-e: o modulo-financeiro emite o processo
+# especial com 18 (NF_ESPECIAL_FORMA_PAGAMENTO) e o clássico com 90 -
+# conferido em 782 NF-e de nov/2026, 100% iguais ao processo gravado no
+# financeiro. Outro código (ou NF com mais de um) fica "Não identificado".
+PROCESSO_NF_POR_FORMA_PAGAMENTO = {"18": "especial", "90": "classico"}
+PROCESSOS_NF = (("classico", "Clássico"), ("especial", "Especial"))
+_ROTULO_PROCESSO_NF = dict(PROCESSOS_NF)
+_VERSAO_DADOS_XML_NF = 1
 
-    catalogo = list(KitPadrao.objects.all())
+
+def _tag_xml(texto, tag):
+    achado = re.search(rf"<{tag}>([^<]*)</{tag}>", texto)
+    return achado.group(1).strip() if achado else ""
+
+
+def ler_dados_xml_nf(conteudo, nome_arquivo=""):
+    """Dados da NF-e lidos do XML recebido do financeiro (não grava nada):
+    número, valor total (vNF), data da NF, data/hora da autorização na
+    SEFAZ (dhRecbto), ITEM LPU (Dados Adicionais) e processo (pela forma
+    de pagamento). A data da NF é a do nome do arquivo ("<nº>_<dd-mm-aaaa>_
+    ..."), que o financeiro grava com a data em que registrou a NF-e
+    autorizada (`nome_arquivo_nfe` do modulo-financeiro) - a mesma do
+    filtro do relatório de lá. Sem esse padrão no nome (NF enviada por
+    fora), vale a data da autorização na SEFAZ. Campo ausente fica vazio -
+    nunca é estimado."""
+    texto = conteudo.decode("utf-8", "ignore") if isinstance(conteudo, bytes) else conteudo
+    autorizada = None
+    if _tag_xml(texto, "dhRecbto"):
+        try:
+            autorizada = timezone.localtime(datetime.fromisoformat(_tag_xml(texto, "dhRecbto")))
+        except ValueError:
+            autorizada = None
+    data_nf = None
+    achado = _RE_DATA_NOME_ARQUIVO_NF.match(os.path.basename(nome_arquivo or ""))
+    if achado:
+        dia, mes, ano = (int(parte) for parte in achado.groups())
+        try:
+            data_nf = datetime(ano, mes, dia).date()
+        except ValueError:
+            data_nf = None
+    if data_nf is None and autorizada:
+        data_nf = autorizada.date()
+    item_lpu = re.search(r"ITEM LPU:\s*(.*?)\s*(?:MUNICIPIO|$)", _tag_xml(texto, "infCpl"))
+    processos = {PROCESSO_NF_POR_FORMA_PAGAMENTO.get(forma, "") for forma in re.findall(r"<tPag>(\d+)</tPag>", texto)}
+    return {
+        "versao": _VERSAO_DADOS_XML_NF,
+        "numero_nf": _tag_xml(texto, "nNF"),
+        "valor": _tag_xml(texto, "vNF"),
+        "data_nf": data_nf.isoformat() if data_nf else "",
+        "autorizada_em": autorizada.isoformat() if autorizada else "",
+        "item_lpu": item_lpu.group(1).strip() if item_lpu else "",
+        "processo": processos.pop() if len(processos) == 1 else "",
+    }
+
+
+def _gravar_dados_xml_nf(documento_pk, dados):
+    Documento.objects.filter(pk=documento_pk).update(dados_nf_lidos=dados)
+
+
+def _dados_xml_nf_do_documento(documento):
+    """`ler_dados_xml_nf` do XML - lê o arquivo só na 1ª vez e guarda em
+    `Documento.dados_nf_lidos` (mesmo cache do PDF, `_dados_nf_do_
+    documento`). Falha de leitura não é guardada (tenta de novo)."""
+    dados = documento.dados_nf_lidos
+    if isinstance(dados, dict) and dados.get("versao") == _VERSAO_DADOS_XML_NF:
+        return dados
+    try:
+        with documento.arquivo.open("rb") as arquivo:
+            conteudo = arquivo.read()
+    except Exception:
+        logger.exception("Falha ao ler o XML da NF %s para o relatório de faturamento.", documento.pk)
+        return None
+    dados = ler_dados_xml_nf(conteudo, documento.arquivo.name)
+    _gravar_dados_xml_nf(documento.pk, dados)
+    documento.dados_nf_lidos = dados
+    return dados
+
+
+def _chave_item_nf(dados):
+    item = " ".join((dados.get("item_lpu") or "").split()).casefold()
+    return f"lpu:{item}" if item else f"nf:{dados['numero_nf']}"
+
+
+def notas_fiscais_vigentes_do_financeiro(ri):
+    """NF-e que valem para o INEP: as recebidas do financeiro (XML), por
+    remessa - cada resposta do financeiro por e-mail (`RiHistorico.EMAIL`
+    com os `Documento` daquela resposta) e cada XML recebido por fora (ex.:
+    processamento RPA manual) - da mais antiga para a mais recente. Para
+    cada item (ITEM LPU da NF), vale a remessa mais recente que trouxe esse
+    item: NF refaturada pelo financeiro (ex.: 4103 → 4185 no INEP 35008998)
+    sai, e as NF dos outros itens da resposta anterior continuam. XML de
+    processamento RPA cancelado não conta; a mesma NF recebida 2 vezes
+    conta 1. Devolve [{**ler_dados_xml_nf, "documento": Documento}]."""
+    excluidos = _ids_documentos_so_de_logs_cancelados(ri)
+    remessas, vistos = [], set()
+    for entrada in ri.historico.filter(tipo=RiHistorico.EMAIL).prefetch_related("documentos"):
+        xmls = [doc for doc in entrada.documentos.all() if doc.tipo == Documento.XML]
+        if xmls:
+            remessas.append((entrada.criado_em, 0, entrada.pk, xmls))
+            vistos.update(doc.pk for doc in xmls)
+    for doc in ri.documentos.filter(tipo=Documento.XML).exclude(pk__in=vistos):
+        remessas.append((doc.recebido_em or doc.criado_em, 1, doc.pk, [doc]))
+    remessas.sort(key=lambda remessa: remessa[:3])
+
+    vigentes = {}
+    for *_, documentos in remessas:
+        da_remessa = {}
+        for doc in documentos:
+            if doc.pk in excluidos:
+                continue
+            dados = _dados_xml_nf_do_documento(doc)
+            if not dados or not dados["numero_nf"]:
+                continue
+            da_remessa.setdefault(_chave_item_nf(dados), {})[dados["numero_nf"]] = {**dados, "documento": doc}
+        vigentes.update(da_remessa)
+
+    notas = {}
+    for por_numero in vigentes.values():
+        notas.update(por_numero)
+    return sorted(notas.values(), key=lambda nota: (len(nota["numero_nf"]), nota["numero_nf"]))
+
+
+def _nf_no_periodo(nota, data_inicio, data_fim, inicio=None, fim=None):
+    """Com hora: a autorização na SEFAZ dentro de [inicio, fim). Sem hora
+    (ou XML sem a autorização): a data da NF dentro de [data_inicio,
+    data_fim]."""
+    if (inicio or fim) and nota["autorizada_em"]:
+        autorizada = datetime.fromisoformat(nota["autorizada_em"])
+        return (inicio is None or autorizada >= inicio) and (fim is None or autorizada < fim)
+    if not nota["data_nf"]:
+        return False
+    return data_inicio <= datetime.fromisoformat(nota["data_nf"]).date() <= data_fim
+
+
+def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio=None, hora_fim=None,
+                                                    processo=""):
+    """Linhas do relatório "Faturamento EACE Materiais (NOVO)": 1 por NF-e
+    recebida do financeiro e vigente (`notas_fiscais_vigentes_do_
+    financeiro`) com a data da NF em [`data_inicio`, `data_fim`] - o mesmo
+    período e o mesmo valor do Relatório do modulo-financeiro filtrado pela
+    autorização da NF-e. `hora_inicio`/`hora_fim` (opcionais) passam a
+    filtrar pela hora da autorização na SEFAZ, de `data_inicio` +
+    `hora_inicio` até `data_fim` + `hora_fim` (minuto inclusive).
+    `processo`: "classico"/"especial" (vazio = todos). O Nº OSP vem do item
+    do Lado Relatório EACE com o mesmo número de NF (vazio se não houver) -
+    só informativo, não muda o valor."""
+    inicio = fim = None
+    if hora_inicio:
+        inicio = timezone.make_aware(datetime.combine(data_inicio, hora_inicio))
+    if hora_fim:
+        fim = timezone.make_aware(datetime.combine(data_fim, hora_fim)) + timedelta(minutes=1)
+    if inicio or fim:
+        inicio = inicio or timezone.make_aware(datetime.combine(data_inicio, time.min))
+        fim = fim or timezone.make_aware(datetime.combine(data_fim + timedelta(days=1), time.min))
+
+    # A NF nunca chega ao pós-venda antes de ser emitida: só os RI com XML
+    # recebido a partir da véspera de `data_inicio` (folga de fuso).
+    desde = timezone.make_aware(datetime.combine(data_inicio - timedelta(days=1), time.min))
+    ri_ids = set(
+        Documento.objects.filter(tipo=Documento.XML, criado_em__gte=desde).values_list("ri_id", flat=True)
+    )
+    if not ri_ids:
+        return []
+    ris = (
+        Ri.objects.filter(pk__in=ri_ids)
+        .select_related("escola")
+        .prefetch_related("itens_relatorio_eace", "logs_rpa_eace", "documentos")
+    )
 
     linhas = []
     for ri in ris:
-        inep = ri.escola.inep
-        notas_fiscais_resolvidas = _resolver_notas_fiscais_por_item_lpu(ri, catalogo)
+        notas = [
+            nota for nota in notas_fiscais_vigentes_do_financeiro(ri)
+            if _nf_no_periodo(nota, data_inicio, data_fim, inicio, fim)
+            and (not processo or nota["processo"] == processo)
+        ]
+        if not notas:
+            continue
+        osp_por_nf = {}
         for item in ri.itens_relatorio_eace.all():
-            numero_nf = item.nota_fiscal or notas_fiscais_resolvidas.get(item.pk, "")
+            if item.nota_fiscal and item.num_osp:
+                osp_por_nf.setdefault(item.nota_fiscal.strip(), item.num_osp)
+        pdfs = [doc for doc in ri.documentos.all() if doc.tipo == Documento.NOTA_FISCAL_PDF]
+        for nota in notas:
+            numero = nota["numero_nf"]
+            try:
+                valor = Decimal(nota["valor"])
+            except (InvalidOperation, TypeError):
+                valor = None  # XML sem vNF: aparece sem valor, nunca estimado
+            pdfs_da_nf = [doc.pk for doc in pdfs if os.path.basename(doc.arquivo.name).startswith(f"{numero}_")]
             linhas.append({
-                "inep": inep,
-                "nota_fiscal": numero_nf,
-                "valor": Decimal(item.quantidade) * item.valor_unitario,
-                "numero_osp": item.num_osp,
+                "inep": ri.escola.inep,
+                "nota_fiscal": numero,
+                "data_nf": datetime.fromisoformat(nota["data_nf"]).date() if nota["data_nf"] else None,
+                "processo": _ROTULO_PROCESSO_NF.get(nota["processo"], "Não identificado"),
+                "valor": valor,
+                "numero_osp": osp_por_nf.get(numero, ""),
                 "ri_id": ri.pk,
-                "data_transicao": data_transicao_por_ri[ri.pk],
+                "documento_ids": [nota["documento"].pk, *pdfs_da_nf],
             })
 
-    linhas.sort(key=lambda linha: (linha["data_transicao"], linha["inep"]))
+    linhas.sort(key=lambda linha: (linha["data_nf"] or data_inicio, linha["inep"],
+                                   len(linha["nota_fiscal"]), linha["nota_fiscal"]))
     return linhas
 
 
@@ -4178,11 +4348,18 @@ def gerar_planilha_relatorio_faturamento_eace_materiais(linhas):
 COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS_NOVO = (
     ("inep", "INEP"),
     ("nota_fiscal", "NF"),
+    ("data_nf", "DATA DA NF"),
+    ("processo", "PROCESSO"),
     ("valor", "VALOR"),
     ("numero_osp", "Nº OSP"),
 )
 
-_LARGURA_COLUNAS_PLANILHA_NOVO = {"A": 14.0, "B": 13.44, "C": 19.22, "D": 14.44}
+_LARGURA_COLUNAS_PLANILHA_NOVO = {"A": 14.0, "B": 13.44, "C": 14.0, "D": 18.0, "E": 19.22, "F": 14.44}
+
+
+def total_valor_relatorio_faturamento_eace_materiais_novo(linhas):
+    """Soma do Valor das linhas (linha sem valor no XML não soma nada)."""
+    return sum((linha["valor"] for linha in linhas if linha["valor"] is not None), Decimal("0"))
 
 
 def gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas):
@@ -4202,8 +4379,12 @@ def gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas):
     _escrever_cabecalho_planilha_faturamento_eace_materiais(aba, total_colunas, titulos)
 
     coluna_valor = chaves.index("valor") + 1
+    coluna_data = chaves.index("data_nf") + 1
     for linha in linhas:
-        aba.append([linha.get(chave) for chave in chaves])
+        aba.append([
+            float(linha["valor"]) if chave == "valor" and linha.get("valor") is not None else linha.get(chave)
+            for chave in chaves
+        ])
         numero_linha = aba.max_row
         for numero_coluna in range(1, total_colunas + 1):
             celula = aba.cell(row=numero_linha, column=numero_coluna)
@@ -4211,11 +4392,12 @@ def gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas):
             celula.border = _BORDA_LINHA_DADO
             celula.alignment = Alignment(horizontal="center")
         aba.cell(row=numero_linha, column=coluna_valor).number_format = _FORMATO_MOEDA_PLANILHA
+        aba.cell(row=numero_linha, column=coluna_data).number_format = "DD/MM/YYYY"
 
     # Mesmo padrão da versão original (RN-086): linha de total do Valor,
     # somando só as linhas do período filtrado.
     if linhas:
-        total_valor = sum((linha["valor"] for linha in linhas), Decimal("0"))
+        total_valor = total_valor_relatorio_faturamento_eace_materiais_novo(linhas)
         aba.append([None] * total_colunas)
         linha_total = aba.max_row
         aba.cell(row=linha_total, column=1, value="TOTAL DO PERÍODO")
@@ -4288,6 +4470,28 @@ def gerar_zip_arquivos_relatorio_faturamento_eace_materiais(linhas):
                 # 1 dos 2 dentro do .zip.
                 raiz, extensao = os.path.splitext(nome_base)
                 nome_no_zip = f"{inep}/{raiz}_{documento.pk}{extensao}"
+            nomes_usados.add(nome_no_zip)
+            arquivo_zip.write(documento.arquivo.path, arcname=nome_no_zip)
+    return buffer.getvalue()
+
+
+def gerar_zip_arquivos_relatorio_faturamento_eace_materiais_novo(linhas):
+    """`.zip` da versão "(NOVO)": só o XML e o PDF das NF que estão nas
+    `linhas` (`documento_ids` de cada linha), 1 pasta por INEP - NF fora do
+    período ou substituída não entra."""
+    ids = list(dict.fromkeys(pk for linha in linhas for pk in linha["documento_ids"]))
+    documentos = Documento.objects.filter(pk__in=ids).select_related("ri__escola").order_by("ri_id", "criado_em")
+    buffer = io.BytesIO()
+    nomes_usados = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:
+        for documento in documentos:
+            if not documento.arquivo:
+                continue
+            nome_base = os.path.basename(documento.arquivo.name)
+            nome_no_zip = f"{documento.ri.escola.inep}/{nome_base}"
+            if nome_no_zip in nomes_usados:
+                raiz, extensao = os.path.splitext(nome_base)
+                nome_no_zip = f"{documento.ri.escola.inep}/{raiz}_{documento.pk}{extensao}"
             nomes_usados.add(nome_no_zip)
             arquivo_zip.write(documento.arquivo.path, arcname=nome_no_zip)
     return buffer.getvalue()
