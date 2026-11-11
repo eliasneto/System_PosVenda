@@ -71,7 +71,7 @@
         <td><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></td>
         <td><b>{{ item.inep }}</b></td>
         <td class="nome">{{ item.nome }}</td>
-        <td>{% if item.log.tentativas %}<span class="st-repete">nova tentativa</span>{% else %}{{ item.log.enfileirado_em|date:"d/m H:i" }}{% endif %}</td>
+        <td>{% if item.log.tentativas %}<span class="st-repete">nova tentativa</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </table>
