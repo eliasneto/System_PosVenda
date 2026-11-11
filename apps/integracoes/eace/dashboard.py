@@ -11,6 +11,7 @@ mesmo grao de `upload_linha`.
 from __future__ import annotations
 
 import logging
+import time
 import re
 from pathlib import Path
 
@@ -411,29 +412,91 @@ def upload_linha(
     return True
 
 
+# Pedido do usuário (2026-11-11, OSP 6642): o botão "Enviar notas" fica
+# HABILITADO (opacity 1, cursor pointer) enquanto a OSP tem nota anexada e
+# ainda não enviada, e DESABILITADO quando não há nada para enviar. Toda NF
+# confere o estado e, habilitado, clica.
+_JS_BOTAO_HABILITADO = """el => {
+    const s = getComputedStyle(el);
+    return !el.disabled && s.pointerEvents !== 'none' && s.cursor === 'pointer' && parseFloat(s.opacity) >= 0.9;
+}"""
+
+
+def _botao_enviar_notas(pagina: Page):
+    # So pelo texto: a classe `baaNgaC3` e o estilo de botao verde do Bubble,
+    # compartilhado com outros botoes da tela.
+    return pagina.locator("button:has-text('Enviar notas')").filter(visible=True).first
+
+
+def botao_enviar_notas_habilitado(pagina: Page, espera_ms: int = 0) -> bool:
+    """True se o botão está visível e habilitado - espera até `espera_ms`."""
+    btn = _botao_enviar_notas(pagina)
+    limite = time.monotonic() + espera_ms / 1000
+    while True:
+        try:
+            if btn.count() and btn.is_visible() and btn.evaluate(_JS_BOTAO_HABILITADO):
+                return True
+        except Exception:
+            pass
+        if time.monotonic() >= limite:
+            return False
+        pagina.wait_for_timeout(500)
+
+
+def _clicar_robusto(btn) -> None:
+    """Clique normal; se o Playwright recusar (botão coberto pela barra fixa
+    do topo do portal, animação etc.), clica direto no elemento."""
+    btn.scroll_into_view_if_needed(timeout=10_000)
+    try:
+        btn.click(timeout=10_000)
+    except Exception as exc:
+        logger.warning("Clique normal em 'Enviar notas' recusado (%s) - clicando direto no elemento.", exc)
+        btn.evaluate("el => el.click()")
+
+
 def clicar_enviar_notas(pagina: Page) -> bool:
-    """Clica no botao 'Enviar notas' apos o upload de todos os arquivos do INEP."""
+    """Clica no botao 'Enviar notas' apos o upload de todos os arquivos do INEP:
+    espera ficar visível E habilitado (até 45 s - com o servidor carregado o
+    botão demorava), clica (com reserva para botão coberto) e, se continuar
+    habilitado, clica mais uma vez."""
     logger.info("Clicando em 'Enviar notas'...")
     # O AVISO do CNPJ pode ter ficado aberto na frente do botao.
     _continuar_aviso_cnpj(pagina, timeout_ms=1_000)
     try:
-        # So pelo texto: a classe `baaNgaC3` e o estilo de botao verde do
-        # Bubble, compartilhado com outros botoes da tela.
-        btn = pagina.locator("button:has-text('Enviar notas')").filter(visible=True).first
-        # Correção (2026-11-11): 15 s -> 45 s. Com o servidor sem memória o
-        # botão aparecia na tela, mas depois do tempo de espera (print do
-        # erro mostrava o botão); falhar aqui deixa PDF+XML anexados e a
-        # linha "Pendente" no portal até a nova tentativa.
-        btn.wait_for(state="visible", timeout=45_000)
-        btn.scroll_into_view_if_needed()
-        btn.click()
+        if not botao_enviar_notas_habilitado(pagina, espera_ms=45_000):
+            logger.error("Botao 'Enviar notas' nao ficou habilitado em 45 s.")
+            return False
+        _clicar_robusto(_botao_enviar_notas(pagina))
         logger.info("'Enviar notas' clicado.")
         pagina.wait_for_timeout(2_000)
         _continuar_aviso_cnpj(pagina, timeout_ms=2_000)
+        if botao_enviar_notas_habilitado(pagina):
+            logger.warning("'Enviar notas' continua habilitado depois do clique - clicando de novo.")
+            _clicar_robusto(_botao_enviar_notas(pagina))
+            pagina.wait_for_timeout(2_000)
+            _continuar_aviso_cnpj(pagina, timeout_ms=2_000)
         return True
     except PWTimeout:
-        logger.error("Timeout ao localizar botao 'Enviar notas'.")
+        logger.error("Timeout ao clicar no botao 'Enviar notas'.")
         return False
     except Exception as exc:
         logger.error("Erro ao clicar em 'Enviar notas': %s", exc)
+        return False
+
+
+def enviar_notas_pendentes_se_habilitado(pagina: Page) -> bool:
+    """Pedido do usuário (2026-11-11, OSP 6642): se o botão 'Enviar notas'
+    da OSP aberta está habilitado (há nota anexada e não enviada - de outra
+    tentativa, de outra NF ou anexada à mão), clica. Chamado ao fim de toda
+    NF que chegou a abrir a OSP, com sucesso ou não. Nunca levanta exceção."""
+    try:
+        if not botao_enviar_notas_habilitado(pagina, espera_ms=1_500):
+            return False
+        logger.info("Botao 'Enviar notas' habilitado na OSP - enviando as notas anexadas pendentes.")
+        _clicar_robusto(_botao_enviar_notas(pagina))
+        pagina.wait_for_timeout(2_000)
+        _continuar_aviso_cnpj(pagina, timeout_ms=2_000)
+        return True
+    except Exception as exc:
+        logger.warning("Nao foi possivel enviar as notas pendentes da OSP: %s", exc)
         return False

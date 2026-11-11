@@ -44,4 +44,9 @@ COPY . /app/
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "120", "config.wsgi:application"]
+# Correção 2026-11-11: sem --workers o gunicorn sobe 1 processo só - um
+# pedido demorado (tela da Fila, painel da TV de várias telas, planilha)
+# travava o site para todo mundo. 5 processos x 4 threads = 20 pedidos ao
+# mesmo tempo (para ajustar, mudar aqui - argumento de linha de comando
+# vale mais que GUNICORN_CMD_ARGS).
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "120", "--workers", "5", "--threads", "4", "config.wsgi:application"]

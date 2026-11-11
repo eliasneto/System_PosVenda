@@ -1,5 +1,36 @@
 # Troubleshooting — Gerenciador Pós-Venda
-_Última atualização: 2026-09-23_
+_Última atualização: 2026-11-11_
+
+### Sistema "fora do ar" com todos os containers de pé (login sem resposta, servidor folgado)
+
+**Sintoma:** da rede o login não abre (timeout) ou demora 10 s+, mas `docker
+compose ps` mostra tudo `Up`, a máquina tem memória/processador sobrando e,
+de dentro do servidor (`curl http://127.0.0.1:8000/login/`), às vezes responde
+rápido e às vezes não.
+
+**Causa (incidente 2026-11-11):** o `web` estava com o gunicorn em **1
+processo síncrono** (comando sem `--workers`) - atende 1 pedido por vez e os
+outros esperam. Telas com atualização automática (painel da TV, Projeto >
+Fila) e a planilha de relatório enchem essa fila. Ver `ADR-010`.
+
+**Como conferir:** `docker compose ... logs web | grep "Booting worker"` - com
+1 linha só, é isso.
+
+**Correção:** a imagem a partir da v1.4.1 já sobe com `--workers 5 --threads
+4`. Numa imagem antiga, sem rebuild:
+
+```bash
+cd /home/Sistem_PosVenda
+cp .env.hml .env.hml.bak-gunicorn-$(date +%Y%m%d_%H%M%S)
+printf '
+GUNICORN_CMD_ARGS=--workers 5 --threads 4
+' >> .env.hml
+C='docker compose -f docker-compose.hml.yml -f docker-compose.hml.override.yml --env-file .env.hml'
+$C up -d --no-deps web     # recria SÓ o web - robôs continuam rodando
+$C restart nginx           # Nginx re-resolve o IP do web novo (ver "502 Bad Gateway")
+```
+
+Conferir: 5 linhas "Booting worker" no log e login respondendo em < 1 s.
 
 ### `doc/` não atualiza depois do deploy — mesmo com `--build`/`--no-cache` (arquivo novo não aparece na imagem)
 

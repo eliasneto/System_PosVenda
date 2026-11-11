@@ -28,7 +28,7 @@ from apps.core.models import RoboRpaEace, TravaFilaRpaEace
 from apps.escolas.models import LogRpaEaceMip
 from apps.escolas.rpa_mip_lote import executar_envio_mip, recuperar_envios_mip_interrompidos
 
-from .models import LogRpaEace
+from .models import LogRpaEace, RiItemRelatorioEace
 from .services import _recuperar_logs_processando_orfaos, executar_log_rpa_eace
 
 RI = "RI"
@@ -80,6 +80,25 @@ def _ineps_ocupados() -> tuple[set[str], set[int]]:
     return ineps, lotes
 
 
+def _osps_por_ri(ri_ids) -> dict[int, set[str]]:
+    """OSPs dos itens de cada RI (`RiItemRelatorioEace.num_osp`) - a NF do RI
+    é anexada em uma delas (`services._resolver_osp_da_nota_fiscal`)."""
+    osps: dict[int, set[str]] = {}
+    for ri_id, osp in RiItemRelatorioEace.objects.filter(ri_id__in=set(ri_ids)).exclude(num_osp="").values_list(
+        "ri_id", "num_osp"
+    ):
+        osps.setdefault(ri_id, set()).add(osp.strip())
+    return osps
+
+
+def _osps_ocupadas() -> set[str]:
+    """Pedido do usuário (2026-11-11): 1 robô por OSP. O botão "Enviar
+    notas" da OSP envia TODAS as notas anexadas nela - 2 robôs na mesma OSP
+    (INEPs diferentes) poderiam enviar a nota um do outro antes da hora."""
+    ri_ids = LogRpaEace.objects.filter(resultado=LogRpaEace.PROCESSANDO).values_list("ri_id", flat=True)
+    return set().union(*_osps_por_ri(ri_ids).values()) if ri_ids else set()
+
+
 def _candidatos():
     """Itens "Na fila" de RI e MIP em ordem de chegada (`enfileirado_em`;
     no empate o RI vem antes - mesmo critério do worker único anterior)."""
@@ -105,15 +124,21 @@ def _candidatos():
 
 def reservar_proximo_envio(robo: RoboRpaEace | None):
     """Marca "Processando" (com o robô) o envio mais antigo da fila cujo
-    INEP/LOTE não esteja com outro robô. Devolve `(tipo, log)` ou `None`
+    INEP/LOTE/OSP não esteja com outro robô. Devolve `(tipo, log)` ou `None`
     se não houver nada livre."""
     with transaction.atomic():
         TravaFilaRpaEace.objects.select_for_update().get_or_create(pk=1)
         ineps_ocupados, lotes_ocupados = _ineps_ocupados()
-        for tipo, log, ineps in _candidatos():
+        osps_ocupadas = _osps_ocupadas()
+        candidatos = list(_candidatos())
+        osps_ri = _osps_por_ri(log.ri_id for tipo, log, _ in candidatos if tipo == RI)
+        for tipo, log, ineps in candidatos:
             if ineps & ineps_ocupados:
                 continue
             if tipo == MIP and log.lote_id in lotes_ocupados:
+                continue
+            # 1 robô por OSP (conservador: RI com itens em 2 OSPs espera as 2).
+            if tipo == RI and osps_ri.get(log.ri_id, set()) & osps_ocupadas:
                 continue
             modelo = LogRpaEace if tipo == RI else LogRpaEaceMip
             reservado = modelo.objects.filter(pk=log.pk, resultado=modelo.NA_FILA).update(

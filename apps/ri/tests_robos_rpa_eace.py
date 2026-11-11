@@ -103,6 +103,36 @@ class ReservaTests(BaseRobos):
         self.assertIsNone(a.robo)
 
 
+class TravaPorOspTests(BaseRobos):
+    """Pedido do usuário (2026-11-11): 1 robô por OSP, além de 1 por INEP."""
+
+    def _osp(self, log, osp):
+        from apps.ri.models import RiItemRelatorioEace
+
+        RiItemRelatorioEace.objects.create(ri=log.ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp=osp)
+        return log
+
+    def test_mesma_osp_inep_diferente_espera(self):
+        self._osp(self._log_ri("11000001"), "6621")
+        self._osp(self._log_ri("11000002"), "6621")
+        c = self._osp(self._log_ri("11000003"), "4229")
+        reservar_proximo_envio(self.robo_1)
+        self.assertEqual(reservar_proximo_envio(self.robo_2), (RI, c.pk))
+
+    def test_so_osp_ocupada_na_fila_ninguem_pega(self):
+        self._osp(self._log_ri("11000001"), "6621")
+        self._osp(self._log_ri("11000002"), "6621")
+        reservar_proximo_envio(self.robo_1)
+        self.assertIsNone(reservar_proximo_envio(self.robo_2))
+
+    def test_osp_libera_quando_o_outro_termina(self):
+        a = self._osp(self._log_ri("11000001"), "6621")
+        b = self._osp(self._log_ri("11000002"), "6621")
+        reservar_proximo_envio(self.robo_1)
+        LogRpaEace.objects.filter(pk=a.pk).update(resultado=LogRpaEace.SUCESSO)
+        self.assertEqual(reservar_proximo_envio(self.robo_2), (RI, b.pk))
+
+
 class RecuperacaoTests(BaseRobos):
 
     def test_nao_mexe_no_envio_de_robo_que_esta_rodando(self):

@@ -9187,6 +9187,30 @@ class MontarRelatorioFaturamentoEaceMateriaisNovoTests(TestCase):
         item_sem_nf.refresh_from_db()
         self.assertEqual(item_sem_nf.nota_fiscal, "")  # continua vazio - fallback só de leitura
 
+    def test_pdf_da_nf_so_e_lido_1_vez(self):
+        """Correção 2026-11-11 (504 no relatório): o PDF lido fica guardado
+        no Documento - a 2ª abertura do relatório não relê o arquivo."""
+        RiItemRelatorioEace.objects.create(
+            ri=self.ri, descricao_item="Switch 8 portas", quantidade=1, valor_unitario="300.00",
+        )
+        documento = Documento.objects.create(
+            ri=self.ri, tipo=Documento.NOTA_FISCAL_PDF,
+            arquivo=SimpleUploadedFile("nota-cache.pdf", b"conteudo-fake"), ativo=True,
+        )
+        email = RiHistorico.objects.create(ri=self.ri, tipo=RiHistorico.EMAIL, mensagem="Resposta do financeiro.")
+        email.documentos.set([documento])
+        with patch(
+            "apps.integracoes.eace.extrair_dados_pdf.extrair_dados_validacao_nf",
+            return_value={"numero_nf": "1004", "inep": "60000021", "item_lpu": "Switch 8 portas",
+                          "itens": [], "ilegivel": False},
+        ) as extrair:
+            for _ in range(3):
+                linhas = montar_relatorio_faturamento_eace_materiais_novo(date(2026, 8, 1), date(2026, 8, 31))
+        self.assertEqual(extrair.call_count, 1)
+        self.assertEqual(next(l for l in linhas if l["valor"] == Decimal("300.00"))["nota_fiscal"], "1004")
+        documento.refresh_from_db()
+        self.assertEqual(documento.dados_nf_lidos, {"numero_nf": "1004", "item_lpu": "Switch 8 portas"})
+
 
 _LINHA_BASE_TESTE_PLANILHA_NOVO = {
     "inep": "60000021", "nota_fiscal": "1001", "valor": Decimal("3000.00"), "numero_osp": "4001",

@@ -656,6 +656,11 @@ class Documento(models.Model):
     versao = models.PositiveIntegerField("Versão", default=1)
     ativo = models.BooleanField("Ativo (versão vigente)", default=True)
     recebido_em = models.DateTimeField("Recebido em", null=True, blank=True)
+    # Correção 2026-11-11 (504 no relatório "Faturamento EACE Materiais
+    # (NOVO)"): o relatório relia o PDF de cada NF a cada abertura (64 s para
+    # 2 dias). O PDF não muda - o que foi lido dele (`numero_nf`/`item_lpu`,
+    # `extrair_dados_validacao_nf`) fica guardado aqui na 1ª leitura.
+    dados_nf_lidos = models.JSONField("Dados lidos do PDF da NF", null=True, blank=True, editable=False)
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:

@@ -189,6 +189,7 @@ def anexar_nota_fiscal(
             abrir_osps,
             motivo_falha_navegacao,
             clicar_enviar_notas,
+            enviar_notas_pendentes_se_habilitado,
             contar_pedidos_osp,
             expandir_notas_fiscais,
             expandir_resultado_osp,
@@ -416,6 +417,7 @@ def anexar_nota_fiscal(
                     # portal conclui o envio já no "Confirmar informações"
                     # e o botão "Enviar notas" nem aparece - antes de dar
                     # erro, relê a linha: fora de "Pendente" = enviada.
+                    enviar_notas_pendentes_se_habilitado(pagina)
                     if _linha_saiu_de_pendente(pagina, inep, indice):
                         logger.info(
                             "'Enviar notas' nao apareceu, mas a linha %s do INEP %s ja saiu de 'Pendente' - enviada.",
@@ -425,6 +427,7 @@ def anexar_nota_fiscal(
                         return ResultadoRpaEace(sucesso=True, dados_pdf=dados_pdf, valor_portal=valor_portal)
                     return _falhar(pagina, inep, "enviar_notas", dados_pdf, valor_portal)
                 progresso.avancar()  # "Enviando as notas" -> 100%
+                enviar_notas_pendentes_se_habilitado(pagina)
 
                 logger.info("RPA concluido com sucesso - OSP=%s INEP=%s indice=%s.", osp, inep, indice)
                 return ResultadoRpaEace(sucesso=True, dados_pdf=dados_pdf, valor_portal=valor_portal)
@@ -449,9 +452,22 @@ def _linha_saiu_de_pendente(pagina, inep: str, indice: int) -> bool:
         return False
 
 
+# Motivos em que a OSP já estava aberta com a grade de notas - dá para
+# conferir o botão "Enviar notas" antes de encerrar (pedido do usuário,
+# 2026-11-11, OSP 6642).
+_MOTIVOS_COM_OSP_ABERTA = frozenset({
+    "inep_nao_encontrado", "documento_ja_enviado", "valor_divergente", "valor_ambiguo",
+    "indice_invalido", "upload", "enviar_notas",
+})
+
+
 def _falhar(pagina, inep: str, motivo: str, dados_pdf: dict, valor_portal: str | None = None) -> ResultadoRpaEace:
     """Loga e tira um screenshot de diagnostico antes de propagar o erro."""
     logger.error("RPA encerrado com erro (%s) - INEP %s.", motivo, inep)
+    if motivo in _MOTIVOS_COM_OSP_ABERTA:
+        from .dashboard import enviar_notas_pendentes_se_habilitado
+
+        enviar_notas_pendentes_se_habilitado(pagina)
     try:
         SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

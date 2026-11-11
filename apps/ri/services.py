@@ -3750,6 +3750,24 @@ def _kit_wifi_estimado_relatorio_faturamento(escola, catalogo):
     return _derivar_numero_access_points(kit_inicial)
 
 
+def _dados_nf_do_documento(documento, extrair):
+    """`numero_nf`/`item_lpu` do PDF da NF - lê o PDF só na 1ª vez e guarda
+    em `Documento.dados_nf_lidos` (correção 2026-11-11: o relatório de
+    faturamento relia todos os PDFs a cada abertura e estourava os 60 s do
+    Nginx com 504). Falha de leitura não é guardada (tenta de novo)."""
+    if documento.dados_nf_lidos is not None:
+        return documento.dados_nf_lidos
+    try:
+        dados = extrair(documento.arquivo.path)
+    except Exception:
+        logger.exception("Falha ao ler PDF da NF %s para o relatório de faturamento.", documento.pk)
+        return None
+    guardar = {"numero_nf": dados.get("numero_nf") or "", "item_lpu": dados.get("item_lpu") or ""}
+    Documento.objects.filter(pk=documento.pk).update(dados_nf_lidos=guardar)
+    documento.dados_nf_lidos = guardar
+    return guardar
+
+
 def _resolver_notas_fiscais_por_item_lpu(ri, catalogo):
     """Fallback de leitura, só para o relatório "Faturamento EACE
     Materiais" (pedido do usuário, 2026-09-17) — nunca grava nada no
@@ -3779,14 +3797,10 @@ def _resolver_notas_fiscais_por_item_lpu(ri, catalogo):
 
     numeros_por_item_lpu = {}
     for documento in documentos_nf:
-        try:
-            dados = extrair_dados_validacao_nf(documento.arquivo.path)
-        except Exception:
-            logger.exception(
-                "Falha ao ler PDF da NF %s para o relatório de faturamento.", documento.pk
-            )
+        dados = _dados_nf_do_documento(documento, extrair_dados_validacao_nf)
+        if dados is None:
             continue
-        if dados["item_lpu"] and dados["numero_nf"]:
+        if dados.get("item_lpu") and dados.get("numero_nf"):
             numeros_por_item_lpu.setdefault(dados["item_lpu"], set()).add(dados["numero_nf"])
 
     resolvidos = {}

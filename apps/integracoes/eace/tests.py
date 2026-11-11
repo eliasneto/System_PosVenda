@@ -854,3 +854,45 @@ class AvisoCnpjEacePortalTests(SimpleTestCase):
         with patch.object(dashboard, "_continuar_aviso_cnpj") as mock_aviso:
             dashboard._confirmar_modal_pos_upload(MagicMock())
         mock_aviso.assert_not_called()
+
+
+class BotaoEnviarNotasTests(SimpleTestCase):
+    """Pedido do usuário (2026-11-11, OSP 6642): clicar em "Enviar notas"
+    sempre que o botão estiver habilitado."""
+
+    def _pagina(self, habilitado, click_falha=False):
+        btn = MagicMock()
+        btn.count.return_value = 1
+        btn.is_visible.return_value = True
+        btn.evaluate.side_effect = lambda js, *a: habilitado if "getComputedStyle" in js else None
+        if click_falha:
+            btn.click.side_effect = Exception("elemento coberto")
+        pagina = MagicMock()
+        pagina.locator.return_value.filter.return_value.first = btn
+        return pagina, btn
+
+    def test_habilitado_clica_e_desabilitado_nao(self):
+        from apps.integracoes.eace.dashboard import enviar_notas_pendentes_se_habilitado
+
+        pagina, btn = self._pagina(habilitado=True)
+        self.assertTrue(enviar_notas_pendentes_se_habilitado(pagina))
+        btn.click.assert_called_once()
+
+        pagina, btn = self._pagina(habilitado=False)
+        self.assertFalse(enviar_notas_pendentes_se_habilitado(pagina))
+        btn.click.assert_not_called()
+
+    def test_botao_coberto_clica_direto_no_elemento(self):
+        from apps.integracoes.eace.dashboard import enviar_notas_pendentes_se_habilitado
+
+        pagina, btn = self._pagina(habilitado=True, click_falha=True)
+        self.assertTrue(enviar_notas_pendentes_se_habilitado(pagina))
+        self.assertIn(("el => el.click()",), [c.args for c in btn.evaluate.call_args_list])
+
+    def test_clicar_enviar_notas_nao_clica_desabilitado(self):
+        from apps.integracoes.eace.dashboard import clicar_enviar_notas
+
+        pagina, btn = self._pagina(habilitado=False)
+        with patch("apps.integracoes.eace.dashboard.time.monotonic", side_effect=[0, 0, 100]):
+            self.assertFalse(clicar_enviar_notas(pagina))
+        btn.click.assert_not_called()
