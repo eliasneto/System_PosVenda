@@ -1,5 +1,4 @@
 from django import forms
-from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
@@ -51,6 +50,27 @@ class RoboRpaEaceAdmin(admin.ModelAdmin):
     list_filter = ("ativo",)
     search_fields = ("nome", "usuario")
 
+    def changelist_view(self, request, extra_context=None):
+        """Mostra no topo da lista quantos robôs a máquina aguenta agora
+        (gravado pelo supervisor a cada ~15 s - `EstadoRobosRpaEace`)."""
+        from django.contrib import messages
+
+        from .models import EstadoRobosRpaEace
+
+        estado = EstadoRobosRpaEace.objects.filter(pk=1).first()
+        if estado and estado.atualizado_em:
+            texto = (
+                f"Capacidade da máquina ({estado.recursos}): {estado.capacidade_maquina} robôs em paralelo. "
+                f"Limite em vigor: {estado.limite_atual} · rodando agora: {estado.robos_rodando}."
+            )
+            if estado.teto_manual:
+                texto += f" Teto manual (RPA_EACE_MAX_ROBOS): {estado.teto_manual}."
+            if estado.freio_motivo:
+                messages.warning(request, texto + f" Freio de segurança acionado: {estado.freio_motivo}.")
+            else:
+                messages.info(request, texto)
+        return super().changelist_view(request, extra_context)
+
     @admin.action(description="Clonar robôs selecionados (mesmo usuário e senha)")
     def clonar_robos(self, request, queryset):
         """Pedido do usuário (2026-11-11): criar mais robôs sem digitar
@@ -68,5 +88,5 @@ class RoboRpaEaceAdmin(admin.ModelAdmin):
         self.message_user(
             request,
             f"Criado(s): {', '.join(criados)} - inativo(s). Marque \"Ativo\" na lista para começar a rodar "
-            f"(no máximo {settings.RPA_EACE_MAX_ROBOS} robôs rodam ao mesmo tempo; os demais ficam esperando).",
+            "(acima do limite em vigor, os demais ficam esperando - veja a capacidade no topo da lista).",
         )

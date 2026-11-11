@@ -12,7 +12,7 @@ from django.urls import Resolver404, resolve
 # "fila_tv"/"fila_tv_conteudo": painel da fila para TV, sem login - abre
 # igual para qualquer um que tenha o link (inclusive usuário logado como
 # Visualizador ou sem acesso liberado no mesmo navegador).
-_URL_NAMES_ISENTOS = {"login", "logout", "fila_tv", "fila_tv_conteudo"}
+_URL_NAMES_ISENTOS = {"login", "logout", "fila_tv", "fila_tv_conteudo", "fila_tv_planilha"}
 _PREFIXOS_ISENTOS = ("/admin/", "/static/", "/media/")
 
 

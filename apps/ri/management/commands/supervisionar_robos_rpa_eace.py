@@ -8,8 +8,10 @@ from decouple import config as env
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections
+from django.utils import timezone
 
-from apps.core.models import RoboRpaEace
+from apps.core.models import EstadoRobosRpaEace, RoboRpaEace
+from apps.ri.capacidade_robos import FreioDeSeguranca, capacidade_maquina, ler_recursos
 from apps.ri.fila_rpa_eace import recuperar_envios_de_robos_parados
 
 PADRAO = None  # robô padrão (login do .env), usado quando não há robô ativo
@@ -33,7 +35,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--max-robos", type=int,
             default=settings.RPA_EACE_MAX_ROBOS,
-            help="Teto de robôs rodando ao mesmo tempo (cada um abre um Chromium de ~2,5 GB); padrão 3.",
+            help="Teto manual de robôs ao mesmo tempo; 0 = automático pela capacidade da máquina "
+                 "(apps.ri.capacidade_robos).",
         )
         parser.add_argument(
             "--espera-desligar", type=float, default=300,
@@ -47,7 +50,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         intervalo = options["intervalo"]
-        max_robos = max(1, options["max_robos"])
+        teto_manual = max(0, options["max_robos"] or 0)
+        freio = FreioDeSeguranca()
+        limite_anterior = None
+        estado_gravado_em = 0.0
         manage_py = str(Path(settings.BASE_DIR) / "manage.py")
         rodando: dict[int | None, subprocess.Popen] = {}
         proxima_passada: dict[int | None, float] = {}
@@ -59,19 +65,52 @@ class Command(BaseCommand):
 
         signal.signal(signal.SIGTERM, _parar)
         signal.signal(signal.SIGINT, _parar)
-        self.stdout.write(f"Supervisor dos robôs do RPA EACE iniciado (máximo {max_robos} robô(s) ao mesmo tempo).")
+        self.stdout.write(
+            "Supervisor dos robôs do RPA EACE iniciado "
+            f"(teto manual: {teto_manual or 'automático'}; capacidade da máquina: "
+            f"{capacidade_maquina(ler_recursos())} robô(s))."
+        )
 
         while not parar:
             for chave, processo in list(rodando.items()):
                 if processo.poll() is not None:
                     del rodando[chave]
                     proxima_passada[chave] = time.monotonic() + intervalo
-            try:
-                # Teto de memória: só os N primeiros robôs ativos (ordem do
-                # cadastro) rodam; os outros ficam esperando no admin.
-                ativos = list(
-                    RoboRpaEace.objects.filter(ativo=True).order_by("pk").values_list("pk", flat=True)[:max_robos]
+            # Limite em vigor (pedido do usuário, 2026-11-11): com teto manual
+            # (RPA_EACE_MAX_ROBOS) é ele que manda - o usuário escolheu 15 numa
+            # máquina cuja capacidade calculada é 12; sem teto, vale a
+            # capacidade da máquina lida AGORA. Em qualquer caso o freio de
+            # segurança de memória/swap pode reduzir. Só os N primeiros robôs
+            # ativos (ordem do cadastro) rodam; acima disso terminam a nota
+            # atual e esperam.
+            recursos = ler_recursos()
+            capacidade = capacidade_maquina(recursos)
+            limite = freio.atualizar(recursos, len(rodando), teto_manual or capacidade)
+            if limite != limite_anterior:
+                self.stdout.write(
+                    f"Limite de robôs: {limite} (capacidade da máquina {capacidade}"
+                    f"{f', teto manual {teto_manual}' if teto_manual else ''}"
+                    f"{f', freio: {freio.motivo}' if freio.motivo else ''})."
                 )
+                limite_anterior = limite
+            try:
+                ativos = list(
+                    RoboRpaEace.objects.filter(ativo=True).order_by("pk").values_list("pk", flat=True)[:limite]
+                )
+                if time.monotonic() - estado_gravado_em >= 15:
+                    EstadoRobosRpaEace.objects.update_or_create(pk=1, defaults={
+                        "capacidade_maquina": min(capacidade, 999),
+                        "limite_atual": limite,
+                        "teto_manual": teto_manual,
+                        "robos_rodando": len(rodando),
+                        "freio_motivo": freio.motivo[:120],
+                        "recursos": (
+                            f"{recursos.nucleos} núcleos · {recursos.total_mb / 1024:.0f} GB de memória"
+                            if recursos else ""
+                        ),
+                        "atualizado_em": timezone.now(),
+                    })
+                    estado_gravado_em = time.monotonic()
                 recuperados = recuperar_envios_de_robos_parados(set(rodando))
                 if recuperados:
                     self.stdout.write(f"Envio(s) de robô parado recuperado(s): {recuperados}")

@@ -39,7 +39,8 @@
 </div>
 
 <div class="bloco">
-  <h2>Em execução agora</h2>
+  <h2>Em execução agora{% if estado_robos and estado_robos.atualizado_em %} · limite {{ estado_robos.limite_atual }} robô(s) · a máquina aguenta {{ estado_robos.capacidade_maquina }}{% endif %}</h2>
+  {% if estado_robos and estado_robos.freio_motivo %}<div class="alerta" style="font-size: 1.1vw;">⚠ Freio de segurança: robôs reduzidos para {{ estado_robos.limite_atual }} por {{ estado_robos.freio_motivo }}. Voltam sozinhos quando a memória folgar.</div>{% endif %}
   <div class="robos">
     {% for robo in robos %}<span class="robo {% if robo.trabalhando %}on{% else %}off{% endif %}">{{ robo.nome }} · {% if robo.trabalhando %}trabalhando{% else %}livre{% endif %}</span>{% endfor %}
   </div>

@@ -7,6 +7,7 @@ urlpatterns = [
     path("fila-rpa-eace/", views.fila_rpa_eace_view, name="fila_rpa_eace"),
     path("fila-tv/<str:token>/", views_fila_tv.fila_tv_view, name="fila_tv"),
     path("fila-tv/<str:token>/conteudo/", views_fila_tv.fila_tv_conteudo_view, name="fila_tv_conteudo"),
+    path("fila-tv/<str:token>/planilha/", views_fila_tv.fila_tv_planilha_view, name="fila_tv_planilha"),
     path("administrador/planilha-eace/", views.planilha_eace_view, name="planilha_eace"),
     path(
         "administrador/planilha-eace/sincronizar-todas/",

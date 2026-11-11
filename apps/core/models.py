@@ -120,3 +120,25 @@ class TravaFilaRpaEace(models.Model):
     class Meta:
         verbose_name = "Trava da fila do RPA EACE"
         verbose_name_plural = "Trava da fila do RPA EACE"
+
+
+class EstadoRobosRpaEace(models.Model):
+    """Linha única (pk=1) que o supervisor dos robôs atualiza a cada ~15 s
+    (pedido do usuário, 2026-11-11): capacidade da máquina, limite em vigor
+    (com o freio de segurança) e quantos robôs estão rodando - o painel da TV
+    e o admin leem daqui (o supervisor roda em outro container)."""
+
+    capacidade_maquina = models.PositiveIntegerField("Capacidade da máquina (robôs)", default=0)
+    limite_atual = models.PositiveIntegerField("Limite em vigor (robôs)", default=0)
+    teto_manual = models.PositiveIntegerField("Teto manual (RPA_EACE_MAX_ROBOS, 0 = automático)", default=0)
+    robos_rodando = models.PositiveIntegerField("Robôs rodando", default=0)
+    freio_motivo = models.CharField("Freio de segurança acionado por", max_length=120, blank=True)
+    recursos = models.CharField("Recursos da máquina", max_length=200, blank=True)
+    atualizado_em = models.DateTimeField("Atualizado em", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Estado dos robôs do RPA EACE"
+        verbose_name_plural = "Estado dos robôs do RPA EACE"
+
+    def __str__(self):
+        return f"{self.robos_rodando} rodando · limite {self.limite_atual} · capacidade {self.capacidade_maquina}"

@@ -1,5 +1,5 @@
 """
-Configuracoes do Gerenciador Pos-Venda (v1.3.4).
+Configuracoes do Gerenciador Pos-Venda (v1.4.0).
 
 Reaproveita o padrao de configuracao via variaveis de ambiente do
 `modulo-posVenda` original (python-decouple + .env, RNF-05), mas com banco
@@ -250,9 +250,10 @@ GRAPH_FINANCEIRO_ENABLED = config("GRAPH_FINANCEIRO_ENABLED", default=False, cas
 # `python -c "import secrets; print(secrets.token_urlsafe(24))"`.
 FILA_TV_TOKEN = config("FILA_TV_TOKEN", default="")
 
-# Teto de robôs do RPA EACE rodando ao mesmo tempo (ADR-009) - lido pelo
-# supervisor (`supervisionar_robos_rpa_eace`) e mostrado no admin.
-RPA_EACE_MAX_ROBOS = config("RPA_EACE_MAX_ROBOS", default=3, cast=int)
+# Teto MANUAL de robôs do RPA EACE ao mesmo tempo (ADR-009). 0/vazio =
+# automático: o supervisor usa a capacidade da máquina lida na hora
+# (`apps.ri.capacidade_robos`) e o freio de segurança de memória.
+RPA_EACE_MAX_ROBOS = config("RPA_EACE_MAX_ROBOS", default=0, cast=int)
 GRAPH_FINANCEIRO_CLIENT_ID = config("GRAPH_FINANCEIRO_CLIENT_ID", default="")
 GRAPH_FINANCEIRO_CLIENT_SECRET = config("GRAPH_FINANCEIRO_CLIENT_SECRET", default="")
 GRAPH_FINANCEIRO_TENANT_ID = config("GRAPH_FINANCEIRO_TENANT_ID", default="")

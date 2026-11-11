@@ -40,6 +40,25 @@ atrapalhar o outro, e com 1 robô por INEP.
   não há envio livre), com reserva condicional para 2 robôs não pegarem
   a mesma.
 
+## Emenda 2026-11-11 - capacidade automática e freio de segurança
+- **Medições em produção (2026-11-11):** cada robô chega a ~2,8 GB de memória
+  e ~2 núcleos no pico. 20 GB/12 núcleos aguentou 6 (8 levou o swap ao fim);
+  50 GB/24 núcleos com 15 robôs: memória folgada, processador saturado e
+  ~13-25% das notas refeitas por timeout do "Enviar notas".
+- **Capacidade da máquina** (`apps/ri/capacidade_robos.py`): o supervisor lê
+  memória e núcleos a cada ciclo (`/proc`) e calcula quantos robôs cabem
+  ("tranquilo"): `min((memória - 3 GB) / 2,8 GB, núcleos / 2)`. Muda sozinha
+  se a infra alterar a máquina.
+- **Teto manual** `RPA_EACE_MAX_ROBOS`: quando configurado, prevalece sobre a
+  capacidade (decisão do usuário: 15 numa máquina de capacidade 12). Vazio/0
+  = automático.
+- **Freio de segurança**: memória disponível < 2 GB (ou swap livre < 1 GB com
+  menos de 4 GB disponíveis) reduz 1 robô a cada 30 s; com mais de 4 GB
+  disponíveis volta 1 por minuto. Painel da TV e admin mostram capacidade,
+  limite em vigor e o freio (`EstadoRobosRpaEace`).
+- **Desligamento suave**: no deploy o supervisor espera até 300 s os robôs
+  terminarem a nota atual (`stop_grace_period: 330s`).
+
 ## Consequências positivas
 - Vazão proporcional ao número de robôs ativos, ajustável no admin sem
   deploy (robô novo começa em ~1 s; desativado termina o item atual e para).

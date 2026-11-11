@@ -152,7 +152,7 @@ services:
     command: >
       sh -c "sleep 15 && exec python manage.py supervisionar_robos_rpa_eace
                --intervalo ${RPA_EACE_POLL_INTERVAL_SECONDS:-5}
-               --max-robos ${RPA_EACE_MAX_ROBOS:-3}"
+               --max-robos ${RPA_EACE_MAX_ROBOS:-0}"
     depends_on:
       - db
 

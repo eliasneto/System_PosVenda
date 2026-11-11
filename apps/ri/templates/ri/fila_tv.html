@@ -40,6 +40,15 @@ mostra o aviso "sem conexão".
     border-radius: 1vw; padding: 1.4vh 1.2vw; margin-bottom: 2vh; font-size: 1.4vw; font-weight: 900;
     animation: piscar 1.6s ease-in-out infinite; }
   @keyframes piscar { 50% { border-color: transparent; } }
+  .relatorio { display: flex; gap: 0.6vw; align-items: center; font-size: 0.9vw; color: var(--suave); }
+  .relatorio input { background: var(--cartao); color: var(--texto); border: 1px solid var(--borda);
+    border-radius: 0.5vw; padding: 0.4vh 0.5vw; font-size: 0.9vw; color-scheme: dark; }
+  .relatorio button { background: var(--amarelo); color: #111; border: 0; border-radius: 0.5vw;
+    padding: 0.6vh 1vw; font-weight: 900; font-size: 0.9vw; cursor: pointer; }
+  .zoom { display: flex; gap: 0.3vw; align-items: center; margin-left: 1vw; }
+  .zoom button { background: var(--cartao); color: var(--texto); border: 1px solid var(--borda);
+    border-radius: 0.5vw; padding: 0.4vh 0.7vw; font-weight: 900; font-size: 0.9vw; cursor: pointer; min-width: 2.4vw; }
+  .zoom button:hover { border-color: var(--amarelo); }
   .numeros { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1vw; margin-bottom: 2vh; }
   .numero { background: var(--cartao); border: 1px solid var(--borda); border-radius: 1vw; padding: 1.4vh 1.2vw; }
   .numero .rotulo { font-size: 0.9vw; color: var(--suave); text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em; }
@@ -77,6 +86,19 @@ mostra o aviso "sem conexão".
 <body>
   <div class="topo">
     <h1>Fila do <span>RPA EACE</span></h1>
+    {# Pedido do usuário (2026-11-11): planilha de relatório - fora do miolo que é trocado a cada 10 s, para as datas não se apagarem. #}
+    <form class="relatorio" method="get" action="{% url 'fila_tv_planilha' token=token %}">
+      <span>Relatório:</span>
+      <label>De <input type="date" name="de"></label>
+      <label>Até <input type="date" name="ate"></label>
+      <button type="submit">⬇ Baixar planilha</button>
+      {# Zoom do próprio painel (pedido do usuário, 2026-11-11): o zoom do navegador não muda nada aqui porque os tamanhos são em vw. #}
+      <span class="zoom" title="Zoom do painel (teclas + − 0 ou Ctrl + roda do mouse)">
+        <button type="button" id="zoom-menos" aria-label="Diminuir zoom">A−</button>
+        <button type="button" id="zoom-valor" aria-label="Voltar o zoom para 100%">100%</button>
+        <button type="button" id="zoom-mais" aria-label="Aumentar zoom">A+</button>
+      </span>
+    </form>
     <div class="relogio" id="relogio">
       <span class="aviso">Sem conexão com o servidor — mostrando a última leitura · </span>
       Atualizado às <b id="hora">{{ agora|date:"H:i:s" }}</b>
@@ -108,6 +130,44 @@ mostra o aviso "sem conexão".
   // Recarrega a página inteira 1x por hora (pega mudança de layout de um
   // deploy novo sem ninguém mexer na TV).
   setTimeout(function () { window.location.reload(); }, 60 * 60 * 1000);
+
+  // Zoom do painel (pedido do usuário, 2026-11-11): 50% a 200%, guardado no
+  // navegador (sobrevive ao recarregamento de 1 em 1 hora). Usa a propriedade
+  // CSS "zoom" (Chrome/Edge/Safari/Firefox recentes); onde não existir, cai
+  // no "transform: scale" mantendo a largura da tela.
+  var CHAVE = "fila-tv-zoom", MIN = 0.5, MAX = 2, PASSO = 0.1;
+  var escala = 1;
+  try { escala = parseFloat(window.localStorage.getItem(CHAVE)) || 1; } catch (e) {}
+  var temZoom = typeof document.body.style.zoom !== "undefined" && (!window.CSS || !CSS.supports || CSS.supports("zoom", "1"));
+  function aplicar(nova) {
+    escala = Math.min(MAX, Math.max(MIN, Math.round(nova * 10) / 10));
+    if (temZoom) {
+      document.body.style.zoom = escala;
+    } else {
+      document.body.style.transformOrigin = "0 0";
+      document.body.style.transform = "scale(" + escala + ")";
+      document.body.style.width = (100 / escala) + "%";
+    }
+    document.getElementById("zoom-valor").innerHTML = Math.round(escala * 100) + "%";
+    try { window.localStorage.setItem(CHAVE, String(escala)); } catch (e) {}
+  }
+  document.getElementById("zoom-menos").onclick = function () { aplicar(escala - PASSO); };
+  document.getElementById("zoom-mais").onclick = function () { aplicar(escala + PASSO); };
+  document.getElementById("zoom-valor").onclick = function () { aplicar(1); };
+  document.addEventListener("keydown", function (ev) {
+    var alvo = ev.target && ev.target.tagName;
+    if (alvo === "INPUT" && !ev.ctrlKey) { return; }  // digitando a data do relatório
+    var tecla = ev.key;
+    if (tecla === "+" || tecla === "=") { aplicar(escala + PASSO); ev.preventDefault(); }
+    else if (tecla === "-" || tecla === "_") { aplicar(escala - PASSO); ev.preventDefault(); }
+    else if (tecla === "0") { aplicar(1); ev.preventDefault(); }
+  });
+  window.addEventListener("wheel", function (ev) {
+    if (!ev.ctrlKey) { return; }
+    ev.preventDefault();
+    aplicar(escala + (ev.deltaY < 0 ? PASSO : -PASSO));
+  }, { passive: false });
+  aplicar(escala);
 })();
 </script>
 </body>

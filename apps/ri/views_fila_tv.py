@@ -22,7 +22,7 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 
-from apps.core.models import RoboRpaEace
+from apps.core.models import EstadoRobosRpaEace, RoboRpaEace
 from apps.escolas.models import LogRpaEaceMip
 
 from .models import LogRpaEace
@@ -282,6 +282,7 @@ def contexto_fila_tv(agora=None) -> dict:
         "taxa_hora": round(100 * sucesso_hora / tentativas_hora) if tentativas_hora else None,
         "intervalo_segundos": INTERVALO_SEGUNDOS,
         "servidor": saude_servidor(),
+        "estado_robos": EstadoRobosRpaEace.objects.filter(pk=1).first(),
     }
 
 
@@ -289,6 +290,35 @@ def contexto_fila_tv(agora=None) -> dict:
 def fila_tv_view(request, token):
     _validar_token(token)
     return render(request, "ri/fila_tv.html", {**contexto_fila_tv(), "token": token})
+
+
+@never_cache
+def fila_tv_planilha_view(request, token):
+    """Pedido do usuário (2026-11-11): planilha de relatório de tudo que foi
+    processado (`relatorio_fila_tv.gerar_planilha`), com período opcional
+    `?de=AAAA-MM-DD&ate=AAAA-MM-DD`."""
+    from datetime import date
+
+    from django.http import HttpResponse
+
+    from .relatorio_fila_tv import gerar_planilha
+
+    _validar_token(token)
+
+    def _data(nome):
+        try:
+            return date.fromisoformat(request.GET.get(nome) or "")
+        except ValueError:
+            return None
+
+    de, ate = _data("de"), _data("ate")
+    nome = f"relatorio_rpa_eace_{timezone.localtime().strftime('%Y%m%d_%H%M')}.xlsx"
+    resposta = HttpResponse(
+        gerar_planilha(de, ate),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    resposta["Content-Disposition"] = f'attachment; filename="{nome}"'
+    return resposta
 
 
 @never_cache

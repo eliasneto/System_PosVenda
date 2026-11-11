@@ -165,3 +165,60 @@ class SaudeServidorTests(TestCase):
         from apps.ri.views_fila_tv import saude_servidor
 
         self.assertIsNone(saude_servidor("/nao/existe/meminfo", "/nao/existe/stat"))
+
+
+@override_settings(FILA_TV_TOKEN=TOKEN)
+class PlanilhaFilaTvTests(TestCase):
+
+    def setUp(self):
+        robo = RoboRpaEace.objects.create(nome="Robô 2", usuario="r@t", senha="x")
+        ri = Ri.objects.create(escola=Escola.objects.create(inep="11000004", nome="ESCOLA PLANILHA"))
+        agora = timezone.now()
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.SUCESSO, executado_em=agora, robo=robo, valor_pdf="1,00")
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.ATENCAO, executado_em=agora,
+                                  motivo_erro="documento_ja_enviado")
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.SUCESSO,
+                                  executado_em=agora - timezone.timedelta(days=10))
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.NA_FILA, enfileirado_em=agora)  # não processado
+
+    def _abrir(self, **params):
+        from io import BytesIO
+
+        import openpyxl
+
+        resp = self.client.get(reverse("fila_tv_planilha", args=[TOKEN]), params)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("attachment", resp["Content-Disposition"])
+        return openpyxl.load_workbook(BytesIO(resp.content))
+
+    def test_abas_e_conteudo_sem_login(self):
+        livro = self._abrir()
+        self.assertEqual(livro.sheetnames, ["Resumo", "Robôs", "Notas RI", "Envios MIP"])
+        notas = list(livro["Notas RI"].iter_rows(values_only=True))
+        self.assertEqual(len(notas), 1 + 3)  # cabeçalho + 3 processados (o "Na fila" não entra)
+        self.assertIn("11000004", [linha[1] for linha in notas])
+        robos = {linha[0]: linha for linha in livro["Robôs"].iter_rows(min_row=2, values_only=True)}
+        self.assertEqual(robos["Robô 2"][1], 1)
+        self.assertEqual(robos["Robô padrão (.env)"][1], 2)
+
+    def test_filtro_por_periodo(self):
+        hoje = timezone.localdate().isoformat()
+        notas = list(self._abrir(de=hoje, ate=hoje)["Notas RI"].iter_rows(min_row=2, values_only=True))
+        self.assertEqual(len(notas), 2)
+
+    def test_codigo_errado_404(self):
+        self.assertEqual(self.client.get(reverse("fila_tv_planilha", args=["errado"])).status_code, 404)
+
+    def test_botao_no_painel(self):
+        resp = self.client.get(reverse("fila_tv", args=[TOKEN]))
+        self.assertContains(resp, reverse("fila_tv_planilha", args=[TOKEN]))
+        self.assertContains(resp, "Baixar planilha")
+
+
+@override_settings(FILA_TV_TOKEN=TOKEN)
+class ZoomFilaTvTests(TestCase):
+
+    def test_botoes_de_zoom_no_painel(self):
+        resp = self.client.get(reverse("fila_tv", args=[TOKEN]))
+        for item in ('id="zoom-menos"', 'id="zoom-mais"', 'id="zoom-valor"', "fila-tv-zoom"):
+            self.assertContains(resp, item)
