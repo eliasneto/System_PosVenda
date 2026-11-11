@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Fila do RPA EACE | Painel</title>
+{% comment %}
+Painel da fila para TV (pedido do usuário, 2026-11-11) - sem login, sem
+links para dentro do sistema, sem bibliotecas externas (CSS e JS aqui
+mesmo, em ES5, para abrir em navegador de Smart TV). A cada
+{{ intervalo_segundos }} s busca só o conteúdo (`fila_tv_conteudo`) e troca
+o miolo da página; se o servidor não responder, mantém o último conteúdo e
+mostra o aviso "sem conexão".
+{% endcomment %}
+<style>
+  :root {
+    --fundo: #0b1220; --cartao: #131c2e; --borda: #22304a; --texto: #e6ebf5;
+    --suave: #8a97b0; --amarelo: #f5c518; --verde: #22c55e; --vermelho: #ef4444;
+    --roxo: #8b5cf6; --azul: #38bdf8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--fundo); color: var(--texto);
+    font-family: "Segoe UI", Roboto, Arial, sans-serif; }
+  body { padding: 2vh 2vw; min-height: 100vh; }
+  .topo { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2vh; }
+  .topo h1 { margin: 0; font-size: 2.4vw; font-weight: 900; text-transform: uppercase; letter-spacing: -0.02em; }
+  .topo h1 span { color: var(--amarelo); }
+  .relogio { font-size: 1.1vw; color: var(--suave); text-align: right; }
+  .relogio b { color: var(--texto); font-size: 1.6vw; }
+  .aviso { display: none; color: var(--vermelho); font-weight: 800; }
+  .sem-conexao .aviso { display: inline; }
+  .numeros { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1vw; margin-bottom: 2vh; }
+  .numero { background: var(--cartao); border: 1px solid var(--borda); border-radius: 1vw; padding: 1.4vh 1.2vw; }
+  .numero .rotulo { font-size: 0.9vw; color: var(--suave); text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em; }
+  .numero .valor { font-size: 3.2vw; font-weight: 900; line-height: 1.1; }
+  .numero .detalhe { font-size: 0.85vw; color: var(--suave); }
+  .amarelo { color: var(--amarelo); } .verde { color: var(--verde); } .vermelho { color: var(--vermelho); } .roxo { color: var(--roxo); }
+  .bloco { background: var(--cartao); border: 1px solid var(--borda); border-radius: 1vw; padding: 1.6vh 1.2vw; margin-bottom: 2vh; }
+  .bloco h2 { margin: 0 0 1.2vh; font-size: 1.1vw; text-transform: uppercase; color: var(--suave); letter-spacing: 0.06em; }
+  .robos { display: flex; flex-wrap: wrap; gap: 0.8vw; margin-bottom: 1.4vh; }
+  .robo { font-size: 0.95vw; font-weight: 800; padding: 0.5vh 0.9vw; border-radius: 99px; border: 1px solid var(--borda); }
+  .robo.on { background: rgba(139, 92, 246, 0.18); border-color: var(--roxo); }
+  .robo.off { color: var(--suave); }
+  .em-execucao { display: grid; grid-template-columns: repeat(auto-fit, minmax(28vw, 1fr)); gap: 1vw; }
+  .exec { border: 1px solid var(--roxo); border-radius: 0.8vw; padding: 1.4vh 1vw; background: rgba(139, 92, 246, 0.07); }
+  .exec .linha1 { display: flex; justify-content: space-between; font-size: 1vw; color: var(--suave); font-weight: 700; }
+  .exec .inep { font-size: 1.9vw; font-weight: 900; margin: 0.4vh 0 0.2vh; }
+  .exec .nome { font-size: 1vw; color: var(--suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .barra { height: 1.6vh; background: #1f2a40; border-radius: 99px; overflow: hidden; margin: 1.2vh 0 0.6vh; }
+  .barra div { height: 100%; background: linear-gradient(90deg, var(--roxo), var(--azul)); transition: width 1s ease; }
+  .exec .etapa { font-size: 1vw; font-weight: 700; }
+  .vazio { color: var(--suave); font-size: 1.1vw; padding: 1vh 0; }
+  .colunas { display: grid; grid-template-columns: 1fr 1fr; gap: 1vw; }
+  table { width: 100%; border-collapse: collapse; font-size: 1vw; }
+  td { padding: 0.9vh 0.5vw; border-top: 1px solid var(--borda); white-space: nowrap; }
+  td.nome { max-width: 16vw; overflow: hidden; text-overflow: ellipsis; color: var(--suave); }
+  .etiqueta { font-size: 0.8vw; font-weight: 900; padding: 0.2vh 0.6vw; border-radius: 99px; }
+  .etq-ri { background: rgba(56, 189, 248, 0.15); color: var(--azul); }
+  .etq-mip { background: rgba(245, 197, 24, 0.15); color: var(--amarelo); }
+  .st-sucesso { color: var(--verde); font-weight: 900; }
+  .st-erro { color: var(--vermelho); font-weight: 900; }
+  .st-repete { color: var(--amarelo); font-weight: 900; }
+  .motivo { color: var(--suave); font-size: 0.85vw; }
+</style>
+</head>
+<body>
+  <div class="topo">
+    <h1>Fila do <span>RPA EACE</span></h1>
+    <div class="relogio" id="relogio">
+      <span class="aviso">Sem conexão com o servidor — mostrando a última leitura · </span>
+      Atualizado às <b id="hora">{{ agora|date:"H:i:s" }}</b>
+    </div>
+  </div>
+  <div id="conteudo">{% include "ri/_fila_tv_conteudo.html" %}</div>
+<script>
+(function () {
+  var url = "{% url 'fila_tv_conteudo' token=token %}";
+  var relogio = document.getElementById("relogio");
+  function atualizar() {
+    var req = new XMLHttpRequest();
+    req.open("GET", url + "?t=" + new Date().getTime(), true);
+    req.timeout = 8000;
+    req.onload = function () {
+      if (req.status === 200) {
+        document.getElementById("conteudo").innerHTML = req.responseText;
+        var hora = document.getElementById("hora-servidor");
+        if (hora) { document.getElementById("hora").innerHTML = hora.getAttribute("data-hora"); }
+        relogio.className = "relogio";
+      } else {
+        relogio.className = "relogio sem-conexao";
+      }
+    };
+    req.onerror = req.ontimeout = function () { relogio.className = "relogio sem-conexao"; };
+    req.send();
+  }
+  setInterval(atualizar, {{ intervalo_segundos }} * 1000);
+  // Recarrega a página inteira 1x por hora (pega mudança de layout de um
+  // deploy novo sem ninguém mexer na TV).
+  setTimeout(function () { window.location.reload(); }, 60 * 60 * 1000);
+})();
+</script>
+</body>
+</html>

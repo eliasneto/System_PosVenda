@@ -1,5 +1,5 @@
 """
-Configuracoes do Gerenciador Pos-Venda (v1.3.0).
+Configuracoes do Gerenciador Pos-Venda (v1.3.1).
 
 Reaproveita o padrao de configuracao via variaveis de ambiente do
 `modulo-posVenda` original (python-decouple + .env, RNF-05), mas com banco
@@ -243,6 +243,16 @@ DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="posvendas@megainfraes
 # modulo-posVenda; usar as duas juntas violaria a independência entre os
 # dois sistemas, decisão confirmada pelo usuário).
 GRAPH_FINANCEIRO_ENABLED = config("GRAPH_FINANCEIRO_ENABLED", default=False, cast=bool)
+
+# Painel da fila do RPA EACE para TV (pedido do usuário, 2026-11-11): link
+# sem login, protegido só por este código aleatório no endereço
+# (/fila-tv/<FILA_TV_TOKEN>/). Vazio = painel desligado (404). Gerar com
+# `python -c "import secrets; print(secrets.token_urlsafe(24))"`.
+FILA_TV_TOKEN = config("FILA_TV_TOKEN", default="")
+
+# Teto de robôs do RPA EACE rodando ao mesmo tempo (ADR-009) - lido pelo
+# supervisor (`supervisionar_robos_rpa_eace`) e mostrado no admin.
+RPA_EACE_MAX_ROBOS = config("RPA_EACE_MAX_ROBOS", default=3, cast=int)
 GRAPH_FINANCEIRO_CLIENT_ID = config("GRAPH_FINANCEIRO_CLIENT_ID", default="")
 GRAPH_FINANCEIRO_CLIENT_SECRET = config("GRAPH_FINANCEIRO_CLIENT_SECRET", default="")
 GRAPH_FINANCEIRO_TENANT_ID = config("GRAPH_FINANCEIRO_TENANT_ID", default="")

@@ -1486,6 +1486,11 @@ def fila_rpa_eace_view(request):
             # log próprio) - seção "MIP" abaixo da tabela do RI, mesmos
             # filtros, paginação própria (`?page_mip=`); totais somam os 2.
             "page_mip": page_mip,
+            # Painel para TV (pedido do usuário, 2026-11-11) - botão só
+            # aparece com FILA_TV_TOKEN configurado.
+            "fila_tv_url": (
+                reverse("fila_tv", kwargs={"token": settings.FILA_TV_TOKEN}) if settings.FILA_TV_TOKEN else ""
+            ),
             "total_na_fila": LogRpaEace.objects.filter(resultado=LogRpaEace.NA_FILA).count()
             + LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count(),
             "total_processando": LogRpaEace.objects.filter(resultado=LogRpaEace.PROCESSANDO).count()

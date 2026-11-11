@@ -51,6 +51,8 @@ services:
       - AD_BIND_PASSWORD=${AD_BIND_PASSWORD}
       - AD_USER_SEARCH_BASE=${AD_USER_SEARCH_BASE}
       - AD_DEFAULT_DOMAIN=${AD_DEFAULT_DOMAIN}
+      # Painel da fila para TV (/fila-tv/<token>/, sem login) - vazio = desligado.
+      - FILA_TV_TOKEN=${FILA_TV_TOKEN}
     ports:
       - "8000:8000"
     volumes:

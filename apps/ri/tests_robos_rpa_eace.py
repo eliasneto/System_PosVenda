@@ -189,3 +189,23 @@ class AdminRoboFormTests(TestCase):
         form = RoboRpaEaceForm(data={"nome": "Robô 1", "usuario": "r@t", "senha": "", "ativo": "on"})
         self.assertFalse(form.is_valid())
         self.assertIn("senha", form.errors)
+
+
+class AdminClonarRoboTests(TestCase):
+
+    def test_clona_com_o_mesmo_login_e_nasce_inativo(self):
+        from apps.core.models import User
+
+        admin_user = User.objects.create_superuser(username="adm", password="senha-teste-123", email="a@a.com")
+        robo = RoboRpaEace.objects.create(nome="Robô 1", usuario="r@t", senha="segredo")
+        RoboRpaEace.objects.create(nome="Robô 2", usuario="r@t", senha="segredo")
+        self.client.force_login(admin_user)
+        resp = self.client.post(
+            "/admin/core/roborpaeace/",
+            {"action": "clonar_robos", "_selected_action": [robo.pk]},
+            follow=True,
+        )
+        self.assertEqual(resp.status_code, 200)
+        copia = RoboRpaEace.objects.get(nome="Robô 3")
+        self.assertEqual((copia.usuario, copia.senha, copia.ativo), ("r@t", "segredo", False))
+        self.assertContains(resp, "Robô 3")

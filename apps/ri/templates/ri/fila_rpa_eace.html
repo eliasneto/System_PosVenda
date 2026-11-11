@@ -26,10 +26,16 @@ lista inteira de logs.
         <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
             Fila
         </h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal no portal EACE, RN-058) — RI e MIP (LOTE), 1 robô por INEP</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal no portal EACE, RN-058) — RI e MIP (LOTE), 1 robô por INEP · atualiza sozinha a cada 10 s</p>
     </div>
 
-    <div class="flex gap-4">
+    <div id="fila-totais" class="flex gap-4 items-stretch">
+        {% if fila_tv_url %}
+        <a href="{{ fila_tv_url }}" target="_blank" rel="noopener" title="Painel para TV (abre sem login) - copie o endereço da nova aba"
+           class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 px-4 py-3 rounded-2xl shadow-sm text-gray-500 dark:text-gray-400 hover:text-pv-yellow flex items-center gap-2 text-[10px] font-black uppercase">
+            <i data-lucide="tv" class="w-5 h-5"></i> Modo TV
+        </a>
+        {% endif %}
         <div class="bg-pv-black px-6 py-3 rounded-2xl shadow-lg text-white">
             <p class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1">Na fila</p>
             <p class="text-xl font-black italic text-pv-yellow">{{ total_na_fila }}</p>
@@ -83,6 +89,14 @@ lista inteira de logs.
     {% endif %}
 </form>
 
+<!-- Pedido do usuário (2026-11-11): a barra de progresso só mudava com
+     F5. A cada 10 s o HTMX busca a própria página (mesmos filtros e
+     página, `request.get_full_path`) e troca só as tabelas
+     (`hx-select`) e os contadores do topo (`hx-select-oob`) - o filtro
+     que estiver sendo digitado não é apagado. -->
+<div id="fila-conteudo"
+     hx-get="{{ request.get_full_path }}" hx-trigger="every 10s"
+     hx-select="#fila-conteudo" hx-select-oob="#fila-totais" hx-swap="outerHTML">
 <div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
     <div class="overflow-x-auto contain-layout">
         <table class="min-w-full text-left border-collapse">
@@ -289,5 +303,6 @@ lista inteira de logs.
         </div>
     </div>
     {% endif %}
+</div>
 </div>
 {% endblock %}

@@ -1,4 +1,5 @@
 from django import forms
+from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
@@ -44,7 +45,28 @@ class RoboRpaEaceAdmin(admin.ModelAdmin):
     o login do .env. Robô que já trabalhou não pode ser excluído - desative."""
 
     form = RoboRpaEaceForm
+    actions = ["clonar_robos"]
     list_display = ("nome", "usuario", "ativo", "atualizado_em")
     list_editable = ("ativo",)
     list_filter = ("ativo",)
     search_fields = ("nome", "usuario")
+
+    @admin.action(description="Clonar robôs selecionados (mesmo usuário e senha)")
+    def clonar_robos(self, request, queryset):
+        """Pedido do usuário (2026-11-11): criar mais robôs sem digitar
+        usuário e senha de novo. Cada cópia ganha o próximo nome livre
+        "Robô N" e nasce INATIVA - ativar na própria lista (coluna Ativo)."""
+        criados = []
+        for robo in queryset.order_by("pk"):
+            numero = RoboRpaEace.objects.count() + 1
+            while RoboRpaEace.objects.filter(nome=f"Robô {numero}").exists():
+                numero += 1
+            copia = RoboRpaEace.objects.create(
+                nome=f"Robô {numero}", usuario=robo.usuario, senha=robo.senha, ativo=False,
+            )
+            criados.append(copia.nome)
+        self.message_user(
+            request,
+            f"Criado(s): {', '.join(criados)} - inativo(s). Marque \"Ativo\" na lista para começar a rodar "
+            f"(no máximo {settings.RPA_EACE_MAX_ROBOS} robôs rodam ao mesmo tempo; os demais ficam esperando).",
+        )

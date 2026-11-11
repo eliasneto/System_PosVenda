@@ -9,7 +9,10 @@ from django.urls import Resolver404, resolve
 # `/admin/` do Django (ferramenta do superusuário, já isolada por
 # permissão própria — `is_staff`); esses ficam de fora por nome de rota ou
 # prefixo de caminho, verificados antes de resolver a view.
-_URL_NAMES_ISENTOS = {"login", "logout"}
+# "fila_tv"/"fila_tv_conteudo": painel da fila para TV, sem login - abre
+# igual para qualquer um que tenha o link (inclusive usuário logado como
+# Visualizador ou sem acesso liberado no mesmo navegador).
+_URL_NAMES_ISENTOS = {"login", "logout", "fila_tv", "fila_tv_conteudo"}
 _PREFIXOS_ISENTOS = ("/admin/", "/static/", "/media/")
 
 

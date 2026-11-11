@@ -1,0 +1,79 @@
+{% comment %}Miolo do painel da TV (`views_fila_tv`) - trocado a cada 10 s.{% endcomment %}
+<span id="hora-servidor" data-hora="{{ agora|date:'H:i:s' }}" hidden></span>
+
+<div class="numeros">
+  <div class="numero"><div class="rotulo">Na fila</div><div class="valor amarelo">{{ total_na_fila }}</div><div class="detalhe">aguardando a vez</div></div>
+  <div class="numero"><div class="rotulo">Processando</div><div class="valor roxo">{{ total_processando }}</div><div class="detalhe">agora</div></div>
+  <div class="numero"><div class="rotulo">Enviadas hoje</div><div class="valor verde">{{ sucesso_hoje }}</div><div class="detalhe">com sucesso</div></div>
+  <div class="numero"><div class="rotulo">Com erro hoje</div><div class="valor vermelho">{{ erro_hoje }}</div><div class="detalhe">precisam de alguém</div></div>
+  <div class="numero"><div class="rotulo">Última hora</div>
+    <div class="valor {% if taxa_hora is None %}{% elif taxa_hora >= 80 %}verde{% elif taxa_hora >= 50 %}amarelo{% else %}vermelho{% endif %}">{% if taxa_hora is None %}—{% else %}{{ taxa_hora }}%{% endif %}</div>
+    <div class="detalhe">{{ sucesso_hora }} ok · {{ falha_hora }} falha(s)</div></div>
+</div>
+
+<div class="bloco">
+  <h2>Em execução agora</h2>
+  <div class="robos">
+    {% for robo in robos %}<span class="robo {% if robo.trabalhando %}on{% else %}off{% endif %}">{{ robo.nome }} · {% if robo.trabalhando %}trabalhando{% else %}livre{% endif %}</span>{% endfor %}
+  </div>
+  {% if processando %}
+  <div class="em-execucao">
+    {% for item in processando %}
+    <div class="exec">
+      <div class="linha1"><span>{% if item.log.robo %}{{ item.log.robo.nome }}{% else %}Robô padrão{% endif %}</span><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></div>
+      <div class="inep">{{ item.inep }}</div>
+      <div class="nome">{{ item.nome }}{% if item.nota %} · {{ item.nota }}{% endif %}</div>
+      <div class="barra"><div style="width: {{ item.log.progresso_pct }}%"></div></div>
+      <div class="etapa">{{ item.log.progresso_pct }}%{% if item.log.etapa_atual %} — {{ item.log.etapa_atual }}{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="vazio">Nenhuma nota sendo enviada neste momento.</div>
+  {% endif %}
+</div>
+
+<div class="colunas">
+  <div class="bloco">
+    <h2>Próximas da fila</h2>
+    {% if proximos %}
+    <table>
+      {% for item in proximos %}
+      <tr>
+        <td>{{ forloop.counter }}º</td>
+        <td><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></td>
+        <td><b>{{ item.inep }}</b></td>
+        <td class="nome">{{ item.nome }}</td>
+        <td>{% if item.log.tentativas %}<span class="st-repete">nova tentativa</span>{% else %}{{ item.log.enfileirado_em|date:"d/m H:i" }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div class="vazio">Fila vazia.</div>
+    {% endif %}
+  </div>
+
+  <div class="bloco">
+    <h2>Últimas execuções</h2>
+    {% if ultimos %}
+    <table>
+      {% for item in ultimos %}
+      <tr>
+        <td>{{ item.log.executado_em|date:"H:i" }}</td>
+        <td><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></td>
+        <td><b>{{ item.inep }}</b></td>
+        <td>
+          {% if item.log.resultado == 'sucesso' %}<span class="st-sucesso">Enviada</span>
+          {% elif item.log.resultado == 'erro' %}<span class="st-erro">Erro</span>
+          {% else %}<span class="st-repete">Vai tentar de novo</span>{% endif %}
+          {% if item.log.resultado != 'sucesso' and item.log.motivo_erro %}<div class="motivo">{{ item.log.motivo_erro_legivel|truncatechars:60 }}</div>{% endif %}
+        </td>
+        <td>{% if item.log.robo %}{{ item.log.robo.nome }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div class="vazio">Nenhuma execução ainda.</div>
+    {% endif %}
+  </div>
+</div>

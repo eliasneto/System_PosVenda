@@ -32,7 +32,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             "--max-robos", type=int,
-            default=env("RPA_EACE_MAX_ROBOS", default=3, cast=int),
+            default=settings.RPA_EACE_MAX_ROBOS,
             help="Teto de robôs rodando ao mesmo tempo (cada um abre um Chromium de ~2,5 GB); padrão 3.",
         )
         parser.add_argument(
