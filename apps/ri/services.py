@@ -2674,6 +2674,11 @@ def executar_log_rpa_eace(log):
     if resultado_rpa is not None and resultado_rpa.sucesso:
         log.resultado = LogRpaEace.SUCESSO
         log.motivo_erro = ""
+    elif motivo == "documento_ja_enviado":
+        # Pedido do usuário (2026-11-11): NF já está no portal - "Atenção",
+        # não "Erro" (conta como enviada para o avanço do RI, RN-056).
+        log.resultado = LogRpaEace.ATENCAO
+        log.motivo_erro = motivo
     else:
         erro_de_regra_de_negocio = motivo in MOTIVOS_REGRA_DE_NEGOCIO
         if not erro_de_regra_de_negocio and log.tentativas < 2:
@@ -2692,7 +2697,7 @@ def executar_log_rpa_eace(log):
     log.save()
     _registrar_execucao_rpa_eace(log)
 
-    if log.resultado == LogRpaEace.SUCESSO:
+    if log.resultado in LogRpaEace.RESULTADOS_ENVIADOS:
         _avancar_status_se_todos_os_logs_sucesso(ri)
 
     return {"log_id": log.pk, "resultado": log.resultado, "motivo": log.motivo_erro}
@@ -2702,7 +2707,7 @@ def rpa_eace_concluida(ri):
     """RN-056: todas as Notas Fiscais da RPA EACE do RI terminaram — ao
     menos 1 "Sucesso" e nenhum log fora de "Sucesso"/"Cancelado"."""
     return (
-        ri.logs_rpa_eace.filter(resultado=LogRpaEace.SUCESSO).exists()
+        ri.logs_rpa_eace.filter(resultado__in=LogRpaEace.RESULTADOS_ENVIADOS).exists()
         and not ri.logs_rpa_eace.exclude(resultado__in=LogRpaEace.RESULTADOS_IGNORADOS_NO_AVANCO).exists()
     )
 

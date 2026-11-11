@@ -209,3 +209,36 @@ class AdminClonarRoboTests(TestCase):
         copia = RoboRpaEace.objects.get(nome="Robô 3")
         self.assertEqual((copia.usuario, copia.senha, copia.ativo), ("r@t", "segredo", False))
         self.assertContains(resp, "Robô 3")
+
+
+class AtencaoNfJaNoPortalTests(BaseRobos):
+    """Pedido do usuário (2026-11-11): NF já no portal é "Atenção", não
+    "Erro", e libera o avanço do RI (RN-056)."""
+
+    def test_documento_ja_enviado_vira_atencao_e_libera_o_ri(self):
+        from unittest.mock import MagicMock
+
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.integracoes.eace.rpa import ResultadoRpaEace
+        from apps.ri.models import Documento, RiItemRelatorioEace
+        from apps.ri.services import executar_log_rpa_eace
+
+        log = self._log_ri("11000009", resultado=LogRpaEace.PROCESSANDO)
+        ri = log.ri
+        ri.status = Ri.AGUARDANDO_ANEXO_PORTAL_EACE
+        ri.save()
+        RiItemRelatorioEace.objects.create(ri=ri, descricao_item="Kit", quantidade=1, valor_unitario=1, num_osp="3929")
+        log.documento_pdf = Documento.objects.create(
+            ri=ri, tipo=Documento.NOTA_FISCAL_PDF, arquivo=SimpleUploadedFile("nota.pdf", b"%PDF"))
+        log.documento_xml = Documento.objects.create(
+            ri=ri, tipo=Documento.XML, arquivo=SimpleUploadedFile("nota.xml", b"<nfe/>"))
+        log.save()
+        resultado = ResultadoRpaEace(sucesso=False, motivo="documento_ja_enviado", dados_pdf={"inep": "11000009"})
+        with patch("apps.integracoes.eace.rpa.anexar_nota_fiscal", return_value=resultado):
+            executar_log_rpa_eace(log)
+        log.refresh_from_db()
+        ri.refresh_from_db()
+        self.assertEqual(log.resultado, LogRpaEace.ATENCAO)
+        self.assertEqual(log.motivo_erro, "documento_ja_enviado")
+        self.assertEqual(ri.status, Ri.FATURAMENTO_RI_CONCLUIDO)

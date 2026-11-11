@@ -381,6 +381,10 @@ def executar_envio_mip(log: LogRpaEaceMip) -> dict:
         log.resultado = LogRpaEaceMip.SUCESSO
         log.motivo_erro = ""
         log.progresso_pct = 100
+    elif motivo == "documento_ja_enviado" and log.status_portal:
+        # Pedido do usuário (2026-11-11): NF já no portal é "Atenção".
+        log.resultado = LogRpaEaceMip.ATENCAO
+        log.motivo_erro = motivo
     elif motivo == "nota_fiscal_ausente" or motivo in MOTIVOS_REGRA_DE_NEGOCIO_MIP or log.tentativas >= 2:
         log.resultado = LogRpaEaceMip.ERRO
         log.motivo_erro = motivo or "erro_inesperado"
@@ -425,6 +429,6 @@ def logs_mip_para_fila(status_filtro: str, inep_filtro: str = "", data_processam
                 output_field=IntegerField(),
             )
         ).order_by("prioridade", "enfileirado_em")
-    if status_filtro in (LogRpaEaceMip.SUCESSO, LogRpaEaceMip.ERRO):
+    if status_filtro in (LogRpaEaceMip.SUCESSO, LogRpaEaceMip.ATENCAO, LogRpaEaceMip.ERRO):
         return qs.order_by("-executado_em", "-criado_em")
     return qs.order_by("enfileirado_em")

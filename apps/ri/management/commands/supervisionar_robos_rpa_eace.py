@@ -36,6 +36,10 @@ class Command(BaseCommand):
             help="Teto de robôs rodando ao mesmo tempo (cada um abre um Chromium de ~2,5 GB); padrão 3.",
         )
         parser.add_argument(
+            "--espera-desligar", type=float, default=300,
+            help="Ao receber SIGTERM, segundos esperando os robôs terminarem a nota atual (padrão 300).",
+        )
+        parser.add_argument(
             "--intervalo", type=float,
             default=env("RPA_EACE_POLL_INTERVAL_SECONDS", default=5, cast=float),
             help="Segundos entre 2 passadas do mesmo robô (padrão 5).",
@@ -88,6 +92,24 @@ class Command(BaseCommand):
                 rodando[chave] = subprocess.Popen(comando)
             time.sleep(1)
 
+        # Desligamento suave (pedido do usuário, 2026-11-11 - deploy não pode
+        # quebrar o processamento): o `docker compose stop/up` manda SIGTERM
+        # só para este processo (PID 1); os robôs seguem até terminar a nota
+        # atual e nenhum novo é iniciado. Só depois de `--espera-desligar`
+        # segundos (o `stop_grace_period` do compose precisa ser maior) os
+        # que sobrarem são encerrados - a nota deles volta para a fila na
+        # próxima subida (recuperação de interrompidos, RN-058).
+        if rodando:
+            self.stdout.write(
+                f"Desligando: aguardando {len(rodando)} robô(s) terminarem a nota atual "
+                f"(até {options['espera_desligar']:.0f} s)..."
+            )
+        limite = time.monotonic() + options["espera_desligar"]
+        while rodando and time.monotonic() < limite:
+            for chave, processo in list(rodando.items()):
+                if processo.poll() is not None:
+                    del rodando[chave]
+            time.sleep(1)
         for processo in rodando.values():
             processo.terminate()
         for processo in rodando.values():

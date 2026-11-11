@@ -979,7 +979,7 @@ def ri_log_rpa_eace_disparar_view(request, pk):
 
     if request.method == "POST" and _ri_somente_administrador(ri, request.user):
         messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
-    elif request.method == "POST" and log.resultado == LogRpaEace.SUCESSO:
+    elif request.method == "POST" and log.resultado in LogRpaEace.RESULTADOS_ENVIADOS:
         # Pedido do usuário (2026-09-03): depois de "Sucesso" os dados não
         # podem mais ser editados/reenviados - o template já esconde o
         # formulário nesse caso (`_logs_rpa_eace_detail.html`), isso aqui é
@@ -1071,7 +1071,7 @@ def ri_log_rpa_eace_marcar_manual_view(request, pk):
     if request.method == "POST" and _ri_somente_administrador(ri, request.user):
         messages.error(request, MENSAGEM_RI_SOMENTE_ADMINISTRADOR)
     elif request.method == "POST":
-        if log.resultado in (LogRpaEace.SUCESSO, LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO):
+        if log.resultado in (LogRpaEace.SUCESSO, LogRpaEace.ATENCAO, LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO):
             messages.error(
                 request,
                 "Esta Nota Fiscal não pode ser marcada como manual neste estado "
@@ -1375,6 +1375,7 @@ STATUS_FILTRO_FILA_RPA_EACE_CHOICES = [
     (LogRpaEace.NA_FILA, "Na fila"),
     (LogRpaEace.PROCESSANDO, "Processando"),
     (LogRpaEace.SUCESSO, "Processado"),
+    (LogRpaEace.ATENCAO, "Atenção (NF já estava no portal)"),
     (LogRpaEace.ERRO, "Erro"),
     (STATUS_FILTRO_FILA_RPA_EACE_TODOS, "Todos"),
 ]
@@ -1427,7 +1428,9 @@ def fila_rpa_eace_view(request):
     qs = LogRpaEace.objects.select_related("ri", "ri__escola", "documento_pdf", "robo")
 
     if status_filtro == STATUS_FILTRO_FILA_RPA_EACE_TODOS:
-        qs = qs.filter(resultado__in=(LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO, LogRpaEace.SUCESSO, LogRpaEace.ERRO))
+        qs = qs.filter(resultado__in=(
+            LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO, LogRpaEace.SUCESSO, LogRpaEace.ATENCAO, LogRpaEace.ERRO,
+        ))
     elif status_filtro == STATUS_FILTRO_FILA_RPA_EACE_ANDAMENTO:
         qs = qs.filter(resultado__in=(LogRpaEace.NA_FILA, LogRpaEace.PROCESSANDO))
     else:
@@ -1455,7 +1458,7 @@ def fila_rpa_eace_view(request):
                 output_field=IntegerField(),
             )
         ).order_by("prioridade", "enfileirado_em", "criado_em")
-    elif status_filtro in (LogRpaEace.SUCESSO, LogRpaEace.ERRO):
+    elif status_filtro in (LogRpaEace.SUCESSO, LogRpaEace.ATENCAO, LogRpaEace.ERRO):
         qs = qs.order_by("-executado_em", "-criado_em")
     else:
         qs = qs.order_by("enfileirado_em", "criado_em")

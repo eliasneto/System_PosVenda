@@ -685,17 +685,24 @@ class LogRpaEace(models.Model):
     # enviada pelo financeiro — log "Pendente"/"Erro" pode ser cancelado
     # (com motivo) e deixa de contar para o avanço do RI (RN-056/RN-099).
     CANCELADO = "cancelado"
+    # Pedido do usuário (2026-11-11): a NF já estava enviada no portal
+    # (linha não está mais "Pendente") não é erro, é "Atenção" - conta como
+    # enviada para o avanço do RI, mas fica destacada para alguém conferir.
+    ATENCAO = "atencao"
     RESULTADO_CHOICES = [
         (PENDENTE, "Pendente"),
         (NA_FILA, "Na fila"),
         (PROCESSANDO, "Processando"),
         (SUCESSO, "Sucesso"),
+        (ATENCAO, "Atenção"),
         (ERRO, "Erro"),
         (CANCELADO, "Cancelado"),
     ]
+    # NF que está no portal (enviada pelo robô ou já estava lá).
+    RESULTADOS_ENVIADOS = (SUCESSO, ATENCAO)
     # Resultados que não seguram o avanço do RI (RN-056/RN-099): "Sucesso"
-    # libera e "Cancelado" é ignorado.
-    RESULTADOS_IGNORADOS_NO_AVANCO = (SUCESSO, CANCELADO)
+    # e "Atenção" liberam e "Cancelado" é ignorado.
+    RESULTADOS_IGNORADOS_NO_AVANCO = (SUCESSO, ATENCAO, CANCELADO)
 
     ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="logs_rpa_eace")
     documento_pdf = models.ForeignKey(
@@ -778,7 +785,7 @@ class LogRpaEace(models.Model):
         "osp_nao_encontrada": "A OSP não foi encontrada no portal EACE.",
         "inep_nao_encontrado": "O INEP não aparece no grid da OSP no portal (pode já ter sido enviado).",
         "indice_invalido": "Linha da Nota Fiscal fora do grid do INEP no portal.",
-        "documento_ja_enviado": "A linha no portal não está mais \"Pendente\" (NF já enviada).",
+        "documento_ja_enviado": "A NF já estava enviada no portal EACE (a linha não está mais \"Pendente\") - confira no portal.",
         "valor_divergente": "O valor da Nota Fiscal é diferente do valor da linha no portal.",
         "valor_ambiguo": "Mais de uma linha pendente do INEP tem o mesmo valor da NF — resolver manualmente.",
         "credenciais_ausentes": "Usuário/senha do portal EACE não configurados.",

@@ -472,6 +472,59 @@ class AnexarNotaFiscalValidacaoContraOPortalTests(SimpleTestCase):
         self.assertEqual(resultado.valor_portal, "22.644,43")
         mock_upload.assert_called_once()
 
+    def _portal_ate_o_grid(self, linhas, enviar_notas=True):
+        """Patches de todo o caminho até o grid, com `extrair_dados_grid`
+        devolvendo `linhas` (lista ou side_effect)."""
+        grid = {"side_effect": linhas} if linhas and isinstance(linhas[0], list) else {"return_value": linhas}
+        return [
+            patch("playwright.sync_api.sync_playwright", return_value=self._mock_sync_playwright()),
+            patch("apps.integracoes.eace.login.fazer_login", return_value=True),
+            patch("apps.integracoes.eace.login.selecionar_perfil_fornecedor", return_value=True),
+            patch("apps.integracoes.eace.dashboard.abrir_medicoes", return_value=True),
+            patch("apps.integracoes.eace.dashboard.abrir_osps", return_value=True),
+            patch("apps.integracoes.eace.dashboard.pesquisar_osp", return_value=True),
+            patch("apps.integracoes.eace.dashboard.contar_pedidos_osp", return_value=1),
+            patch("apps.integracoes.eace.dashboard.expandir_resultado_osp", return_value=True),
+            patch("apps.integracoes.eace.dashboard.expandir_notas_fiscais", return_value=True),
+            patch("apps.integracoes.eace.dashboard.extrair_dados_grid", **grid),
+            patch("apps.integracoes.eace.dashboard.upload_linha", return_value=True),
+            patch("apps.integracoes.eace.dashboard.clicar_enviar_notas", return_value=enviar_notas),
+        ]
+
+    def _rodar(self, patches):
+        from contextlib import ExitStack
+
+        with ExitStack() as pilha:
+            for item in patches:
+                pilha.enter_context(item)
+            return anexar_nota_fiscal(
+                osp="3929", inep="35083938", caminho_pdf=str(self.pdf), caminho_xml=str(self.xml),
+            )
+
+    def test_linha_com_o_valor_ja_enviada_vira_documento_ja_enviado(self):
+        """Log 1947 (2026-11-11): a linha com o valor da NF já está
+        "Enviado" e só sobram pendentes de outros valores - não é valor
+        divergente, a NF já está no portal."""
+        linhas = [
+            {"inep": "35083938", "status": "Enviado", "descricao": "Kit", "valor": "22.644,43", "indice": 1},
+            {"inep": "35083938", "status": "Pendente", "descricao": "Nobreak", "valor": "1.551,93", "indice": 2},
+        ]
+        resultado = self._rodar(self._portal_ate_o_grid(linhas))
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "documento_ja_enviado")
+
+    def test_enviar_notas_nao_aparece_mas_a_linha_ja_foi_enviada_e_sucesso(self):
+        antes = [{"inep": "35083938", "status": "Pendente", "descricao": "Kit", "valor": "22.644,43", "indice": 1}]
+        depois = [{"inep": "35083938", "status": "Enviado", "descricao": "Kit", "valor": "22.644,43", "indice": 1}]
+        resultado = self._rodar(self._portal_ate_o_grid([antes, depois], enviar_notas=False))
+        self.assertTrue(resultado.sucesso)
+
+    def test_enviar_notas_nao_aparece_e_a_linha_continua_pendente_e_erro(self):
+        linha = [{"inep": "35083938", "status": "Pendente", "descricao": "Kit", "valor": "22.644,43", "indice": 1}]
+        resultado = self._rodar(self._portal_ate_o_grid([linha, linha], enviar_notas=False))
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "enviar_notas")
+
     def test_indice_none_sem_linha_pendente_com_valor_igual_aborta_com_valor_divergente(self):
         linhas = [
             {"inep": "35083938", "status": "Pendente", "descricao": "Kit", "valor": "1.551,93", "indice": 1},

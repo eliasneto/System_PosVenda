@@ -64,3 +64,86 @@ class FilaTvTests(TestCase):
         self.assertContains(resp, 'hx-trigger="every 10s"')
         self.assertContains(resp, 'hx-select-oob="#fila-totais"')
         self.assertContains(resp, reverse("fila_tv", args=[TOKEN]))
+
+
+@override_settings(FILA_TV_TOKEN=TOKEN)
+class FilaTvContagemTests(TestCase):
+
+    def test_reprocessando_agora_nao_conta_como_falha_e_atencao_nao_e_erro(self):
+        from apps.ri.views_fila_tv import contexto_fila_tv
+
+        ri = Ri.objects.create(escola=Escola.objects.create(inep="11000002", nome="E"))
+        agora = timezone.now()
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.SUCESSO, executado_em=agora)
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.PROCESSANDO, executado_em=agora, motivo_erro="enviar_notas")
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.ATENCAO, executado_em=agora,
+                                  motivo_erro="documento_ja_enviado")
+        ctx = contexto_fila_tv()
+        self.assertEqual(ctx["falha_hora"], 0)
+        self.assertEqual(ctx["sucesso_hora"], 2)
+        self.assertEqual(ctx["erro_hoje"], 0)
+        self.assertEqual(ctx["atencao_hoje"], 1)
+
+
+class PrevisaoFilaZerarTests(TestCase):
+
+    def test_formatos(self):
+        from datetime import datetime
+
+        from apps.ri.views_fila_tv import _previsao_fila_zerar
+
+        agora = timezone.make_aware(datetime(2026, 11, 11, 10, 0))
+        self.assertIsNone(_previsao_fila_zerar(0, 10, agora))
+        self.assertEqual(_previsao_fila_zerar(5, 0, agora), {"texto": None, "as": None})
+        self.assertEqual(_previsao_fila_zerar(10, 60, agora), {"texto": "~10 min", "as": "10:10"})
+        self.assertEqual(_previsao_fila_zerar(150, 60, agora), {"texto": "~2 h 30 min", "as": "12:30"})
+        self.assertEqual(_previsao_fila_zerar(385, 40, agora)["texto"], "~9 h 38 min")
+        self.assertEqual(_previsao_fila_zerar(2000, 40, agora)["texto"], "~2,1 dia(s)")
+
+    def test_so_conta_o_que_saiu_da_fila(self):
+        from apps.ri.views_fila_tv import contexto_fila_tv
+
+        ri = Ri.objects.create(escola=Escola.objects.create(inep="11000003", nome="E"))
+        agora = timezone.now()
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.SUCESSO, executado_em=agora)
+        LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.NA_FILA, executado_em=agora,
+                                  enfileirado_em=agora, motivo_erro="enviar_notas")
+        ctx = contexto_fila_tv()
+        self.assertEqual(ctx["saida_hora"], 1)
+        self.assertEqual(ctx["previsao"]["texto"], "~1 h")
+
+
+class SaudeServidorTests(TestCase):
+
+    def _arquivos(self, livre_kb, carga):
+        import tempfile
+        from pathlib import Path
+
+        pasta = Path(tempfile.mkdtemp())
+        (pasta / "meminfo").write_text(
+            f"MemTotal: 12205056 kB\nMemAvailable: {livre_kb} kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n", encoding="ascii")
+        (pasta / "loadavg").write_text(f"{carga} 1.0 1.0 1/100 1\n", encoding="ascii")
+        return str(pasta / "meminfo"), str(pasta / "loadavg")
+
+    def test_niveis_e_alertas(self):
+        from unittest.mock import patch
+
+        from apps.ri.views_fila_tv import saude_servidor
+
+        with patch("apps.ri.views_fila_tv.os.cpu_count", return_value=4):
+            ok = saude_servidor(*self._arquivos(5 * 1024 * 1024, 1.0))
+            self.assertEqual((ok["nivel_memoria"], ok["nivel_cpu"], ok["alertas"]), ("ok", "ok", []))
+            self.assertEqual((ok["livre_gb"], ok["total_gb"], ok["cpu_pct"]), ("5,0", "12", 25))
+
+            atencao = saude_servidor(*self._arquivos(int(1.7 * 1024 * 1024), 4.0))
+            self.assertEqual((atencao["nivel_memoria"], atencao["nivel_cpu"], atencao["alertas"]), ("atencao", "atencao", []))
+
+            critico = saude_servidor(*self._arquivos(800 * 1024, 7.0))
+            self.assertEqual((critico["nivel_memoria"], critico["nivel_cpu"]), ("critico", "critico"))
+            self.assertEqual(len(critico["alertas"]), 2)
+            self.assertIn("Desative um robô", critico["alertas"][0])
+
+    def test_fora_do_linux_nao_mostra(self):
+        from apps.ri.views_fila_tv import saude_servidor
+
+        self.assertIsNone(saude_servidor("/nao/existe/meminfo", "/nao/existe/loadavg"))

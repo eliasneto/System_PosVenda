@@ -205,7 +205,7 @@ class ProcessarRpaMipTests(BaseLoteComNf):
         with patch(RPA, return_value=resultado):
             processar_proximo_rpa_mip()
         self.log.refresh_from_db()
-        self.assertEqual(self.log.resultado, LogRpaEaceMip.ERRO)
+        self.assertEqual(self.log.resultado, LogRpaEaceMip.ATENCAO)
         self.assertEqual(self.log.status_portal, "Aprovado")
         self.assertTrue(self.log.ja_estava_no_portal)
         self.assertEqual(self.log.motivo_erro_legivel, 'O card do município no portal está "Aprovado" (NF já enviada).')

@@ -1,14 +1,41 @@
 {% comment %}Miolo do painel da TV (`views_fila_tv`) - trocado a cada 10 s.{% endcomment %}
 <span id="hora-servidor" data-hora="{{ agora|date:'H:i:s' }}" hidden></span>
 
+{% if servidor %}
+{% for alerta in servidor.alertas %}<div class="alerta">⚠ {{ alerta }}</div>{% endfor %}
+<div class="servidor">
+  <span>Servidor:</span>
+  <span class="item"><span class="ponto {{ servidor.nivel_memoria }}"></span>Memória livre <b class="nivel-{{ servidor.nivel_memoria }}">{{ servidor.livre_gb }} GB</b> de {{ servidor.total_gb }} GB{% if servidor.swap_usado_gb %} · usando {{ servidor.swap_usado_gb }} GB de disco como memória{% endif %}</span>
+  <span class="item"><span class="ponto {{ servidor.nivel_cpu }}"></span>Processador <b class="nivel-{{ servidor.nivel_cpu }}">{{ servidor.cpu_pct }}%</b></span>
+</div>
+{% endif %}
 <div class="numeros">
   <div class="numero"><div class="rotulo">Na fila</div><div class="valor amarelo">{{ total_na_fila }}</div><div class="detalhe">aguardando a vez</div></div>
   <div class="numero"><div class="rotulo">Processando</div><div class="valor roxo">{{ total_processando }}</div><div class="detalhe">agora</div></div>
-  <div class="numero"><div class="rotulo">Enviadas hoje</div><div class="valor verde">{{ sucesso_hoje }}</div><div class="detalhe">com sucesso</div></div>
+  <div class="numero"><div class="rotulo">Enviadas hoje</div><div class="valor verde">{{ sucesso_hoje }}</div><div class="detalhe">com sucesso{% if atencao_hoje %} · <span class="amarelo">{{ atencao_hoje }} já estavam no portal</span>{% endif %}</div></div>
   <div class="numero"><div class="rotulo">Com erro hoje</div><div class="valor vermelho">{{ erro_hoje }}</div><div class="detalhe">precisam de alguém</div></div>
-  <div class="numero"><div class="rotulo">Última hora</div>
-    <div class="valor {% if taxa_hora is None %}{% elif taxa_hora >= 80 %}verde{% elif taxa_hora >= 50 %}amarelo{% else %}vermelho{% endif %}">{% if taxa_hora is None %}—{% else %}{{ taxa_hora }}%{% endif %}</div>
-    <div class="detalhe">{{ sucesso_hora }} ok · {{ falha_hora }} falha(s)</div></div>
+  <div class="numero"><div class="rotulo">Fila zera em</div>
+    {% if previsao is None %}
+    <div class="valor verde" style="font-size: 1.6vw; padding: 1.2vh 0;">Fila vazia</div>
+    <div class="detalhe">nada aguardando</div>
+    {% elif previsao.texto %}
+    <div class="valor">{{ previsao.texto }}</div>
+    <div class="detalhe">por volta das {{ previsao.as }} · ritmo {{ saida_hora }}/h</div>
+    {% else %}
+    <div class="valor" style="font-size: 1.6vw; padding: 1.2vh 0;">Sem previsão</div>
+    <div class="detalhe">nenhuma nota saiu da fila na última hora</div>
+    {% endif %}
+  </div>
+  {# Termômetro do robô: % das notas da última hora que deram certo (verde >= 80%, amarelo >= 50%, vermelho abaixo). #}
+  <div class="numero"><div class="rotulo">Acerto na última hora</div>
+    {% if taxa_hora is None %}
+    <div class="valor" style="font-size: 1.6vw; padding: 1.2vh 0;">Sem envios</div>
+    <div class="detalhe">nenhuma nota processada na última hora</div>
+    {% else %}
+    <div class="valor {% if taxa_hora >= 80 %}verde{% elif taxa_hora >= 50 %}amarelo{% else %}vermelho{% endif %}">{{ taxa_hora }}%</div>
+    <div class="detalhe">{{ sucesso_hora }} enviada(s) · {{ falha_hora }} com problema</div>
+    {% endif %}
+  </div>
 </div>
 
 <div class="bloco">
@@ -64,9 +91,10 @@
         <td><b>{{ item.inep }}</b></td>
         <td>
           {% if item.log.resultado == 'sucesso' %}<span class="st-sucesso">Enviada</span>
+          {% elif item.log.resultado == 'atencao' %}<span class="st-repete">Atenção · já estava no portal</span>
           {% elif item.log.resultado == 'erro' %}<span class="st-erro">Erro</span>
           {% else %}<span class="st-repete">Vai tentar de novo</span>{% endif %}
-          {% if item.log.resultado != 'sucesso' and item.log.motivo_erro %}<div class="motivo">{{ item.log.motivo_erro_legivel|truncatechars:60 }}</div>{% endif %}
+          {% if item.log.resultado != 'sucesso' and item.log.resultado != 'atencao' and item.log.motivo_erro %}<div class="motivo">{{ item.log.motivo_erro_legivel|truncatechars:60 }}</div>{% endif %}
         </td>
         <td>{% if item.log.robo %}{{ item.log.robo.nome }}{% endif %}</td>
       </tr>

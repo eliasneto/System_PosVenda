@@ -111,6 +111,10 @@ services:
              done"
 
   rpa_eace_worker:
+    # Desligamento suave: o supervisor espera até 300 s os robôs terminarem
+    # a nota atual antes de sair (--espera-desligar) - o Docker precisa
+    # esperar mais que isso antes de matar o container.
+    stop_grace_period: 330s
     # FEAT-033 (RN-058) + ADR-009 (2026-11-10): mesmo papel do container
     # local - o supervisor (`supervisionar_robos_rpa_eace`) sobe 1 processo
     # por robô ativo do admin ("Robôs do RPA EACE"), cada um com navegador

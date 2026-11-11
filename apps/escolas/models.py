@@ -837,10 +837,14 @@ class LogRpaEaceMip(models.Model):
     PROCESSANDO = "processando"
     SUCESSO = "sucesso"
     ERRO = "erro"
+    # Pedido do usuário (2026-11-11): NF que já estava no portal (card do
+    # município fora de "Pendente") é "Atenção", não erro.
+    ATENCAO = "atencao"
     RESULTADO_CHOICES = [
         (NA_FILA, "Na fila"),
         (PROCESSANDO, "Processando"),
         (SUCESSO, "Sucesso"),
+        (ATENCAO, "Atenção"),
         (ERRO, "Erro"),
     ]
 
@@ -898,7 +902,11 @@ class LogRpaEaceMip(models.Model):
         Só com o status do card lido: vazio foi o RPA que não leu o status
         (pedido 533, 2026-10-14, portal sem a linha "Status:") - pode
         tentar de novo."""
-        return self.resultado == self.ERRO and self.motivo_erro == "documento_ja_enviado" and bool(self.status_portal)
+        return (
+            self.resultado in (self.ERRO, self.ATENCAO)
+            and self.motivo_erro == "documento_ja_enviado"
+            and bool(self.status_portal)
+        )
 
     @property
     def motivo_erro_legivel(self):

@@ -325,6 +325,21 @@ def anexar_nota_fiscal(
                         )
                         return _falhar(pagina, inep, "documento_ja_enviado", dados_pdf)
                     candidatas = [l for l in pendentes if valores_iguais(dados_pdf["valor"], l["valor"])]
+                    enviadas = [
+                        l for l in linhas
+                        if l["status"] != "Pendente" and valores_iguais(dados_pdf["valor"], l["valor"])
+                    ]
+                    if not candidatas and enviadas:
+                        # Pedido do usuário (2026-11-11, Log 1947): a linha
+                        # com o valor desta NF já não está "Pendente" - a NF
+                        # já foi enviada (ex.: tentativa anterior concluiu
+                        # o envio sem o robô ver o "Enviar notas"). Antes
+                        # caía em "valor_divergente", um falso erro.
+                        logger.warning(
+                            "Linha do INEP %s com o valor do PDF (%s) ja esta '%s' - NF ja enviada.",
+                            inep, dados_pdf["valor"], enviadas[0]["status"],
+                        )
+                        return _falhar(pagina, inep, "documento_ja_enviado", dados_pdf, enviadas[0]["valor"])
                     if not candidatas:
                         logger.error(
                             "Nenhuma linha 'Pendente' do INEP %s tem valor igual ao do PDF (%s).",
@@ -397,6 +412,17 @@ def anexar_nota_fiscal(
                 progresso.avancar()  # "Anexando o PDF e o XML"
 
                 if not clicar_enviar_notas(pagina):
+                    # Pedido do usuário (2026-11-11, Log 1947): às vezes o
+                    # portal conclui o envio já no "Confirmar informações"
+                    # e o botão "Enviar notas" nem aparece - antes de dar
+                    # erro, relê a linha: fora de "Pendente" = enviada.
+                    if _linha_saiu_de_pendente(pagina, inep, indice):
+                        logger.info(
+                            "'Enviar notas' nao apareceu, mas a linha %s do INEP %s ja saiu de 'Pendente' - enviada.",
+                            indice, inep,
+                        )
+                        progresso.avancar()
+                        return ResultadoRpaEace(sucesso=True, dados_pdf=dados_pdf, valor_portal=valor_portal)
                     return _falhar(pagina, inep, "enviar_notas", dados_pdf, valor_portal)
                 progresso.avancar()  # "Enviando as notas" -> 100%
 
@@ -408,6 +434,19 @@ def anexar_nota_fiscal(
     except PlaywrightError as exc:
         logger.error("Erro inesperado do Playwright: %s", exc)
         return ResultadoRpaEace(sucesso=False, motivo="erro_playwright", dados_pdf=dados_pdf)
+
+
+def _linha_saiu_de_pendente(pagina, inep: str, indice: int) -> bool:
+    """Relê o grid do INEP e diz se a linha `indice` (1-based) não está
+    mais "Pendente". Qualquer falha na leitura = False (segue como erro)."""
+    from .dashboard import extrair_dados_grid
+
+    try:
+        linhas = extrair_dados_grid(pagina, inep)
+        return bool(linhas) and 1 <= indice <= len(linhas) and linhas[indice - 1]["status"] != "Pendente"
+    except Exception:
+        logger.exception("Falha ao reler o grid do INEP %s depois do 'Enviar notas'.", inep)
+        return False
 
 
 def _falhar(pagina, inep: str, motivo: str, dados_pdf: dict, valor_portal: str | None = None) -> ResultadoRpaEace:

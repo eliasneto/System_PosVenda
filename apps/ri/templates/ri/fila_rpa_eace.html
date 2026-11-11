@@ -122,6 +122,8 @@ lista inteira de logs.
                         <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-blue-600 text-blue-700 dark:text-blue-400 dark:border-blue-500 whitespace-nowrap">⏳ Na fila</span>
                         {% elif log.resultado == 'sucesso' %}
                         <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-green-600 text-green-700 dark:text-green-400 dark:border-green-500 whitespace-nowrap">✓ Processado</span>
+                        {% elif log.resultado == 'atencao' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-amber-500 text-amber-700 dark:text-amber-400 dark:border-amber-500 whitespace-nowrap">⚠ Atenção</span>
                         {% elif log.resultado == 'erro' %}
                         <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-red-600 text-red-700 dark:text-red-400 dark:border-red-500 whitespace-nowrap">✗ Erro</span>
                         {% endif %}
@@ -146,6 +148,8 @@ lista inteira de logs.
                         {% if log.posicao_na_fila == 1 %}Próxima a ser processada{% elif log.posicao_na_fila %}Posição {{ log.posicao_na_fila }} na fila{% else %}Aguardando a vez{% endif %}
                         {% elif log.resultado == 'sucesso' %}
                         {% if log.concluido_manualmente %}Concluído manualmente{% else %}{{ log.produto_pdf|default:"—" }}{% endif %}
+                        {% elif log.resultado == 'atencao' %}
+                        <span class="text-amber-600 dark:text-amber-400">{{ log.motivo_erro_legivel|default:"NF já estava no portal" }}</span>
                         {% elif log.resultado == 'erro' %}
                         <span class="text-red-500 dark:text-red-400">{{ log.motivo_erro_legivel|default:"—" }}</span>
                         {% endif %}
@@ -237,6 +241,8 @@ lista inteira de logs.
                         <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-blue-600 text-blue-700 dark:text-blue-400 dark:border-blue-500 whitespace-nowrap">⏳ Na fila</span>
                         {% elif log.resultado == 'sucesso' %}
                         <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-green-600 text-green-700 dark:text-green-400 dark:border-green-500 whitespace-nowrap">✓ Processado</span>
+                        {% elif log.resultado == 'atencao' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-amber-500 text-amber-700 dark:text-amber-400 dark:border-amber-500 whitespace-nowrap">⚠ Atenção</span>
                         {% else %}
                         <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-red-600 text-red-700 dark:text-red-400 dark:border-red-500 whitespace-nowrap">✗ Erro</span>
                         {% endif %}
@@ -259,6 +265,8 @@ lista inteira de logs.
                         Aguardando a vez{% if log.motivo_erro %} (reprocessando: {{ log.motivo_erro_legivel }}){% endif %}
                         {% elif log.resultado == 'sucesso' %}
                         Pedido {{ log.pedido|default:"—" }} — R$ {{ log.valor_portal|default:"—" }}
+                        {% elif log.resultado == 'atencao' %}
+                        <span class="text-amber-600 dark:text-amber-400">{{ log.motivo_erro_legivel|default:"NF já estava no portal" }}</span>
                         {% else %}
                         <span class="text-red-500 dark:text-red-400">{{ log.motivo_erro_legivel|default:"—" }}</span>
                         {% endif %}

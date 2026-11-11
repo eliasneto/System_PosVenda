@@ -1035,6 +1035,16 @@ automático de status descritos nesta regra.
 
 ### RN-057 — Validação dos dados da Nota Fiscal (PDF) contra o portal EACE antes do anexo
 
+> **Emenda (2026-11-11, pedido do usuário):** NF que **já está no portal**
+> (a linha do INEP não está mais "Pendente" - `documento_ja_enviado`) não é
+> mais "Erro": vira o resultado **"Atenção"**, que conta como enviada para o
+> avanço do RI (RN-056) e não oferece reenvio, mas fica destacado em amarelo
+> para alguém conferir no portal. Vale também quando, sem índice, nenhuma
+> linha "Pendente" tem o valor do PDF mas uma linha já enviada tem (antes:
+> falso "valor divergente", Log 1947). E quando o botão "Enviar notas" não
+> aparece mas a linha já saiu de "Pendente", o envio conta como **Sucesso**.
+> No MIP, o mesmo vale para o card do município fora de "Pendente".
+
 **Descrição:** Antes de subir o PDF+XML no portal EACE (RN-056), o
 sistema extrai do próprio PDF os dados da Nota Fiscal — INEP, Produto e
 Valor Total da Nota — e usa essa extração em duas conferências, cada uma
@@ -3992,6 +4002,7 @@ Validação no mesmo worker em vez de um container próprio.
 ## Histórico de Alterações
 | Data | Regra | Alteração |
 |---|---|---|
+| 2026-11-11 | RN-057 emendada: NF já enviada no portal vira "Atenção" (não "Erro") e conta para o avanço do RI | Usuário: "se a NF já está lá, não deveria ser erro, apenas atenção" (Logs 1947 e 1795) |
 | 2026-11-11 | RN-058 emendada: nova tentativa automática mantém o lugar na fila | Fila de 385 itens no servidor; tentativas com "Enviar notas" falhando deixavam a nota anexada e "Pendente" no portal até voltar a vez |
 | 2026-11-10 | RN-058 emendada (`ADR-009`): robôs do RPA EACE em paralelo, cadastrados no admin com login próprio, 1 robô por INEP | Usuário pediu N robôs rodando juntos na mesma fila, cada um com usuário/senha próprios e navegador próprio, sem separar RI e MIP |
 | 2026-09-29 | RN-108 a RN-112 criadas (RPA EACE do MIP: anexo da NF do município com ciclo Pendente → Aguardando Aprovação → Aprovado; Validação MIP (NF) só leitura com execução automática desligada; NF comum a todos os INEPs do LOTE; ícone de envio por LOTE; fila única RI + MIP + Validação); RN-058 ganha referência cruzada (mesma fila e mesmas regras de reprocessamento para o MIP) | Usuário pediu o RPA do MIP, a tela de validação e o envio pelo LOTE nesta sessão, decidindo log próprio do MIP, NF comum a todos os INEPs, "documento já enviado" desabilitando o ícone e a Validação no worker da fila EACE; Orquestrador formaliza trabalho já entregue e testado pelo Dev |
