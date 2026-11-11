@@ -109,8 +109,8 @@ class PrevisaoFilaZerarTests(TestCase):
         LogRpaEace.objects.create(ri=ri, resultado=LogRpaEace.NA_FILA, executado_em=agora,
                                   enfileirado_em=agora, motivo_erro="enviar_notas")
         ctx = contexto_fila_tv()
-        self.assertEqual(ctx["saida_hora"], 1)
-        self.assertEqual(ctx["previsao"]["texto"], "~1 h")
+        self.assertEqual(ctx["saida_hora"], 4)
+        self.assertEqual(ctx["previsao"]["texto"], "~15 min")
 
 
 class SaudeServidorTests(TestCase):

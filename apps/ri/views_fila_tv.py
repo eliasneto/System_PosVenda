@@ -30,6 +30,7 @@ from .models import LogRpaEace
 INTERVALO_SEGUNDOS = 10
 QTD_PROXIMOS = 8
 QTD_ULTIMOS = 8
+JANELA_RITMO_MINUTOS = 15  # ritmo da previsão "Fila zera em"
 
 
 def _validar_token(token: str) -> None:
@@ -234,18 +235,21 @@ def contexto_fila_tv(agora=None) -> dict:
     )
 
     # Previsão de quando a fila zera (pedido do usuário, 2026-11-11): no
-    # ritmo da última hora, contando só o que SAIU da fila (Sucesso, Atenção
-    # ou Erro definitivo) - a nova tentativa volta para a fila, não conta.
+    # ritmo dos últimos 15 min (projetado para 1 hora), contando só o que
+    # SAIU da fila (Sucesso, Atenção ou Erro definitivo) - a nova tentativa
+    # volta para a fila, não conta. Janela curta de propósito: com 1 hora a
+    # previsão levava 1 hora para refletir robôs ligados/desligados.
+    janela = agora - timedelta(minutes=JANELA_RITMO_MINUTOS)
     saida_hora = contar(
         LogRpaEace.objects.filter(
-            executado_em__gte=uma_hora,
+            executado_em__gte=janela,
             resultado__in=(LogRpaEace.SUCESSO, LogRpaEace.ATENCAO, LogRpaEace.ERRO),
         ),
         LogRpaEaceMip.objects.filter(
-            executado_em__gte=uma_hora,
+            executado_em__gte=janela,
             resultado__in=(LogRpaEaceMip.SUCESSO, LogRpaEaceMip.ATENCAO, LogRpaEaceMip.ERRO),
         ),
-    )
+    ) * 60 // JANELA_RITMO_MINUTOS
     total_na_fila = contar(
         LogRpaEace.objects.filter(resultado=LogRpaEace.NA_FILA),
         LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA),
