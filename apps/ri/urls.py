@@ -76,6 +76,12 @@ urlpatterns = [
         views.ri_baixar_planilha_financeiro_view,
         name="ri_baixar_planilha_financeiro",
     ),
+    # Faturamento complementar (v1.6.0): baixar a planilha / enviar ao financeiro.
+    path(
+        "ri/<int:pk>/faturamento-complementar/",
+        views.ri_faturamento_complementar_view,
+        name="ri_faturamento_complementar",
+    ),
     path(
         "ri/itens/ixc/<int:item_pk>/editar/",
         views.ri_item_ixc_update_view,

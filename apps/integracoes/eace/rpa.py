@@ -96,6 +96,10 @@ MOTIVOS_REGRA_DE_NEGOCIO = frozenset({
     "inep_nao_encontrado",
     "documento_ja_enviado",
     "indice_invalido",
+    # Faturamento complementar (v1.6.0): `documento_ja_enviado` numa NF
+    # complementar vira este motivo (apps/ri/services.py) - o portal nao
+    # tem linha Pendente com o valor da NF, nao e falha tecnica.
+    "complementar_sem_linha_pendente",
 })
 
 

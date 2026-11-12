@@ -95,10 +95,20 @@ comunicação, abaixo — este botão não bloqueia o fluxo do RI.
     <div class="mb-4">{% include "ri/_log_rpa_eace_criar_manual.html" %}</div>
 
     <div class="flex flex-col gap-4">
-        {% for log in logs_rpa_eace %}
+        {% for log in logs_rpa_eace_normais %}
         {% include "ri/_log_rpa_eace_card.html" with log=log %}
         {% endfor %}
     </div>
+    {% if logs_rpa_eace_complementares %}
+    {# Faturamento complementar (v1.6.0): NFs do complementar em bloco próprio — não contam para o status do RI. #}
+    <h3 class="text-xs font-black uppercase italic text-gray-400 dark:text-gray-500 mt-6 mb-1">Notas Fiscais complementares</h3>
+    <p class="text-[11px] text-gray-400 dark:text-gray-500 mb-3">Vieram da resposta de um faturamento complementar. Vão para a OSP do complementar e não mudam o status do RI.</p>
+    <div class="flex flex-col gap-4">
+        {% for log in logs_rpa_eace_complementares %}
+        {% include "ri/_log_rpa_eace_card.html" with log=log %}
+        {% endfor %}
+    </div>
+    {% endif %}
 </div>
 {% elif aviso_resposta_fora_padrao %}
 <div class="bg-white dark:bg-gray-900 rounded-[2rem] border border-amber-200 dark:border-amber-800/60 shadow-sm p-6 mt-6">

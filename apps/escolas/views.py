@@ -314,8 +314,10 @@ def mip_inep_view(request):
                 # Grid de Equipamentos, `ri.views.grid_inep_view`).
                 Prefetch(
                     "emails_financeiro",
+                    # Faturamento complementar (v1.6.0): a resposta de um
+                    # complementar não muda a Data Faturamento.
                     queryset=EmailFinanceiroLog.objects.filter(
-                        direcao=EmailFinanceiroLog.RECEBIDO
+                        direcao=EmailFinanceiroLog.RECEBIDO, faturamento_complementar__isnull=True,
                     ).order_by("-data_hora"),
                     to_attr="respostas_financeiro_recebidas",
                 ),

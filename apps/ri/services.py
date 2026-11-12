@@ -32,13 +32,14 @@ from openpyxl.utils import get_column_letter
 
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
-from apps.core.email_tracking import extrair_primeiro_inep_rastreio
+from apps.core.email_tracking import extrair_codigo_complementar, extrair_primeiro_inep_rastreio
 from apps.escolas.models import Escola
 
 from .models import (
     Documento,
     EmailFinanceiroLog,
     EmailFinanceiroSync,
+    FaturamentoComplementar,
     KitPadrao,
     LogRpaEace,
     NfCanceladaFinanceiro,
@@ -148,18 +149,23 @@ _CARACTERES_INVALIDOS_ARQUIVO = re.compile(r'[\\/:*?"<>|\r\n]')
 _TAMANHO_MAXIMO_NOME_ARQUIVO_PLANILHA = 200
 
 
-def nome_arquivo_planilha_faturamento(escola):
+def nome_arquivo_planilha_faturamento(escola, complementar=None):
     """Ajuste 2026-08-31 (pedido do usuário): o .xlsx anexado no e-mail do
     financeiro (e baixado pelo botão "Baixar planilha") passa a se chamar
     "FATURAMENTO MATERIAS EACE - <INEP> - <nome da escola>.xlsx", em vez do
     genérico "faturamento_<inep>.xlsx" — facilita achar o arquivo certo
     quando o financeiro recebe e-mail de várias escolas."""
+    # Faturamento complementar (v1.6.0): `complementar` = número n do
+    # complementar → "FATURAMENTO MATERIAS EACE - COMPLEMENTAR C<n> - ...".
+    prefixo = "FATURAMENTO MATERIAS EACE"
+    if complementar:
+        prefixo += f" - COMPLEMENTAR C{complementar}"
     nome_escola = _CARACTERES_INVALIDOS_ARQUIVO.sub("", escola.nome or "").strip()
-    nome = f"FATURAMENTO MATERIAS EACE - {escola.inep} - {nome_escola}.xlsx"
+    nome = f"{prefixo} - {escola.inep} - {nome_escola}.xlsx"
     excedente = len(nome) - _TAMANHO_MAXIMO_NOME_ARQUIVO_PLANILHA
     if excedente > 0:
         nome_escola = nome_escola[: max(len(nome_escola) - excedente, 0)].rstrip()
-        nome = f"FATURAMENTO MATERIAS EACE - {escola.inep} - {nome_escola}.xlsx"
+        nome = f"{prefixo} - {escola.inep} - {nome_escola}.xlsx"
     return nome
 
 _RE_OBS_INEP = re.compile(r"(INEP:\s*)\S+")
@@ -288,6 +294,22 @@ def itens_faltando_para_planilha_faturamento(ri, itens=None):
         faltando.append("nenhum item lançado (KIT ou produto)")
     elif not any(item.eh_kit for item in itens):
         faltando.append("o KIT Instalado")
+    faltando += cabecalho_faltando_para_planilha_faturamento(ri)
+    # RN-088 (2026-09-09): a planilha agora monta as abas a partir do Lado
+    # Relatório EACE (3º lado, é de lá que vem o Num OSP usado para separar
+    # por Nota Fiscal) — sem nenhum item lançado lá (Sincronizador ainda
+    # não rodou pra este RI), não tem como montar nem uma aba.
+    if not ri.itens_relatorio_eace.exists():
+        faltando.append("os itens do Lado Relatório EACE (rode o Sincronizador)")
+    return faltando
+
+
+def cabecalho_faltando_para_planilha_faturamento(ri):
+    """Dados do cabeçalho da planilha que vêm do Lado IXC (Data de Ativação,
+    Município, Estado, CNPJ, CNPJ Fictício) - parte de `itens_faltando_
+    para_planilha_faturamento`, reaproveitada sozinha pelo faturamento
+    complementar (v1.6.0), que traz os próprios itens."""
+    faltando = []
     if not ri.data_ativacao:
         faltando.append("a Data de Ativação")
     if not (ri.municipio_ixc or "").strip():
@@ -298,12 +320,6 @@ def itens_faltando_para_planilha_faturamento(ri, itens=None):
         faltando.append("o CNPJ (Lado IXC)")
     if not (ri.cnpj_ficticio or "").strip():
         faltando.append("o CNPJ Fictício (Lado IXC)")
-    # RN-088 (2026-09-09): a planilha agora monta as abas a partir do Lado
-    # Relatório EACE (3º lado, é de lá que vem o Num OSP usado para separar
-    # por Nota Fiscal) — sem nenhum item lançado lá (Sincronizador ainda
-    # não rodou pra este RI), não tem como montar nem uma aba.
-    if not ri.itens_relatorio_eace.exists():
-        faltando.append("os itens do Lado Relatório EACE (rode o Sincronizador)")
     return faltando
 
 
@@ -387,10 +403,7 @@ def gerar_planilha_faturamento(ri, data_vencimento, cfop=CFOP_ANTIGO):
     CFOP (pedido do usuário, 2026-11-09): `cfop` vai em C10 e D16 de todas
     as abas (5117 antigo, padrão, ou 5102-004 novo — `CFOPS_PLANILHA_
     FATURAMENTO`); outro valor levanta `PlanilhaFaturamentoError`."""
-    if cfop not in dict(CFOPS_PLANILHA_FATURAMENTO):
-        raise PlanilhaFaturamentoError(f"CFOP inválido: {cfop}. Escolha 5117 ou 5102-004.")
-    # 5117 continua número, como no modelo; "5102-004" vai como texto
-    valor_cfop = int(cfop) if cfop.isdigit() else cfop
+    valor_cfop = _valor_cfop_planilha(cfop)
     itens = list(ri.itens_ixc.all())
     faltando = itens_faltando_para_planilha_faturamento(ri, itens=itens)
     if faltando:
@@ -400,7 +413,6 @@ def gerar_planilha_faturamento(ri, data_vencimento, cfop=CFOP_ANTIGO):
         )
 
     escola = ri.escola
-    data_str = data_vencimento.strftime("%d/%m/%Y")
 
     # RN-088: fonte agora é o Lado Relatório EACE (3º lado) — único lado
     # com o Num OSP (RN-022); `itens_faltando_para_planilha_faturamento`
@@ -423,6 +435,23 @@ def gerar_planilha_faturamento(ri, data_vencimento, cfop=CFOP_ANTIGO):
         # correta mesmo assim.
         grupo["item_lpu"] = item_lpu
 
+    return _preencher_planilha_faturamento(ri, grupos, data_vencimento, valor_cfop)
+
+
+def _valor_cfop_planilha(cfop):
+    if cfop not in dict(CFOPS_PLANILHA_FATURAMENTO):
+        raise PlanilhaFaturamentoError(f"CFOP inválido: {cfop}. Escolha 5117 ou 5102-004.")
+    # 5117 continua número, como no modelo; "5102-004" vai como texto
+    return int(cfop) if cfop.isdigit() else cfop
+
+
+def _preencher_planilha_faturamento(ri, grupos, data_vencimento, valor_cfop):
+    """Cópia preenchida da planilha-modelo: 1 aba por grupo `(aba, OSP)` de
+    `grupos` (`{"item_lpu", "subtotal", "quantidade_total"}`), com o
+    cabeçalho do RI. Usada pelo faturamento normal (grupos do Lado Relatório
+    EACE) e pelo complementar (grupos dos itens do complementar)."""
+    escola = ri.escola
+    data_str = data_vencimento.strftime("%d/%m/%Y")
     titulos_por_chave = _titulos_abas_por_osp(grupos)
 
     workbook = openpyxl.load_workbook(CAMINHO_PLANILHA_FATURAMENTO_MODELO)
@@ -487,6 +516,201 @@ def gerar_planilha_faturamento(ri, data_vencimento, cfop=CFOP_ANTIGO):
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+
+# ==========================================
+# Faturamento complementar (pedido do usuário, 2026-11-12, v1.6.0): NFs a
+# mais para um INEP já faturado. Os itens vêm do mesmo catálogo do Lado IXC
+# (KIT + Produtos com valor de equipamento), preço do catálogo
+# (`KitPadrao.valor_faturavel`), e ficam só no `FaturamentoComplementar` -
+# não mexem no 2º/3º lado nem no status do RI/MIP.
+
+
+class FaturamentoComplementarError(Exception):
+    """Itens do faturamento complementar inválidos (mensagem para a tela)."""
+
+
+def catalogo_faturamento_complementar(escola):
+    """Mesmo catálogo do Lado IXC (`apps.ri.forms._catalogo_ixc`): KIT
+    (Unidade "Escola") + Produtos com "Equipamentos (R$)" (RN-055) - item só
+    de serviço sairia com R$ 0,00. Filtrado pelo Lote da escola."""
+    qs = KitPadrao.objects.filter(
+        Q(unidade__istartswith="escola") | Q(valor_equipamento__isnull=False)
+    )
+    if escola and escola.lote is not None:
+        qs = qs.filter(lote=escola.lote)
+    return qs.order_by(F("numero_access_points").asc(nulls_last=True), "descricao")
+
+
+def osps_do_ri(ri):
+    """OSPs distintas do Lado Relatório EACE (3º lado), na ordem dos itens."""
+    return list(dict.fromkeys(
+        osp.strip()
+        for osp in ri.itens_relatorio_eace.exclude(num_osp="").order_by("id").values_list("num_osp", flat=True)
+        if osp.strip()
+    ))
+
+
+def montar_itens_faturamento_complementar(ri, linhas):
+    """Valida as linhas da tela (`[(kit_padrao_id, quantidade, num_osp)]`) e
+    devolve os itens do complementar (formato de `FaturamentoComplementar.
+    itens`), com o valor unitário do catálogo NESTE momento. Num OSP: com
+    mais de 1 OSP no RI é obrigatório (uma delas); com 1 só, vale ela; sem
+    OSP no RI, fica vazio. Levanta `FaturamentoComplementarError`."""
+    catalogo = {str(item.pk): item for item in catalogo_faturamento_complementar(ri.escola)}
+    osps = osps_do_ri(ri)
+    itens, erros = [], []
+    for indice, (kit_id, quantidade, num_osp) in enumerate(linhas, start=1):
+        kit_id = str(kit_id or "").strip()
+        quantidade_texto = str(quantidade or "").strip()
+        num_osp = (num_osp or "").strip()
+        if not kit_id and not quantidade_texto:
+            continue  # linha em branco
+        kit = catalogo.get(kit_id)
+        if kit is None:
+            erros.append(f"Item {indice}: escolha um KIT/produto da lista.")
+            continue
+        try:
+            quantidade_int = int(quantidade_texto)
+        except ValueError:
+            quantidade_int = 0
+        if quantidade_int < 1:
+            erros.append(f"Item {indice}: informe a quantidade (1 ou mais).")
+            continue
+        if len(osps) > 1:
+            if num_osp not in osps:
+                erros.append(f"Item {indice}: escolha o Num OSP (este RI tem mais de uma OSP).")
+                continue
+        elif len(osps) == 1:
+            if num_osp and num_osp != osps[0]:
+                erros.append(f"Item {indice}: Num OSP inválido.")
+                continue
+            num_osp = osps[0]
+        else:
+            num_osp = ""
+        eh_kit = kit.kit_fechado_por_escola
+        descricao = kit.descricao_curta or kit.descricao
+        item_lpu, aba = _item_lpu_e_aba(descricao, eh_kit, kit)
+        itens.append({
+            "kit_padrao_id": kit.pk,
+            "descricao": descricao,
+            "eh_kit": eh_kit,
+            "quantidade": quantidade_int,
+            "valor_unitario": str(kit.valor_faturavel),
+            "item_lpu": item_lpu,
+            "aba": aba,
+            "num_osp": num_osp,
+        })
+    if erros:
+        raise FaturamentoComplementarError(" ".join(erros))
+    if not itens:
+        raise FaturamentoComplementarError("Inclua ao menos 1 item no faturamento complementar.")
+    return itens
+
+
+def gerar_planilha_faturamento_complementar(complementar):
+    """Mesma planilha do faturamento normal (`gerar_planilha_faturamento`:
+    modelo, células, CFOP, vencimento e cabeçalho do RI), com as abas
+    montadas só dos itens do complementar - agrupados por (aba, OSP), como
+    no normal. Exige os mesmos dados de cabeçalho do Lado IXC, mas não os
+    itens do 2º/3º lado."""
+    ri = complementar.ri
+    valor_cfop = _valor_cfop_planilha(complementar.cfop or CFOP_ANTIGO)
+    faltando = cabecalho_faltando_para_planilha_faturamento(ri)
+    if faltando:
+        raise PlanilhaFaturamentoError(
+            "Antes de gerar a planilha do faturamento complementar, preencha no "
+            f"Lado IXC: {_juntar_com_e(faltando)}."
+        )
+    if not complementar.itens:
+        raise PlanilhaFaturamentoError("O faturamento complementar não tem itens.")
+    grupos = OrderedDict()
+    for item in complementar.itens:
+        chave = (item["aba"], item.get("num_osp") or "")
+        grupo = grupos.setdefault(
+            chave, {"item_lpu": item["item_lpu"], "subtotal": Decimal("0"), "quantidade_total": 0}
+        )
+        grupo["subtotal"] += Decimal(str(item["valor_unitario"])) * int(item["quantidade"])
+        grupo["quantidade_total"] += int(item["quantidade"])
+        grupo["item_lpu"] = item["item_lpu"]
+    data_vencimento = complementar.data_vencimento or timezone.localdate()
+    return _preencher_planilha_faturamento(ri, grupos, data_vencimento, valor_cfop)
+
+
+def montar_corpo_email_complementar(complementar):
+    """Corpo do e-mail do faturamento complementar - mesmos dados da
+    planilha, em texto simples."""
+    ri = complementar.ri
+    escola = ri.escola
+    partes = [
+        f"FATURAMENTO COMPLEMENTAR {complementar.rotulo}",
+        f"Escola: {escola.nome}",
+        f"INEP: {escola.inep}",
+        f"Endereço: {escola.endereco or 'Não informado'}"
+        + (f" — {ri.municipio_ixc}/{ri.estado_ixc}" if ri.municipio_ixc else ""),
+        f"CFOP: {complementar.cfop}",
+        "",
+        "Itens complementares:",
+    ]
+    for item in complementar.itens:
+        valor_unitario = Decimal(str(item["valor_unitario"]))
+        subtotal = valor_unitario * int(item["quantidade"])
+        osp = f" — OSP {item['num_osp']}" if item.get("num_osp") else ""
+        partes.append(
+            f"- {item['descricao']} — {item['quantidade']} un. — R$ {valor_unitario:.2f} — R$ {subtotal:.2f}{osp}"
+        )
+    partes.append(f"\nValor total: R$ {complementar.total:.2f}")
+    if complementar.observacoes:
+        partes.append(f"\nObservações: {complementar.observacoes}")
+    return "\n".join(partes)
+
+
+def _valores_por_osp_complementar(complementar):
+    """{OSP: [valores possíveis de NF]} - a NF do financeiro sai 1 por aba
+    da planilha (aba + OSP), então o valor dela é o subtotal da aba; o
+    subtotal de cada item sozinho também é aceito."""
+    valores = defaultdict(list)
+    por_aba = defaultdict(Decimal)
+    for item in complementar.itens:
+        subtotal = Decimal(str(item["valor_unitario"])) * int(item["quantidade"])
+        osp = item.get("num_osp") or ""
+        por_aba[(item["aba"], osp)] += subtotal
+        valores[osp].append(subtotal)
+    for (_aba, osp), total in por_aba.items():
+        valores[osp].append(total)
+    return valores
+
+
+def _valor_numerico_nf_pdf(documento_pdf):
+    """Valor Total da NF lido do PDF (float) ou `None` se não der para ler."""
+    if not documento_pdf:
+        return None
+    try:
+        from apps.integracoes.eace.extrair_dados_pdf import extrair_dados_nota_fiscal
+
+        valor = extrair_dados_nota_fiscal(documento_pdf.arquivo.path).get("valor") or ""
+        return float(valor.replace(".", "").replace(",", ".")) if valor else None
+    except Exception:
+        logger.exception("Falha ao ler o valor do PDF %s.", getattr(documento_pdf, "pk", None))
+        return None
+
+
+def resolver_osp_complementar(complementar, documento_pdf=None):
+    """OSP de uma NF do faturamento complementar: com 1 OSP só nos itens,
+    ela; com várias, a OSP cujo item/aba do COMPLEMENTAR tem o mesmo valor
+    do PDF (nunca os itens do 3º lado). Sem casar, `""`."""
+    osps = complementar.osps
+    if len(osps) <= 1:
+        return osps[0] if osps else ""
+    valor_pdf = _valor_numerico_nf_pdf(documento_pdf)
+    if valor_pdf is None:
+        return ""
+    candidatas = {
+        osp for osp, valores in _valores_por_osp_complementar(complementar).items()
+        if osp and any(abs(float(valor) - valor_pdf) < 0.01 for valor in valores)
+    }
+    return candidatas.pop() if len(candidatas) == 1 else ""
 
 
 def trocar_status_com_log(ri, novo_status, usuario):
@@ -915,7 +1139,13 @@ def _documentos_nf_do_ultimo_email_financeiro(ri):
     `_processar_mensagem`); um envio AO financeiro (FEAT-008) também usa
     `tipo=EMAIL`, mas nunca preenche `documentos` (usa `anexo`), então não
     interfere aqui — só devolve lista vazia até a próxima resposta chegar."""
-    ultimo_email = ri.historico.filter(tipo=RiHistorico.EMAIL).order_by("-criado_em").first()
+    # Faturamento complementar (v1.6.0): entradas do complementar não
+    # contam - aqui é só o faturamento normal.
+    ultimo_email = (
+        ri.historico.filter(tipo=RiHistorico.EMAIL, faturamento_complementar__isnull=True)
+        .order_by("-criado_em")
+        .first()
+    )
     if not ultimo_email:
         return []
     return list(ultimo_email.documentos.filter(tipo=Documento.NOTA_FISCAL_PDF).order_by("id"))
@@ -1942,6 +2172,133 @@ def _remetente_e_do_financeiro(remetente):
     return dominio == DOMINIO_FINANCEIRO
 
 
+
+_RE_NUMERO_NO_NOME = re.compile(r"^(\d+)")
+
+
+def _parear_pdf_xml_por_nome(pdfs, xmls):
+    """Pares (índice do PDF, índice do XML) pelos nomes originais dos
+    anexos: mesmo nome sem extensão ou, sem isso, o mesmo número no início
+    ("<nº da NF>_..."); o que sobrar é pareado pela ordem."""
+    def _base(nome):
+        return os.path.splitext(os.path.basename(nome or ""))[0].strip().casefold()
+
+    def _numero(nome):
+        achado = _RE_NUMERO_NO_NOME.match(os.path.basename(nome or ""))
+        return achado.group(1) if achado else None
+
+    livres = list(range(len(xmls)))
+    pares = {}
+    for criterio in (_base, _numero):
+        for i, (nome_pdf, _) in enumerate(pdfs):
+            if i in pares:
+                continue
+            chave = criterio(nome_pdf)
+            if not chave:
+                continue
+            for j in livres:
+                if criterio(xmls[j][0]) == chave:
+                    pares[i] = j
+                    livres.remove(j)
+                    break
+    for i in range(len(pdfs)):
+        if i not in pares and livres:
+            pares[i] = livres.pop(0)
+    return [(i, pares.get(i)) for i in range(len(pdfs))]
+
+
+def _processar_resposta_complementar(mensagem, assunto, remetente, codigo, mensagem_id_externo):
+    """Faturamento complementar (v1.6.0): resposta do financeiro a um
+    e-mail com `RI-AAAAMMDD-INEP-C<n>` no assunto. Mesmo processo da
+    resposta normal (`Documento` por arquivo, `EmailFinanceiroLog`
+    RECEBIDO, histórico "E-mail"), mas: os `LogRpaEace` abertos são só os
+    das NFs deste complementar (1 por PDF, já com o PDF/XML e a OSP do
+    complementar) e o status do RI/MIP nunca muda."""
+    complementar = (
+        FaturamentoComplementar.objects.select_related("ri", "ri__escola")
+        .filter(codigo_rastreio=codigo)
+        .order_by("-pk")
+        .first()
+    )
+    if not complementar:
+        logger.warning("E-mail do financeiro com código de complementar %s sem registro no sistema.", codigo)
+        return "sem_ri_aguardando"
+    ri = complementar.ri
+
+    if not _remetente_e_do_financeiro(remetente):
+        logger.warning(
+            "E-mail do complementar %s veio de remetente fora do domínio do financeiro (%s) — "
+            "ignorado, remetente: %r",
+            codigo, DOMINIO_FINANCEIRO, remetente,
+        )
+        return "remetente_nao_reconhecido"
+
+    pdfs, xmls = _classificar_anexos(mensagem)
+    padrao_ok = len(pdfs) == len(xmls) and len(pdfs) >= 1
+    status_leitura = EmailFinanceiroLog.OK if padrao_ok else EmailFinanceiroLog.FORA_DO_PADRAO
+
+    documentos_recebidos = []
+    if padrao_ok:
+        docs_pdf = [_salvar_documento(ri, Documento.NOTA_FISCAL_PDF, nome, payload) for nome, payload in pdfs]
+        docs_xml = [_salvar_documento(ri, Documento.XML, nome, payload) for nome, payload in xmls]
+        documentos_recebidos = docs_pdf + docs_xml
+        for indice_pdf, indice_xml in _parear_pdf_xml_por_nome(pdfs, xmls):
+            documento_pdf = docs_pdf[indice_pdf]
+            LogRpaEace.objects.create(
+                ri=ri,
+                faturamento_complementar=complementar,
+                documento_pdf=documento_pdf,
+                documento_xml=docs_xml[indice_xml] if indice_xml is not None else None,
+                num_osp=resolver_osp_complementar(complementar, documento_pdf),
+            )
+
+    EmailFinanceiroLog.objects.create(
+        ri=ri,
+        direcao=EmailFinanceiroLog.RECEBIDO,
+        remetente=remetente,
+        assunto=assunto,
+        anexo_pdf=", ".join(nome for nome, _ in pdfs) if padrao_ok else "",
+        status_leitura=status_leitura,
+        mensagem_id_externo=mensagem_id_externo or "",
+        faturamento_complementar=complementar,
+    )
+    auditar(
+        None,
+        Auditoria.RECEBIMENTO_EMAIL,
+        entidade="Ri",
+        entidade_id=ri.pk,
+        campo="assunto",
+        valor_novo=assunto,
+    )
+
+    if padrao_ok:
+        resumo = (
+            f"Resposta do faturamento complementar {complementar.rotulo} recebida do financeiro "
+            f"({len(pdfs)} Nota(s) Fiscal(is) complementar(es)). Status do RI mantido. Assunto: {assunto}"
+        )
+    else:
+        resumo = (
+            f"Resposta do faturamento complementar {complementar.rotulo} fora do padrão (quantidade "
+            f"de PDF diferente da de XML; recebido {len(pdfs)} PDF e {len(xmls)} XML). "
+            f"Status do RI mantido. Assunto: {assunto}"
+        )
+    entrada_email = RiHistorico.objects.create(
+        ri=ri, tipo=RiHistorico.EMAIL, autor=None, mensagem=resumo, faturamento_complementar=complementar,
+    )
+    if documentos_recebidos:
+        entrada_email.documentos.set(documentos_recebidos)
+
+    complementar.status = FaturamentoComplementar.RESPONDIDO
+    complementar.respondido_em = timezone.now()
+    complementar.historico_resposta = entrada_email
+    complementar.save(update_fields=["status", "respondido_em", "historico_resposta"])
+
+    if not padrao_ok:
+        logger.warning("RI %s: %s", ri.pk, resumo)
+        return "fora_do_padrao"
+    return "identificados"
+
+
 def _processar_mensagem(bruto, mensagem_id_externo):
     """Processa uma mensagem já baixada do Graph (bytes RFC822, formato
     igual ao de um `.eml`). Devolve uma string com o resultado
@@ -1963,6 +2320,15 @@ def _processar_mensagem(bruto, mensagem_id_externo):
     if not inep:
         logger.warning("E-mail do financeiro sem código de rastreio no assunto: %r", assunto)
         return "sem_codigo"
+
+    # Faturamento complementar (v1.6.0): "RI-AAAAMMDD-INEP-C<n>" no assunto
+    # é a resposta de um complementar - processada à parte (abre só os logs
+    # das NFs dele e não mexe no status do RI).
+    codigo_complementar = extrair_codigo_complementar(assunto)
+    if codigo_complementar:
+        return _processar_resposta_complementar(
+            mensagem, assunto, remetente, codigo_complementar, mensagem_id_externo
+        )
 
     # Correção (pedido do usuário, 2026-09-25; a formalizar pelo
     # Orquestrador em business_rules.md — revisão da RN-016): a resposta do
@@ -2629,7 +2995,16 @@ def executar_log_rpa_eace(log):
                 os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = anterior
 
     ri = log.ri
-    osp = _resolver_osp_da_nota_fiscal(ri, log.documento_pdf)
+    complementar = log.faturamento_complementar if log.faturamento_complementar_id else None
+    if complementar is not None:
+        # Faturamento complementar (v1.6.0): OSP gravada no log (ou casada
+        # pelo valor do PDF com os itens do COMPLEMENTAR) - nunca pelos
+        # itens do 3º lado.
+        osp = log.num_osp or resolver_osp_complementar(complementar, log.documento_pdf)
+        if osp and osp != log.num_osp:
+            log.num_osp = osp
+    else:
+        osp = _resolver_osp_da_nota_fiscal(ri, log.documento_pdf)
 
     if not osp or not log.documento_pdf or not log.documento_xml:
         # Estado inconsistente (a view só enfileira com os 2 documentos e
@@ -2675,6 +3050,12 @@ def executar_log_rpa_eace(log):
     if resultado_rpa is not None and resultado_rpa.sucesso:
         log.resultado = LogRpaEace.SUCESSO
         log.motivo_erro = ""
+    elif motivo == "documento_ja_enviado" and complementar is not None:
+        # Faturamento complementar (v1.6.0): sem linha "Pendente" com o
+        # valor da NF complementar no portal é erro, não "Atenção" - a NF
+        # complementar não é uma NF que "já estava lá".
+        log.resultado = LogRpaEace.ERRO
+        log.motivo_erro = "complementar_sem_linha_pendente"
     elif motivo == "documento_ja_enviado":
         # Pedido do usuário (2026-11-11): NF já está no portal - "Atenção",
         # não "Erro" (conta como enviada para o avanço do RI, RN-056).
@@ -2698,7 +3079,9 @@ def executar_log_rpa_eace(log):
     log.save()
     _registrar_execucao_rpa_eace(log)
 
-    if log.resultado in LogRpaEace.RESULTADOS_ENVIADOS:
+    # Faturamento complementar (v1.6.0): NF complementar nunca mexe no
+    # status do RI.
+    if log.resultado in LogRpaEace.RESULTADOS_ENVIADOS and not log.faturamento_complementar_id:
         _avancar_status_se_todos_os_logs_sucesso(ri)
 
     return {"log_id": log.pk, "resultado": log.resultado, "motivo": log.motivo_erro}
@@ -2706,10 +3089,12 @@ def executar_log_rpa_eace(log):
 
 def rpa_eace_concluida(ri):
     """RN-056: todas as Notas Fiscais da RPA EACE do RI terminaram — ao
-    menos 1 "Sucesso" e nenhum log fora de "Sucesso"/"Cancelado"."""
+    menos 1 "Sucesso" e nenhum log fora de "Sucesso"/"Cancelado". As NFs
+    de faturamento complementar (v1.6.0) não contam."""
+    logs = ri.logs_rpa_eace.filter(faturamento_complementar__isnull=True)
     return (
-        ri.logs_rpa_eace.filter(resultado__in=LogRpaEace.RESULTADOS_ENVIADOS).exists()
-        and not ri.logs_rpa_eace.exclude(resultado__in=LogRpaEace.RESULTADOS_IGNORADOS_NO_AVANCO).exists()
+        logs.filter(resultado__in=LogRpaEace.RESULTADOS_ENVIADOS).exists()
+        and not logs.exclude(resultado__in=LogRpaEace.RESULTADOS_IGNORADOS_NO_AVANCO).exists()
     )
 
 
@@ -2760,7 +3145,8 @@ def marcar_log_rpa_eace_concluido_manualmente(log, usuario):
         campo="resultado",
         valor_novo="concluido_manualmente",
     )
-    _avancar_status_se_todos_os_logs_sucesso(log.ri, usuario=usuario)
+    if not log.faturamento_complementar_id:
+        _avancar_status_se_todos_os_logs_sucesso(log.ri, usuario=usuario)
 
 
 @transaction.atomic
@@ -2834,7 +3220,8 @@ def cancelar_log_rpa_eace(log, motivo, usuario):
         valor_anterior=valor_anterior,
         valor_novo=LogRpaEace.CANCELADO,
     )
-    _avancar_status_se_todos_os_logs_sucesso(log.ri, usuario=usuario)
+    if not log.faturamento_complementar_id:
+        _avancar_status_se_todos_os_logs_sucesso(log.ri, usuario=usuario)
 
 
 def consultar_pendencias_portal_eace(ri):
@@ -4096,17 +4483,27 @@ def notas_fiscais_vigentes_do_financeiro(ri):
     conta 1. Devolve [{**ler_dados_xml_nf, "documento": Documento}]."""
     excluidos = _ids_documentos_so_de_logs_cancelados(ri)
     remessas, vistos = [], set()
-    for entrada in ri.historico.filter(tipo=RiHistorico.EMAIL).prefetch_related("documentos"):
+    for entrada in (
+        ri.historico.filter(tipo=RiHistorico.EMAIL)
+        .select_related("faturamento_complementar")
+        .prefetch_related("documentos")
+    ):
         xmls = [doc for doc in entrada.documentos.all() if doc.tipo == Documento.XML]
         if xmls:
-            remessas.append((entrada.criado_em, 0, entrada.pk, xmls))
+            # Faturamento complementar (v1.6.0): a NF complementar soma, não
+            # substitui a NF normal do mesmo ITEM LPU - chave própria por
+            # complementar (`compl:<código>:...`). Dentro do MESMO
+            # complementar, uma NF refaturada continua substituindo.
+            complementar = entrada.faturamento_complementar
+            prefixo = f"compl:{complementar.codigo_rastreio or complementar.pk}:" if complementar else ""
+            remessas.append((entrada.criado_em, 0, entrada.pk, xmls, prefixo))
             vistos.update(doc.pk for doc in xmls)
     for doc in ri.documentos.filter(tipo=Documento.XML).exclude(pk__in=vistos):
-        remessas.append((doc.recebido_em or doc.criado_em, 1, doc.pk, [doc]))
+        remessas.append((doc.recebido_em or doc.criado_em, 1, doc.pk, [doc], ""))
     remessas.sort(key=lambda remessa: remessa[:3])
 
     vigentes = {}
-    for *_, documentos in remessas:
+    for *_, documentos, prefixo in remessas:
         da_remessa = {}
         for doc in documentos:
             if doc.pk in excluidos:
@@ -4114,7 +4511,8 @@ def notas_fiscais_vigentes_do_financeiro(ri):
             dados = _dados_xml_nf_do_documento(doc)
             if not dados or not dados["numero_nf"]:
                 continue
-            da_remessa.setdefault(_chave_item_nf(dados), {})[dados["numero_nf"]] = {**dados, "documento": doc}
+            chave = prefixo + _chave_item_nf(dados)
+            da_remessa.setdefault(chave, {})[dados["numero_nf"]] = {**dados, "documento": doc}
         vigentes.update(da_remessa)
 
     notas = {}
@@ -4220,6 +4618,12 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
         for item in ri.itens_relatorio_eace.all():
             if item.nota_fiscal and item.num_osp:
                 osp_por_nf.setdefault(item.nota_fiscal.strip(), item.num_osp)
+        # Faturamento complementar (v1.6.0): OSP gravada no log da NF.
+        osp_por_xml = {
+            log.documento_xml_id: log.num_osp
+            for log in ri.logs_rpa_eace.all()
+            if log.faturamento_complementar_id and log.num_osp and log.documento_xml_id
+        }
         pdfs = [doc for doc in ri.documentos.all() if doc.tipo == Documento.NOTA_FISCAL_PDF]
         for nota in notas:
             numero = nota["numero_nf"]
@@ -4234,7 +4638,7 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
                 "data_nf": datetime.fromisoformat(nota["data_nf"]).date() if nota["data_nf"] else None,
                 "processo": _ROTULO_PROCESSO_NF.get(nota["processo"], "Não identificado"),
                 "valor": valor,
-                "numero_osp": osp_por_nf.get(numero, ""),
+                "numero_osp": osp_por_nf.get(numero) or osp_por_xml.get(nota["documento"].pk, ""),
                 "ri_id": ri.pk,
                 "documento_ids": [nota["documento"].pk, *pdfs_da_nf],
             })

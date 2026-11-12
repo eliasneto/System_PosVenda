@@ -21,7 +21,7 @@ individual, onde `forloop` não existe.
      {% endif %}>
     <div class="flex items-center justify-between gap-2">
         <span class="text-xs font-black uppercase italic">
-            Nota Fiscal #{{ log.numero_nf }}
+            {% if log.faturamento_complementar_id %}NF complementar {{ log.faturamento_complementar.rotulo }} #{{ log.numero_nf }}{% if log.num_osp %} <span class="ml-1 text-[10px] not-italic font-bold text-gray-400 dark:text-gray-500">OSP {{ log.num_osp }}</span>{% endif %}{% else %}Nota Fiscal #{{ log.numero_nf }}{% endif %}
             {% if log.criado_manualmente %}<span class="ml-1 text-[10px] not-italic font-bold text-gray-400 dark:text-gray-500">(processamento manual)</span>{% endif %}
         </span>
         {% if log.resultado == 'cancelado' %}

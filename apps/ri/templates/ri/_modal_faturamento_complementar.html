@@ -1,0 +1,184 @@
+{% comment %}
+Faturamento complementar (pedido do usuário, 2026-11-12, v1.6.0): botão +
+janela da tela do RI. NFs a mais para um INEP já faturado — itens do mesmo
+catálogo do Lado IXC (preço do catálogo, não editável), Num OSP de cada
+item (obrigatório quando o RI tem mais de uma OSP), CFOP e observações.
+"Baixar planilha" gera a planilha sem enviar; "Enviar ao financeiro" abre a
+confirmação com Para/Cc/Assunto (mesmo padrão do `_modal_enviar_email.html`,
+JS delegado em `core/base.html`). Nada aqui muda o 2º/3º lado nem o status
+do RI/MIP. Linhas de itens: JS em `ri_detail.html` (`configurarComplementar`).
+{% endcomment %}
+{% load l10n %}
+{% if pode_faturamento_complementar %}
+<button type="button" data-abrir-modal-email="modal-complementar-{{ ri.pk }}"
+        class="bg-white dark:bg-gray-900 border-2 border-pv-black dark:border-gray-600 px-6 py-3 rounded-2xl shadow-lg text-gray-900 dark:text-gray-100 font-black uppercase italic text-xs hover:bg-gray-50 dark:hover:bg-gray-800 transition flex flex-col items-start">
+    <span class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1 not-italic">Financeiro</span>
+    Faturamento complementar
+</button>
+
+<div id="modal-complementar-{{ ri.pk }}" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email
+     role="dialog" aria-modal="true" aria-labelledby="titulo-complementar-{{ ri.pk }}">
+    <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
+    <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+        <form id="form-complementar-{{ ri.pk }}" method="POST" action="{% url 'ri_faturamento_complementar' pk=ri.pk %}" data-form-complementar>
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next_url }}">
+            <div id="painel-complementar-{{ ri.pk }}" data-painel-principal>
+                <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800">
+                    <h2 id="titulo-complementar-{{ ri.pk }}" class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">
+                        Faturamento complementar — INEP {{ escola.inep }}
+                    </h2>
+                    <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Fechar">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                <div class="px-6 py-5 space-y-5">
+                    <p class="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
+                        Use para pedir ao financeiro Notas Fiscais a mais para este INEP. Os itens ficam só neste faturamento complementar e no histórico — não mudam o Lado IXC, o Lado Relatório EACE nem o status do RI.
+                    </p>
+
+                    <div>
+                        <h3 class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 mb-2">Complementares já enviados</h3>
+                        {% if complementares %}
+                        <ul class="flex flex-col gap-2">
+                            {% for complementar in complementares %}
+                            <li class="flex flex-wrap items-center justify-between gap-2 bg-gray-50 dark:bg-gray-800 rounded-xl px-3 py-2">
+                                <span class="text-xs font-black text-gray-800 dark:text-gray-100">
+                                    {{ complementar.rotulo }}
+                                    <span class="font-bold text-gray-500 dark:text-gray-400">· {{ complementar.itens|length }} item(ns) · R$ {{ complementar.total|floatformat:2 }}</span>
+                                </span>
+                                <span class="flex items-center gap-2">
+                                    <span class="text-[10px] font-black uppercase px-2 py-0.5 rounded-full {% if complementar.status == 'respondido' %}bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400{% else %}bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400{% endif %}">
+                                        {{ complementar.get_status_display }}
+                                    </span>
+                                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500">
+                                        {% if complementar.respondido_em %}respondido em {{ complementar.respondido_em|date:"d/m/Y H:i" }}{% elif complementar.enviado_em %}enviado em {{ complementar.enviado_em|date:"d/m/Y H:i" }}{% endif %}
+                                    </span>
+                                    {% if complementar.historico_envio and complementar.historico_envio.anexo %}
+                                    <a href="{{ complementar.historico_envio.anexo.url }}" class="text-[10px] font-black uppercase text-blue-600 dark:text-blue-400 hover:underline" target="_blank">Planilha</a>
+                                    {% endif %}
+                                </span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <p class="text-[11px] text-gray-400 dark:text-gray-500">Nenhum faturamento complementar enviado para este INEP.</p>
+                        {% endif %}
+                    </div>
+
+                    <div class="border-t border-gray-100 dark:border-gray-800 pt-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">
+                                Novo: complementar C{{ complementar_numero }}{% if complementar_rascunho %} <span class="normal-case font-bold text-gray-400">(rascunho guardado)</span>{% endif %}
+                            </h3>
+                            <button type="button" data-complementar-adicionar
+                                    class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] hover:bg-gray-800 transition">
+                                <i data-lucide="plus" class="w-3.5 h-3.5"></i> Adicionar item
+                            </button>
+                        </div>
+                        {% if complementar_osps|length > 1 %}
+                        <p class="text-[10px] text-gray-400 dark:text-gray-500 mb-2">Este RI tem mais de uma OSP: escolha o Num OSP de cada item.</p>
+                        {% endif %}
+                        <div class="flex flex-col gap-2" data-complementar-linhas>
+                            {% if complementar_rascunho %}
+                            {% for item in complementar_rascunho.itens %}
+                            {% include "ri/_linha_faturamento_complementar.html" with item=item %}
+                            {% endfor %}
+                            {% else %}
+                            {% include "ri/_linha_faturamento_complementar.html" with item=None %}
+                            {% endif %}
+                        </div>
+                        <template data-complementar-modelo>
+                            {% include "ri/_linha_faturamento_complementar.html" with item=None %}
+                        </template>
+                        <p class="text-right text-xs font-black text-gray-800 dark:text-gray-100 mt-3">
+                            Total: <span data-complementar-total>—</span>
+                        </p>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label for="cfop-complementar-{{ ri.pk }}" class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">CFOP da planilha</label>
+                            <select id="cfop-complementar-{{ ri.pk }}" name="cfop"
+                                    class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                                {% for valor, rotulo in cfops_planilha_faturamento %}<option value="{{ valor }}"{% if complementar_rascunho and complementar_rascunho.cfop == valor %} selected{% elif not complementar_rascunho and forloop.first %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="obs-complementar-{{ ri.pk }}" class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Observações</label>
+                            <textarea id="obs-complementar-{{ ri.pk }}" name="observacoes" rows="2" placeholder="Ex.: AP adicional instalado depois do faturamento"
+                                      class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300 resize-none">{{ complementar_rascunho.observacoes|default:"" }}</textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex flex-wrap justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800">
+                    <button type="button" data-fechar-modal-email class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                        Cancelar
+                    </button>
+                    <button type="submit" name="acao" value="baixar"
+                            class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition inline-flex items-center gap-1.5">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        Baixar planilha
+                    </button>
+                    <button type="button"
+                            data-validar-form="form-complementar-{{ ri.pk }}"
+                            data-esconder-painel="painel-complementar-{{ ri.pk }}"
+                            data-mostrar-painel="painel-complementar-confirmar-{{ ri.pk }}"
+                            class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition">
+                        Enviar ao financeiro
+                    </button>
+                </div>
+            </div>
+
+            <div id="painel-complementar-confirmar-{{ ri.pk }}" class="hidden" data-painel-secundario>
+                <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800">
+                    <h2 class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">Confirmar envio do complementar C{{ complementar_numero }}</h2>
+                    <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Fechar">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                <div class="px-6 py-5 space-y-4">
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">De</label>
+                        <input type="text" value="{{ remetente_financeiro }}" disabled
+                               class="w-full mt-1 px-3 py-2 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-500 dark:text-gray-400 cursor-not-allowed">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Para</label>
+                        <input type="text" name="para" value="{{ para_financeiro_sugestao }}" required
+                               class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Cc</label>
+                        <input type="text" name="cc" value="{{ cc_financeiro_sugestao }}"
+                               class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400">Assunto</label>
+                        <input type="text" name="assunto" value="{{ complementar_assunto_sugerido }}" required
+                               class="w-full mt-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-300">
+                    </div>
+                    <div class="flex items-start gap-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded-xl px-4 py-3">
+                        <i data-lucide="send" class="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5"></i>
+                        <p class="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                            A planilha do complementar C{{ complementar_numero }} vai anexada. O status do RI <strong>não muda</strong>. Quando o financeiro responder, as Notas Fiscais deste complementar aparecem em "Notas Fiscais para anexar no portal EACE".
+                        </p>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 px-6 py-5 border-t border-gray-100 dark:border-gray-800">
+                    <button type="button"
+                            data-esconder-painel="painel-complementar-confirmar-{{ ri.pk }}"
+                            data-mostrar-painel="painel-complementar-{{ ri.pk }}"
+                            class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                        Voltar
+                    </button>
+                    <button type="submit" name="acao" value="enviar" class="px-6 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition inline-flex items-center gap-2">
+                        <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                        Confirmar envio
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}

@@ -10,6 +10,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.files.base import ContentFile
 from django.core.mail import EmailMessage
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Case, IntegerField, Prefetch, Q, Value, When
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden
@@ -21,7 +22,12 @@ from django.views.decorators.cache import never_cache
 
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
-from apps.core.email_tracking import montar_assunto_com_codigo, montar_codigo_rastreio
+from apps.core.email_tracking import (
+    assunto_contem_codigo,
+    montar_assunto_com_codigo,
+    montar_codigo_rastreio,
+    montar_codigo_rastreio_complementar,
+)
 from apps.escolas.models import Escola, LogRpaEaceMip
 from apps.escolas.rpa_mip_lote import logs_mip_para_fila
 
@@ -42,6 +48,7 @@ from .forms import (
 from .models import (
     Documento,
     EmailFinanceiroLog,
+    FaturamentoComplementar,
     KitPadrao,
     LogRpaEace,
     PlanilhaEace,
@@ -51,6 +58,14 @@ from .models import (
     RiItemRelatorioEace,
 )
 from .services import (
+    # Faturamento complementar (v1.6.0).
+    FaturamentoComplementarError,
+    catalogo_faturamento_complementar,
+    gerar_planilha_faturamento_complementar,
+    montar_corpo_email_complementar,
+    montar_itens_faturamento_complementar,
+    osps_do_ri,
+    resolver_osp_complementar,
     RI_BLOQUEADO_FATURAMENTO_CONCLUIDO,
     RI_SEM_LINHA_NA_PLANILHA,
     PlanilhaEaceSincronizacaoError,
@@ -405,7 +420,8 @@ def _validar_transicao_status_ri(ri, novo_status, usuario):
     # sobra nenhum log fora de "Sucesso".
     if (
         novo_status == Ri.FATURAMENTO_RI_CONCLUIDO
-        and ri.logs_rpa_eace.exclude(resultado__in=LogRpaEace.RESULTADOS_IGNORADOS_NO_AVANCO).exists()
+        and ri.logs_rpa_eace.filter(faturamento_complementar__isnull=True)
+        .exclude(resultado__in=LogRpaEace.RESULTADOS_IGNORADOS_NO_AVANCO).exists()
     ):
         return (
             'Bloqueado: há log de RPA EACE ainda pendente ou com erro para este RI '
@@ -588,8 +604,10 @@ def grid_inep_view(request):
                 "itens_eace", "itens_ixc", "itens_relatorio_eace", "divergencias",
                 Prefetch(
                     "emails_financeiro",
+                    # Faturamento complementar (v1.6.0): a resposta de um
+                    # complementar não muda a Data Faturamento.
                     queryset=EmailFinanceiroLog.objects.filter(
-                        direcao=EmailFinanceiroLog.RECEBIDO
+                        direcao=EmailFinanceiroLog.RECEBIDO, faturamento_complementar__isnull=True,
                     ).order_by("-data_hora"),
                     to_attr="respostas_financeiro_recebidas",
                 ),
@@ -894,7 +912,9 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
     RI só avança de "Resposta Financeiro" quando TODOS os logs já são
     "Sucesso" - então nesse ponto o `{% else %}` do template (onde mora o
     formulário) nunca bate, só o bloco de resultado final."""
-    logs_rpa_eace = list(ri.logs_rpa_eace.select_related("documento_pdf", "documento_xml").all())
+    logs_rpa_eace = list(
+        ri.logs_rpa_eace.select_related("documento_pdf", "documento_xml", "faturamento_complementar").all()
+    )
     if not logs_rpa_eace:
         # Melhoria (pedido do usuário, 2026-09-07): usuário reportou um RI
         # em "Resposta Financeiro" sem a seção de Notas Fiscais aparecer
@@ -914,7 +934,12 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
         }
 
     posicoes = _posicoes_na_fila()
-    for indice, log in enumerate(logs_rpa_eace, start=1):
+    # Faturamento complementar (v1.6.0): as NFs do complementar ficam num
+    # bloco próprio ("NF complementar C<n>"), com numeração própria, e fora
+    # da referência posicional abaixo (não desalinham o `zip`).
+    logs_normais = [log for log in logs_rpa_eace if not log.faturamento_complementar_id]
+    logs_complementares = [log for log in logs_rpa_eace if log.faturamento_complementar_id]
+    for indice, log in enumerate(logs_normais, start=1):
         log.posicao_na_fila = posicoes.get(log.pk)
         # RN-058 (correção 2026-09-08): numeração fixa por log, não mais
         # `forloop.counter` do template — o polling de cada card agora é
@@ -922,6 +947,12 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
         # sozinho (fora do `{% for %}` da lista completa) também precisa
         # saber seu próprio número.
         log.numero_nf = indice
+    contagem_por_complementar = {}
+    for log in logs_complementares:
+        log.posicao_na_fila = posicoes.get(log.pk)
+        numero = contagem_por_complementar.get(log.faturamento_complementar_id, 0) + 1
+        contagem_por_complementar[log.faturamento_complementar_id] = numero
+        log.numero_nf = numero
 
     # Melhoria (pedido do usuário, 2026-09-05): usuário reportou escolher às
     # vezes o PDF errado pra cada "Nota Fiscal #N" e só descobrir depois de
@@ -939,7 +970,7 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
     itens_com_osp = list(ri.itens_relatorio_eace.exclude(num_osp="").order_by("id"))
     # Log "Cancelado" (NF errada) fica fora da correspondência posicional —
     # senão empurraria a referência das NFs seguintes.
-    logs_validos = [log for log in logs_rpa_eace if log.resultado != LogRpaEace.CANCELADO]
+    logs_validos = [log for log in logs_normais if log.resultado != LogRpaEace.CANCELADO]
     for log, item in zip(logs_validos, itens_com_osp):
         item.valor_total = item.valor_unitario * item.quantidade
         log.item_referencia = item
@@ -947,6 +978,8 @@ def _contexto_logs_rpa_eace(ri, next_url, oob=True):
     return {
         "ri": ri,
         "logs_rpa_eace": logs_rpa_eace,
+        "logs_rpa_eace_normais": logs_normais,
+        "logs_rpa_eace_complementares": logs_complementares,
         "documentos_pdf": _rotular_documentos_pdf(ri.documentos.filter(tipo=Documento.NOTA_FISCAL_PDF)),
         "documentos_xml": ri.documentos.filter(tipo=Documento.XML),
         "next_url": next_url,
@@ -1003,8 +1036,22 @@ def ri_log_rpa_eace_disparar_view(request, pk):
         if not documento_pdf or not documento_xml:
             messages.error(request, "Escolha 1 PDF e 1 XML antes de disparar a RPA.")
         else:
-            osp = ri.itens_relatorio_eace.exclude(num_osp="").values_list("num_osp", flat=True).first()
-            if not osp:
+            if log.faturamento_complementar_id:
+                # Faturamento complementar (v1.6.0): OSP do complementar
+                # (gravada no log ou casada pelo valor do PDF escolhido).
+                osp = log.num_osp or resolver_osp_complementar(log.faturamento_complementar, documento_pdf)
+                if osp and osp != log.num_osp:
+                    log.num_osp = osp
+            else:
+                osp = ri.itens_relatorio_eace.exclude(num_osp="").values_list("num_osp", flat=True).first()
+            if not osp and log.faturamento_complementar_id:
+                messages.error(
+                    request,
+                    f"Não foi possível definir a OSP desta NF complementar "
+                    f"{log.faturamento_complementar.rotulo}: o valor do PDF não bate com nenhum item do "
+                    "complementar. Confira o PDF escolhido.",
+                )
+            elif not osp:
                 messages.error(
                     request,
                     'RI sem "Num OSP" (Sincronizador da Planilha EACE, FEAT-024) - '
@@ -1708,6 +1755,211 @@ def ri_baixar_planilha_financeiro_view(request, pk):
     return resposta
 
 
+MENSAGEM_COMPLEMENTAR_SEM_PERMISSAO = (
+    "O faturamento complementar só pode ser feito por Administrador ou Analista."
+)
+
+
+def _pode_faturamento_complementar(user, ri):
+    """Faturamento complementar (v1.6.0): mesma permissão do envio normal ao
+    financeiro - Administrador e Analista; com o INEP em "Processo
+    Concluído" (MIP), só Administrador (`_lado_ixc_editavel`). Vale em
+    qualquer status do RI."""
+    return ri is not None and _lado_ixc_editavel(user, ri)
+
+
+def _assunto_sugerido_complementar(escola, hoje, numero):
+    codigo = montar_codigo_rastreio_complementar(escola.inep, hoje, numero)
+    return montar_assunto_com_codigo(
+        codigo, f"Faturamento EACE complementar — INEP {escola.inep} — {escola.nome}"
+    )
+
+
+def _contexto_faturamento_complementar(ri, user):
+    """Dados do modal "Faturamento complementar" na tela do RI."""
+    if ri is None:
+        return {"pode_faturamento_complementar": False}
+    complementares = list(
+        ri.faturamentos_complementares.select_related("historico_envio", "enviado_por").order_by("numero")
+    )
+    rascunho = next((c for c in complementares if c.status == FaturamentoComplementar.RASCUNHO), None)
+    numero = rascunho.numero if rascunho else FaturamentoComplementar.proximo_numero(ri)
+    catalogo = list(catalogo_faturamento_complementar(ri.escola))
+    for kit in catalogo:
+        kit.rotulo_complementar = kit.descricao_curta or kit.descricao
+    return {
+        "pode_faturamento_complementar": _pode_faturamento_complementar(user, ri),
+        "complementares": [c for c in complementares if c.status != FaturamentoComplementar.RASCUNHO],
+        "complementar_rascunho": rascunho,
+        "complementar_numero": numero,
+        "complementar_catalogo": catalogo,
+        "complementar_osps": osps_do_ri(ri),
+        "complementar_assunto_sugerido": _assunto_sugerido_complementar(ri.escola, timezone.localdate(), numero),
+    }
+
+
+def _linhas_complementar_do_post(post):
+    produtos = post.getlist("item_produto")
+    quantidades = post.getlist("item_quantidade")
+    osps = post.getlist("item_osp")
+    total = max(len(produtos), len(quantidades))
+    return [
+        (
+            produtos[i] if i < len(produtos) else "",
+            quantidades[i] if i < len(quantidades) else "",
+            osps[i] if i < len(osps) else "",
+        )
+        for i in range(total)
+    ]
+
+
+@login_required
+def ri_faturamento_complementar_view(request, pk):
+    """Faturamento complementar (pedido do usuário, 2026-11-12, v1.6.0):
+    janela "Faturamento complementar" da tela do RI. `acao=baixar` gera e
+    devolve a planilha (guarda o rascunho C<n>); `acao=enviar` envia a
+    planilha ao financeiro com o código `RI-AAAAMMDD-INEP-C<n>` no assunto.
+    Os itens ficam só no `FaturamentoComplementar` e no histórico do RI -
+    não alteram o 2º/3º lado, o status do RI nem o do MIP. Qualquer status
+    do RI; mesma permissão do envio normal (`_pode_faturamento_complementar`)."""
+    ri = get_object_or_404(Ri.objects.select_related("escola"), pk=pk)
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
+    if request.method != "POST":
+        return redirect(next_url)
+    if not _pode_faturamento_complementar(request.user, ri):
+        messages.error(
+            request,
+            MENSAGEM_RI_SOMENTE_ADMINISTRADOR
+            if _ri_somente_administrador(ri, request.user)
+            else MENSAGEM_COMPLEMENTAR_SEM_PERMISSAO,
+        )
+        return redirect(next_url)
+
+    acao = request.POST.get("acao")
+    if acao not in ("baixar", "enviar"):
+        messages.error(request, "Ação inválida.")
+        return redirect(next_url)
+    cfop = request.POST.get("cfop") or CFOP_ANTIGO
+    if cfop not in dict(CFOPS_PLANILHA_FATURAMENTO):
+        messages.error(request, f"CFOP inválido: {cfop}. Escolha 5117 ou 5102-004.")
+        return redirect(next_url)
+    try:
+        itens = montar_itens_faturamento_complementar(ri, _linhas_complementar_do_post(request.POST))
+    except FaturamentoComplementarError as erro:
+        messages.error(request, f"Faturamento complementar: {erro}")
+        return redirect(next_url)
+
+    destinatarios = copia = None
+    if acao == "enviar":
+        form = RiEmailFinanceiroForm(request.POST)
+        if not form.is_valid():
+            for erros_campo in form.errors.values():
+                for erro in erros_campo:
+                    messages.error(request, erro)
+            return redirect(next_url)
+        destinatarios = form.cleaned_data["para"]
+        copia = form.cleaned_data["cc"]
+
+    hoje = timezone.localdate()
+    with transaction.atomic():
+        # Um rascunho por RI: "Baixar planilha" e "Enviar" reaproveitam o
+        # mesmo C<n> até o envio (a numeração não pula).
+        Ri.objects.select_for_update().filter(pk=ri.pk).first()
+        complementar = ri.faturamentos_complementares.filter(status=FaturamentoComplementar.RASCUNHO).first()
+        if complementar is None:
+            complementar = FaturamentoComplementar(
+                ri=ri, numero=FaturamentoComplementar.proximo_numero(ri), criado_por=request.user,
+            )
+        complementar.itens = itens
+        complementar.cfop = cfop
+        complementar.observacoes = (request.POST.get("observacoes") or "").strip()
+        complementar.data_vencimento = hoje + timedelta(days=DIAS_VENCIMENTO_PLANILHA_FATURAMENTO)
+        complementar.save()
+
+    try:
+        planilha_bytes = gerar_planilha_faturamento_complementar(complementar)
+    except PlanilhaFaturamentoError as erro:
+        messages.error(request, str(erro))
+        return redirect(next_url)
+    nome_planilha = nome_arquivo_planilha_faturamento(ri.escola, complementar=complementar.numero)
+
+    if acao == "baixar":
+        resposta = HttpResponse(planilha_bytes, content_type=MIME_PLANILHA_FATURAMENTO)
+        nome_ascii = nome_planilha.encode("ascii", "ignore").decode("ascii") or "faturamento_complementar.xlsx"
+        resposta["Content-Disposition"] = (
+            f'attachment; filename="{nome_ascii}"; filename*=UTF-8\'\'{quote(nome_planilha)}'
+        )
+        return resposta
+
+    codigo = montar_codigo_rastreio_complementar(ri.escola.inep, hoje, complementar.numero)
+    assunto = form.cleaned_data["assunto"]
+    if not assunto_contem_codigo(assunto, codigo):
+        assunto = montar_assunto_com_codigo(codigo, assunto)
+    email = EmailMessage(
+        subject=assunto,
+        body=montar_corpo_email_complementar(complementar),
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=destinatarios,
+        cc=copia,
+    )
+    email.attach(nome_planilha, planilha_bytes, MIME_PLANILHA_FATURAMENTO)
+    email.send(fail_silently=False)
+
+    EmailFinanceiroLog.objects.create(
+        ri=ri,
+        direcao=EmailFinanceiroLog.ENVIADO,
+        remetente=settings.DEFAULT_FROM_EMAIL,
+        destinatarios="Para: " + ", ".join(destinatarios) + "; Cc: " + ", ".join(copia),
+        assunto=assunto,
+        anexo_pdf=nome_planilha,
+        faturamento_complementar=complementar,
+    )
+    auditar(
+        request.user,
+        Auditoria.ENVIO_EMAIL,
+        entidade="Ri",
+        entidade_id=ri.pk,
+        campo="faturamento_complementar",
+        valor_novo=assunto,
+        ip_origem=request.META.get("REMOTE_ADDR"),
+    )
+    resumo_itens = "; ".join(
+        f"{item['descricao']} x{item['quantidade']}" + (f" (OSP {item['num_osp']})" if item.get("num_osp") else "")
+        for item in itens
+    )
+    entrada_email = RiHistorico(
+        ri=ri,
+        tipo=RiHistorico.EMAIL,
+        autor=request.user,
+        faturamento_complementar=complementar,
+        mensagem=(
+            f"Faturamento complementar {complementar.rotulo} enviado ao financeiro (CFOP {cfop}, "
+            f"total R$ {complementar.total:.2f}). Itens: {resumo_itens}."
+            + (f" Observações: {complementar.observacoes}." if complementar.observacoes else "")
+            + f" Assunto: {assunto}"
+        ),
+    )
+    entrada_email.anexo.save(nome_planilha, ContentFile(planilha_bytes), save=False)
+    entrada_email.save()
+
+    complementar.status = FaturamentoComplementar.ENVIADO
+    complementar.codigo_rastreio = codigo
+    complementar.assunto = assunto
+    complementar.enviado_por = request.user
+    complementar.enviado_em = timezone.now()
+    complementar.historico_envio = entrada_email
+    complementar.save(
+        update_fields=["status", "codigo_rastreio", "assunto", "enviado_por", "enviado_em", "historico_envio"]
+    )
+    messages.success(
+        request,
+        f"Faturamento complementar {complementar.rotulo} enviado ao financeiro. O status do RI não mudou.",
+    )
+    return redirect(next_url)
+
+
 @login_required
 @never_cache
 def ri_detail_view(request, inep):
@@ -2259,6 +2511,8 @@ def ri_detail_view(request, inep):
             "cfops_planilha_faturamento": CFOPS_PLANILHA_FATURAMENTO,
             "para_financeiro_sugestao": ", ".join(DESTINATARIOS_FINANCEIRO),
             "cc_financeiro_sugestao": ", ".join(COPIA_FINANCEIRO),
+            # Faturamento complementar (v1.6.0): botão + modal na tela do RI.
+            **_contexto_faturamento_complementar(ri, request.user),
             # FEAT-033 (Fase 2/3, RN-056/RN-057/RN-058): logs de anexo no
             # portal EACE (log/seleção manual + estado "Na fila").
             **(_contexto_logs_rpa_eace(ri, request.get_full_path()) if ri else {

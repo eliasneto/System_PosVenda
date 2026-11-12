@@ -677,6 +677,8 @@ Histórico de Comunicação, mais espaço pra respirar.
 <div class="flex flex-wrap items-center gap-4 mt-6">
     {% include "ri/_status_pill_detail.html" with ri=ri next_url=request.get_full_path status_ri_manuais=status_ri_manuais status_ri_opcoes_disponiveis=status_ri_opcoes_disponiveis usuario_administrador=usuario_administrador %}
     {% include "ri/_acao_envio_email_detail.html" with ri=ri escola=escola next_url=request.get_full_path assunto_sugerido=assunto_sugerido %}
+    {# Faturamento complementar (v1.6.0): visível para Administrador/Analista, em qualquer status do RI. #}
+    {% include "ri/_modal_faturamento_complementar.html" with next_url=request.get_full_path %}
 </div>
 
 {% include "ri/_logs_rpa_eace_detail.html" with ri=ri logs_rpa_eace=logs_rpa_eace documentos_pdf=documentos_pdf documentos_xml=documentos_xml next_url=request.get_full_path existe_log_ativo=existe_log_ativo oob=oob %}
@@ -760,6 +762,50 @@ configurarBlocoProdutos({
     classeBotaoRemover: '.btn-remove-produto-servico-ixc',
     classeLinha: '.produto-servico-ixc-linha',
 });
+// Faturamento complementar (v1.6.0): linhas de itens do modal — "Adicionar
+// item" clona a linha-modelo, "x" remove; valor unitário (do catálogo, não
+// editável) e totais só exibidos, o servidor recalcula tudo pelo catálogo.
+(function configurarComplementar() {
+    var form = document.querySelector('[data-form-complementar]');
+    if (!form) return;
+    var linhas = form.querySelector('[data-complementar-linhas]');
+    var modelo = form.querySelector('[data-complementar-modelo]');
+    var formatar = function (valor) {
+        return 'R$ ' + valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+    function recalcular() {
+        var total = 0;
+        linhas.querySelectorAll('[data-complementar-linha]').forEach(function (linha) {
+            var opcao = linha.querySelector('[data-complementar-produto]').selectedOptions[0];
+            var unitario = opcao && opcao.dataset.valor ? parseFloat(opcao.dataset.valor) : 0;
+            var quantidade = parseInt(linha.querySelector('[data-complementar-quantidade]').value, 10) || 0;
+            var subtotal = unitario * quantidade;
+            total += subtotal;
+            linha.querySelector('[data-complementar-unitario]').textContent = unitario ? formatar(unitario) + ' un.' : '—';
+            linha.querySelector('[data-complementar-subtotal]').textContent = formatar(subtotal);
+        });
+        form.querySelector('[data-complementar-total]').textContent = formatar(total);
+    }
+    form.querySelector('[data-complementar-adicionar]').addEventListener('click', function () {
+        var wrapper = document.createElement('div');
+        wrapper.innerHTML = modelo.innerHTML.trim();
+        linhas.appendChild(wrapper.firstElementChild);
+        if (window.lucide) { window.lucide.createIcons(); }
+        recalcular();
+    });
+    linhas.addEventListener('click', function (evento) {
+        var remover = evento.target.closest('[data-complementar-remover]');
+        if (!remover) return;
+        if (linhas.querySelectorAll('[data-complementar-linha]').length > 1) {
+            remover.closest('[data-complementar-linha]').remove();
+            recalcular();
+        }
+    });
+    linhas.addEventListener('change', recalcular);
+    linhas.addEventListener('input', recalcular);
+    recalcular();
+})();
+
 configurarBlocoProdutos({
     idBotaoAdicionar: 'btn-add-produto-eace',
     idLinhas: 'produto-eace-linhas',

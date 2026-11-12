@@ -4,6 +4,7 @@ from .models import (
     Documento,
     EmailFinanceiroLog,
     EmailFinanceiroSync,
+    FaturamentoComplementar,
     KitPadrao,
     NfCanceladaFinanceiro,
     PlanilhaEace,
@@ -67,3 +68,11 @@ class NfCanceladaFinanceiroAdmin(admin.ModelAdmin):
     list_display = ("numero_nf", "inep", "escola", "valor", "cancelada_em", "baixada_em", "baixada_por")
     search_fields = ("numero_nf", "inep", "escola", "chave", "id_financeiro")
     list_filter = ("baixada_em",)
+
+
+@admin.register(FaturamentoComplementar)
+class FaturamentoComplementarAdmin(admin.ModelAdmin):
+    list_display = ("ri", "numero", "status", "codigo_rastreio", "enviado_em", "respondido_em")
+    search_fields = ("codigo_rastreio", "ri__escola__inep")
+    list_filter = ("status",)
+    raw_id_fields = ("ri", "historico_envio", "historico_resposta")

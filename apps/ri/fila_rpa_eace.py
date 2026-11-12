@@ -96,7 +96,13 @@ def _osps_ocupadas() -> set[str]:
     notas" da OSP envia TODAS as notas anexadas nela - 2 robôs na mesma OSP
     (INEPs diferentes) poderiam enviar a nota um do outro antes da hora."""
     ri_ids = LogRpaEace.objects.filter(resultado=LogRpaEace.PROCESSANDO).values_list("ri_id", flat=True)
-    return set().union(*_osps_por_ri(ri_ids).values()) if ri_ids else set()
+    ocupadas = set().union(*_osps_por_ri(ri_ids).values()) if ri_ids else set()
+    # Faturamento complementar (v1.6.0): a NF complementar vai na OSP gravada no log.
+    ocupadas |= {
+        osp.strip() for osp in LogRpaEace.objects.filter(resultado=LogRpaEace.PROCESSANDO)
+        .exclude(num_osp="").values_list("num_osp", flat=True)
+    }
+    return ocupadas
 
 
 def _candidatos():
@@ -138,7 +144,7 @@ def reservar_proximo_envio(robo: RoboRpaEace | None):
             if tipo == MIP and log.lote_id in lotes_ocupados:
                 continue
             # 1 robô por OSP (conservador: RI com itens em 2 OSPs espera as 2).
-            if tipo == RI and osps_ri.get(log.ri_id, set()) & osps_ocupadas:
+            if tipo == RI and (osps_ri.get(log.ri_id, set()) | ({log.num_osp.strip()} if log.num_osp else set())) & osps_ocupadas:
                 continue
             modelo = LogRpaEace if tipo == RI else LogRpaEaceMip
             reservado = modelo.objects.filter(pk=log.pk, resultado=modelo.NA_FILA).update(

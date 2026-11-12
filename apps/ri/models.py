@@ -751,6 +751,15 @@ class LogRpaEace(models.Model):
     # fora do e-mail — usuário sobe PDF+XML na tela e cria um log novo,
     # que não nasceu da resposta do financeiro (RN-016).
     criado_manualmente = models.BooleanField("Criado manualmente", default=False)
+    # Faturamento complementar (pedido do usuário, 2026-11-12, v1.6.0): log
+    # aberto pela resposta do financeiro a um faturamento complementar - já
+    # nasce com o PDF/XML e a OSP do complementar (`num_osp`), não usa a
+    # OSP dos itens do Lado Relatório EACE e não conta para o avanço do RI.
+    faturamento_complementar = models.ForeignKey(
+        "FaturamentoComplementar", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="logs_rpa_eace", verbose_name="Faturamento complementar",
+    )
+    num_osp = models.CharField("Num OSP (faturamento complementar)", max_length=50, blank=True)
     motivo_cancelamento = models.CharField("Motivo do cancelamento", max_length=255, blank=True)
     cancelado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
@@ -791,6 +800,7 @@ class LogRpaEace(models.Model):
         "inep_nao_encontrado": "O INEP não aparece no grid da OSP no portal (pode já ter sido enviado).",
         "indice_invalido": "Linha da Nota Fiscal fora do grid do INEP no portal.",
         "documento_ja_enviado": "A NF já estava enviada no portal EACE (a linha não está mais \"Pendente\") - confira no portal.",
+        "complementar_sem_linha_pendente": "O portal não tem linha Pendente com o valor desta NF complementar - confira no portal se a OSP tem a linha do item complementar.",
         "valor_divergente": "O valor da Nota Fiscal é diferente do valor da linha no portal.",
         "valor_ambiguo": "Mais de uma linha pendente do INEP tem o mesmo valor da NF — resolver manualmente.",
         "credenciais_ausentes": "Usuário/senha do portal EACE não configurados.",
@@ -916,6 +926,13 @@ class RiHistorico(models.Model):
     resultado_validacao_nf = models.JSONField(
         "Resultado da validação de Nota Fiscal", null=True, blank=True
     )
+    # Faturamento complementar (v1.6.0): marca as entradas "E-mail" do envio
+    # e da resposta de um complementar - quem olha só o faturamento normal
+    # (última resposta do financeiro, Data Faturamento) as ignora.
+    faturamento_complementar = models.ForeignKey(
+        "FaturamentoComplementar", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="entradas_historico", verbose_name="Faturamento complementar",
+    )
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
 
     class Meta:
@@ -950,6 +967,11 @@ class EmailFinanceiroLog(models.Model):
     # FEAT-009: ID da mensagem no Microsoft Graph — evita reprocessar a
     # mesma resposta se o delta query da sincronização entregá-la de novo.
     mensagem_id_externo = models.CharField("ID da mensagem (Graph)", max_length=255, blank=True)
+    # Faturamento complementar (v1.6.0): envio/resposta de um complementar.
+    faturamento_complementar = models.ForeignKey(
+        "FaturamentoComplementar", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="emails_financeiro", verbose_name="Faturamento complementar",
+    )
     data_hora = models.DateTimeField("Data/hora", auto_now_add=True)
 
     class Meta:
@@ -1050,3 +1072,86 @@ class NfCanceladaFinanceiro(models.Model):
         if usuario is None:
             return ""
         return usuario.get_full_name() or usuario.get_username()
+
+
+class FaturamentoComplementar(models.Model):
+    """Faturamento complementar (pedido do usuário, 2026-11-12, v1.6.0):
+    NFs a mais para um INEP já faturado. Os itens (KIT/produto do catálogo
+    `KitPadrao` + quantidade + Num OSP) ficam só aqui e no histórico do RI -
+    não alteram o 2º/3º lado, o status do RI nem o do MIP. A planilha vai
+    ao financeiro com o código `RI-AAAAMMDD-INEP-C<n>` no assunto; a
+    resposta abre `LogRpaEace` só para as NFs deste complementar.
+
+    `itens`: lista de dicts com `kit_padrao_id`, `descricao`, `eh_kit`,
+    `quantidade`, `valor_unitario` (texto decimal - valor do catálogo no
+    momento), `item_lpu`, `aba` e `num_osp`."""
+
+    RASCUNHO = "rascunho"
+    ENVIADO = "enviado"
+    RESPONDIDO = "respondido"
+    STATUS_CHOICES = [
+        (RASCUNHO, "Rascunho"),
+        (ENVIADO, "Enviado ao financeiro"),
+        (RESPONDIDO, "Respondido pelo financeiro"),
+    ]
+
+    ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="faturamentos_complementares")
+    numero = models.PositiveIntegerField("Número (C<n>)")
+    status = models.CharField("Status", max_length=20, choices=STATUS_CHOICES, default=RASCUNHO)
+    codigo_rastreio = models.CharField("Código de rastreio", max_length=40, blank=True, db_index=True)
+    assunto = models.CharField("Assunto do e-mail", max_length=255, blank=True)
+    itens = models.JSONField("Itens", default=list, blank=True)
+    cfop = models.CharField("CFOP", max_length=10, blank=True)
+    data_vencimento = models.DateField("Vencimento", null=True, blank=True)
+    observacoes = models.TextField("Observações", blank=True)
+    criado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name="Criado por",
+    )
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    enviado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name="Enviado por",
+    )
+    enviado_em = models.DateTimeField("Enviado em", null=True, blank=True)
+    respondido_em = models.DateTimeField("Respondido em", null=True, blank=True)
+    historico_envio = models.ForeignKey(
+        "RiHistorico", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name="Histórico do envio",
+    )
+    historico_resposta = models.ForeignKey(
+        "RiHistorico", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name="Histórico da última resposta",
+    )
+
+    class Meta:
+        verbose_name = "Faturamento complementar"
+        verbose_name_plural = "Faturamentos complementares"
+        ordering = ["ri_id", "numero"]
+        constraints = [
+            models.UniqueConstraint(fields=["ri", "numero"], name="faturamento_complementar_unico_numero_por_ri"),
+        ]
+
+    def __str__(self):
+        return f"{self.rotulo} - RI {self.ri_id} ({self.get_status_display()})"
+
+    @property
+    def rotulo(self):
+        return f"C{self.numero}"
+
+    @property
+    def total(self):
+        return sum(
+            (Decimal(str(item.get("valor_unitario") or "0")) * int(item.get("quantidade") or 0) for item in self.itens),
+            Decimal("0"),
+        )
+
+    @property
+    def osps(self):
+        """OSPs distintas dos itens (sem vazias), na ordem em que aparecem."""
+        return list(dict.fromkeys(item.get("num_osp") for item in self.itens if item.get("num_osp")))
+
+    @classmethod
+    def proximo_numero(cls, ri):
+        ultimo = cls.objects.filter(ri=ri).aggregate(maior=models.Max("numero"))["maior"]
+        return (ultimo or 0) + 1
