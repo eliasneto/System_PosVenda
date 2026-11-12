@@ -5,6 +5,7 @@ from .models import (
     EmailFinanceiroLog,
     EmailFinanceiroSync,
     KitPadrao,
+    NfCanceladaFinanceiro,
     PlanilhaEace,
     Ri,
     RiDivergencia,
@@ -59,3 +60,10 @@ admin.site.register(Documento)
 admin.site.register(EmailFinanceiroLog)
 admin.site.register(EmailFinanceiroSync)
 admin.site.register(RiHistorico)
+
+
+@admin.register(NfCanceladaFinanceiro)
+class NfCanceladaFinanceiroAdmin(admin.ModelAdmin):
+    list_display = ("numero_nf", "inep", "escola", "valor", "cancelada_em", "baixada_em", "baixada_por")
+    search_fields = ("numero_nf", "inep", "escola", "chave", "id_financeiro")
+    list_filter = ("baixada_em",)

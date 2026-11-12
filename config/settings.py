@@ -1,5 +1,5 @@
 """
-Configuracoes do Gerenciador Pos-Venda (v1.4.2).
+Configuracoes do Gerenciador Pos-Venda (v1.5.0).
 
 Reaproveita o padrao de configuracao via variaveis de ambiente do
 `modulo-posVenda` original (python-decouple + .env, RNF-05), mas com banco

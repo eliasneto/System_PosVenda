@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views, views_fila_tv
+from . import api_nfs_canceladas, views, views_fila_tv, views_nfs_canceladas
 
 urlpatterns = [
     path("inep/", views.grid_inep_view, name="grid_inep"),
@@ -45,6 +45,19 @@ urlpatterns = [
         views.relatorio_faturamento_eace_materiais_novo_exportar_arquivos_view,
         name="relatorio_faturamento_eace_materiais_novo_exportar_arquivos",
     ),
+    path(
+        "administrador/nfs-canceladas-financeiro/",
+        views_nfs_canceladas.nfs_canceladas_financeiro_view,
+        name="nfs_canceladas_financeiro",
+    ),
+    path(
+        "administrador/nfs-canceladas-financeiro/<int:pk>/baixar/",
+        views_nfs_canceladas.nf_cancelada_financeiro_baixar_view,
+        name="nf_cancelada_financeiro_baixar",
+    ),
+    # API de entrada do Módulo Financeiro (mesmo prefixo e token de apps/escolas/api_financeiro.py).
+    path("api/financeiro/nfs-canceladas/", api_nfs_canceladas.nfs_canceladas_view,
+         name="api_financeiro_nfs_canceladas"),
     path("inep/<str:inep>/", views.ri_detail_view, name="ri_detail"),
     path("inep/<str:inep>/iniciar/", views.ri_iniciar_view, name="ri_iniciar"),
     path("ri/<int:pk>/status/", views.ri_status_update_view, name="ri_status_update"),

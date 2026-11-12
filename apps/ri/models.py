@@ -987,3 +987,66 @@ class EmailFinanceiroSync(models.Model):
     def obter_configuracao(cls, mailbox):
         configuracao, _ = cls.objects.get_or_create(mailbox=mailbox)
         return configuracao
+
+
+class NfCanceladaFinanceiro(models.Model):
+    """NF-e que o Módulo Financeiro cancelou depois de já ter enviado ao
+    pós-venda (pedido do usuário, 2026-11-12). O financeiro avisa pela API
+    (`apps/ri/api_nfs_canceladas.py`, idempotente por `id_financeiro`) e a
+    NF aparece em "Administrador > NFs canceladas no financeiro". Enquanto
+    ninguém do pós-venda der baixa, a NF continua contando no relatório
+    "Faturamento EACE Materiais (NOVO)"; depois da baixa ela sai
+    (`notas_fiscais_vigentes_do_financeiro`), pela chave de acesso ou, sem
+    chave, pelo número da NF + INEP."""
+
+    id_financeiro = models.CharField("ID no financeiro", max_length=60, unique=True)
+    numero_nf = models.CharField("Nº da NF", max_length=20)
+    serie = models.CharField("Série", max_length=10, blank=True)
+    chave = models.CharField("Chave de acesso", max_length=44, blank=True, db_index=True)
+    inep = models.CharField("INEP", max_length=20, db_index=True)
+    escola = models.CharField("Escola", max_length=255, blank=True)
+    item = models.CharField("Item", max_length=255, blank=True)
+    valor = models.DecimalField("Valor", max_digits=14, decimal_places=2, null=True, blank=True)
+    cancelada_em = models.DateTimeField("Cancelada em", null=True, blank=True)
+    cancelada_por = models.CharField("Cancelada por", max_length=150, blank=True)
+    motivo = models.TextField("Motivo", blank=True)
+    email_financeiro = models.PositiveIntegerField("Nº do e-mail no financeiro", null=True, blank=True)
+    assunto = models.CharField("Assunto do e-mail", max_length=500, blank=True)
+    # Vínculo com o RI do INEP, quando existir (só para abrir o RI e
+    # registrar a baixa no histórico dele) - a NF é identificada pelo INEP.
+    ri = models.ForeignKey(
+        Ri, on_delete=models.SET_NULL, null=True, blank=True, related_name="nfs_canceladas_financeiro"
+    )
+    baixada_em = models.DateTimeField("Baixada em", null=True, blank=True)
+    baixada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Baixada por",
+    )
+    recebida_em = models.DateTimeField("Recebida em", auto_now_add=True)
+    atualizada_em = models.DateTimeField("Atualizada em", auto_now=True)
+
+    PENDENTE = "pendente"
+    BAIXADA = "baixada"
+
+    class Meta:
+        verbose_name = "NF cancelada no financeiro"
+        verbose_name_plural = "NFs canceladas no financeiro"
+        ordering = ["-cancelada_em", "-pk"]
+
+    def __str__(self):
+        return f"NF {self.numero_nf} - INEP {self.inep} ({self.status})"
+
+    @property
+    def status(self):
+        return self.BAIXADA if self.baixada_em else self.PENDENTE
+
+    @property
+    def nome_baixada_por(self):
+        usuario = self.baixada_por
+        if usuario is None:
+            return ""
+        return usuario.get_full_name() or usuario.get_username()

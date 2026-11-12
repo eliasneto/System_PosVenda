@@ -25,7 +25,7 @@ import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Count, DecimalField, F, Max, OuterRef, Prefetch, Subquery, Sum
+from django.db.models import Count, DecimalField, F, Max, OuterRef, Prefetch, Q, Subquery, Sum
 from django.utils import timezone
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -41,6 +41,7 @@ from .models import (
     EmailFinanceiroSync,
     KitPadrao,
     LogRpaEace,
+    NfCanceladaFinanceiro,
     PlanilhaEace,
     Ri,
     RiDivergencia,
@@ -3997,7 +3998,10 @@ _RE_DATA_NOME_ARQUIVO_NF = re.compile(r"^\d+_(\d{2})-(\d{2})-(\d{4})_")
 PROCESSO_NF_POR_FORMA_PAGAMENTO = {"18": "especial", "90": "classico"}
 PROCESSOS_NF = (("classico", "Clássico"), ("especial", "Especial"))
 _ROTULO_PROCESSO_NF = dict(PROCESSOS_NF)
-_VERSAO_DADOS_XML_NF = 1
+# Versão 2 (2026-11-12): passa a guardar a chave de acesso da NF-e, usada
+# para tirar do relatório a NF cancelada no financeiro e baixada aqui.
+_VERSAO_DADOS_XML_NF = 2
+_RE_CHAVE_NFE = re.compile(r"\d{44}")
 
 
 def _tag_xml(texto, tag):
@@ -4034,9 +4038,16 @@ def ler_dados_xml_nf(conteudo, nome_arquivo=""):
         data_nf = autorizada.date()
     item_lpu = re.search(r"ITEM LPU:\s*(.*?)\s*(?:MUNICIPIO|$)", _tag_xml(texto, "infCpl"))
     processos = {PROCESSO_NF_POR_FORMA_PAGAMENTO.get(forma, "") for forma in re.findall(r"<tPag>(\d+)</tPag>", texto)}
+    # Chave de acesso: a do protocolo de autorização (chNFe) ou, sem ele, o
+    # Id da infNFe ("NFe" + 44 dígitos).
+    chave = _tag_xml(texto, "chNFe")
+    if not _RE_CHAVE_NFE.fullmatch(chave):
+        achado_id = re.search(r'<infNFe[^>]*\bId="NFe(\d{44})"', texto)
+        chave = achado_id.group(1) if achado_id else ""
     return {
         "versao": _VERSAO_DADOS_XML_NF,
         "numero_nf": _tag_xml(texto, "nNF"),
+        "chave": chave,
         "valor": _tag_xml(texto, "vNF"),
         "data_nf": data_nf.isoformat() if data_nf else "",
         "autorizada_em": autorizada.isoformat() if autorizada else "",
@@ -4109,7 +4120,44 @@ def notas_fiscais_vigentes_do_financeiro(ri):
     notas = {}
     for por_numero in vigentes.values():
         notas.update(por_numero)
+    baixadas = _nfs_canceladas_baixadas(ri, notas.values())
+    if baixadas:
+        notas = {numero: nota for numero, nota in notas.items() if not _nf_cancelada_baixada(nota, ri, baixadas)}
     return sorted(notas.values(), key=lambda nota: (len(nota["numero_nf"]), nota["numero_nf"]))
+
+
+def _numero_nf_normalizado(numero):
+    return (numero or "").strip().lstrip("0")
+
+
+def _nfs_canceladas_baixadas(ri, notas):
+    """NF canceladas no financeiro e já baixadas no pós-venda que podem ser
+    deste INEP: as do mesmo INEP e as com a chave de alguma das `notas`."""
+    chaves = [nota.get("chave") for nota in notas if nota.get("chave")]
+    filtro = Q(inep=ri.escola.inep)
+    if chaves:
+        filtro |= Q(chave__in=chaves)
+    return list(
+        NfCanceladaFinanceiro.objects.filter(baixada_em__isnull=False).filter(filtro)
+        .values_list("chave", "numero_nf", "inep")
+    )
+
+
+def _nf_cancelada_baixada(nota, ri, baixadas):
+    """Pedido do usuário (2026-11-12): a NF cancelada no financeiro deixa de
+    contar depois da baixa no pós-venda. Identifica pela chave de acesso
+    (44 dígitos) quando os 2 lados têm; sem chave de um dos lados, pelo
+    número da NF + INEP."""
+    chave_nota = nota.get("chave") or ""
+    numero_nota = _numero_nf_normalizado(nota["numero_nf"])
+    for chave, numero_nf, inep in baixadas:
+        if chave and chave_nota:
+            if chave == chave_nota:
+                return True
+            continue
+        if inep.strip() == ri.escola.inep and _numero_nf_normalizado(numero_nf) == numero_nota:
+            return True
+    return False
 
 
 def _nf_no_periodo(nota, data_inicio, data_fim, inicio=None, fim=None):
