@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import api_nfs_canceladas, views, views_fila_tv, views_nfs_canceladas
+from . import api_envio_financeiro, api_nfs_canceladas, views, views_fila_tv, views_nfs_canceladas
 
 urlpatterns = [
     path("inep/", views.grid_inep_view, name="grid_inep"),
@@ -51,6 +51,11 @@ urlpatterns = [
         name="nfs_canceladas_financeiro",
     ),
     path(
+        "administrador/nfs-canceladas-financeiro/baixar/",
+        views_nfs_canceladas.nfs_canceladas_financeiro_baixar_lote_view,
+        name="nfs_canceladas_financeiro_baixar_lote",
+    ),
+    path(
         "administrador/nfs-canceladas-financeiro/<int:pk>/baixar/",
         views_nfs_canceladas.nf_cancelada_financeiro_baixar_view,
         name="nf_cancelada_financeiro_baixar",
@@ -58,6 +63,18 @@ urlpatterns = [
     # API de entrada do Módulo Financeiro (mesmo prefixo e token de apps/escolas/api_financeiro.py).
     path("api/financeiro/nfs-canceladas/", api_nfs_canceladas.nfs_canceladas_view,
          name="api_financeiro_nfs_canceladas"),
+    # Segundo caminho do e-mail com o financeiro (envio_financeiro.py / api_envio_financeiro.py).
+    path("api/financeiro/envios/", api_envio_financeiro.envios_pendentes_view,
+         name="api_financeiro_envios"),
+    path("api/financeiro/envios/confirmar/", api_envio_financeiro.confirmar_envio_view,
+         name="api_financeiro_envios_confirmar"),
+    path("api/financeiro/respostas/", api_envio_financeiro.resposta_financeiro_view,
+         name="api_financeiro_respostas"),
+    # Processo cancelado pela EACE (cancelamento_eace.py): o financeiro marca os e-mails dele.
+    path("api/financeiro/cancelamentos/", api_envio_financeiro.cancelamentos_pendentes_view,
+         name="api_financeiro_cancelamentos"),
+    path("api/financeiro/cancelamentos/confirmar/", api_envio_financeiro.confirmar_cancelamento_view,
+         name="api_financeiro_cancelamentos_confirmar"),
     path("inep/<str:inep>/", views.ri_detail_view, name="ri_detail"),
     path("inep/<str:inep>/iniciar/", views.ri_iniciar_view, name="ri_iniciar"),
     path("ri/<int:pk>/status/", views.ri_status_update_view, name="ri_status_update"),
@@ -76,6 +93,8 @@ urlpatterns = [
         views.ri_baixar_planilha_financeiro_view,
         name="ri_baixar_planilha_financeiro",
     ),
+    # Processo cancelado pela EACE (cancelamento_eace.py).
+    path("ri/<int:pk>/cancelar-eace/", views.ri_cancelar_eace_view, name="ri_cancelar_eace"),
     # Faturamento complementar (v1.6.0): baixar a planilha / enviar ao financeiro.
     path(
         "ri/<int:pk>/faturamento-complementar/",

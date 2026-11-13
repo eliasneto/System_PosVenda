@@ -33,6 +33,22 @@ def _derivar_numero_access_points(descricao):
     return int(correspondencia.group(1)) if correspondencia else None
 
 
+class SemCanceladosEaceManager(models.Manager):
+    """Esconde o que pertence a um processo cancelado pela EACE (`CancelamentoEace`): e-mail ao financeiro,
+    resposta (PDF/XML) e logs do RPA EACE ficam no banco para auditoria, mas deixam de contar em tudo (relatórios,
+    data de faturamento, fila do RPA, conclusão do RI). Quem precisa ver tudo usa o manager `todos`."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(cancelamento_eace__isnull=True)
+
+
+def _fk_cancelamento_eace():
+    return models.ForeignKey(
+        "CancelamentoEace", on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+        verbose_name="Cancelado pela EACE",
+    )
+
+
 class Ri(models.Model):
     """RI (kit) - tabela central do processo de faturamento (RN-001)."""
 
@@ -662,6 +678,10 @@ class Documento(models.Model):
     # `extrair_dados_validacao_nf`) fica guardado aqui na 1ª leitura.
     dados_nf_lidos = models.JSONField("Dados lidos do PDF da NF", null=True, blank=True, editable=False)
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    cancelamento_eace = _fk_cancelamento_eace()
+
+    objects = SemCanceladosEaceManager()
+    todos = models.Manager()
 
     class Meta:
         verbose_name = "Documento do RI"
@@ -776,6 +796,10 @@ class LogRpaEace(models.Model):
         related_name="+", verbose_name="Robô",
     )
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    cancelamento_eace = _fk_cancelamento_eace()
+
+    objects = SemCanceladosEaceManager()
+    todos = models.Manager()
 
     class Meta:
         verbose_name = "Log da RPA EACE"
@@ -973,6 +997,10 @@ class EmailFinanceiroLog(models.Model):
         related_name="emails_financeiro", verbose_name="Faturamento complementar",
     )
     data_hora = models.DateTimeField("Data/hora", auto_now_add=True)
+    cancelamento_eace = _fk_cancelamento_eace()
+
+    objects = SemCanceladosEaceManager()
+    todos = models.Manager()
 
     class Meta:
         verbose_name = "E-mail com o financeiro"
@@ -1155,3 +1183,87 @@ class FaturamentoComplementar(models.Model):
     def proximo_numero(cls, ri):
         ultimo = cls.objects.filter(ri=ri).aggregate(maior=models.Max("numero"))["maior"]
         return (ultimo or 0) + 1
+
+
+class EnvioFinanceiro(models.Model):
+    """Planilha de faturamento enviada ao financeiro (RI ou faturamento
+    complementar), com a integração direta como segundo caminho (pedido do
+    usuário, 2026-11-13, após o ataque que derrubou o envio de e-mail).
+
+    O e-mail continua sendo o caminho principal. Se o envio falhar, o
+    envio fica disponível ao Módulo Financeiro pela API
+    (`api_envio_financeiro.py`), que busca os pendentes e confirma o
+    recebimento. `message_id` é o mesmo nos dois caminhos: é o Message-ID
+    do e-mail e a chave que o financeiro usa para não gravar o mesmo envio
+    duas vezes (ex.: o SMTP deu erro mas o e-mail chegou)."""
+
+    EMAIL = "email"
+    API = "api"
+    CANAL_CHOICES = [(EMAIL, "E-mail"), (API, "Integração (API)")]
+
+    ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="envios_financeiro")
+    faturamento_complementar = models.ForeignKey(
+        "FaturamentoComplementar", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="envios_financeiro", verbose_name="Faturamento complementar",
+    )
+    message_id = models.CharField("Message-ID", max_length=255, unique=True)
+    canal = models.CharField("Canal", max_length=10, choices=CANAL_CHOICES, default=EMAIL, db_index=True)
+    erro_email = models.TextField("Erro do e-mail", blank=True)
+    remetente = models.CharField("Remetente", max_length=254)
+    destinatarios = models.TextField("Para", blank=True)
+    copia = models.TextField("Cc", blank=True)
+    assunto = models.CharField("Assunto", max_length=255)
+    corpo = models.TextField("Corpo", blank=True)
+    planilha = models.FileField("Planilha", upload_to="envios_financeiro/%Y/%m/", max_length=255)
+    nome_planilha = models.CharField("Nome da planilha", max_length=255)
+    anexo_extra = models.FileField("Anexo extra", upload_to="envios_financeiro/%Y/%m/", max_length=255, blank=True)
+    nome_anexo_extra = models.CharField("Nome do anexo extra", max_length=255, blank=True)
+    tipo_anexo_extra = models.CharField("Tipo do anexo extra", max_length=150, blank=True)
+    criado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name="Enviado por",
+    )
+    criado_em = models.DateTimeField("Enviado em", auto_now_add=True)
+    coletado_em = models.DateTimeField("Recebido pelo financeiro (API) em", null=True, blank=True)
+    cancelamento_eace = _fk_cancelamento_eace()
+
+    class Meta:
+        verbose_name = "Envio ao financeiro"
+        verbose_name_plural = "Envios ao financeiro"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"{self.get_canal_display()} - RI {self.ri_id} - {self.assunto}"
+
+
+class CancelamentoEace(models.Model):
+    """Processo do RI cancelado pela EACE depois do envio ao financeiro (pedido do usuário, 2026-11-13).
+
+    O RI volta para "Implantação EACE". O e-mail enviado, a resposta do financeiro (PDF/XML), os logs do RPA EACE
+    e o envio pela integração ficam no banco ligados a este registro (auditoria) e deixam de contar no sistema
+    (`SemCanceladosEaceManager`). Os itens dos 3 lados e os dados preenchidos ficam como estavam.
+
+    O financeiro busca os cancelamentos pela API (`api_envio_financeiro.py`), marca os e-mails dele como
+    "Cancelado pela EACE" (pelos códigos de rastreio e Message-IDs abaixo) e confirma (`confirmado_em`)."""
+
+    ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="cancelamentos_eace")
+    motivo = models.TextField("Motivo")
+    status_anterior = models.CharField("Status anterior", max_length=30)
+    codigos_rastreio = models.JSONField("Códigos de rastreio dos e-mails", default=list, blank=True)
+    message_ids = models.JSONField("Message-IDs dos envios", default=list, blank=True)
+    resumo = models.JSONField("O que foi desconsiderado", default=dict, blank=True)
+    criado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name="Cancelado por",
+    )
+    criado_em = models.DateTimeField("Cancelado em", auto_now_add=True)
+    confirmado_em = models.DateTimeField("Confirmado pelo financeiro em", null=True, blank=True)
+    resultado_financeiro = models.CharField("Resultado no financeiro", max_length=255, blank=True)
+
+    class Meta:
+        verbose_name = "Cancelamento pela EACE"
+        verbose_name_plural = "Cancelamentos pela EACE"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"RI {self.ri_id} - cancelado em {self.criado_em:%d/%m/%Y %H:%M}"

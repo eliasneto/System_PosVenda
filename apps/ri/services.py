@@ -2207,7 +2207,7 @@ def _parear_pdf_xml_por_nome(pdfs, xmls):
     return [(i, pares.get(i)) for i in range(len(pdfs))]
 
 
-def _processar_resposta_complementar(mensagem, assunto, remetente, codigo, mensagem_id_externo):
+def _processar_resposta_complementar(pdfs, xmls, assunto, remetente, codigo, mensagem_id_externo, via_api=False):
     """Faturamento complementar (v1.6.0): resposta do financeiro a um
     e-mail com `RI-AAAAMMDD-INEP-C<n>` no assunto. Mesmo processo da
     resposta normal (`Documento` por arquivo, `EmailFinanceiroLog`
@@ -2225,7 +2225,7 @@ def _processar_resposta_complementar(mensagem, assunto, remetente, codigo, mensa
         return "sem_ri_aguardando"
     ri = complementar.ri
 
-    if not _remetente_e_do_financeiro(remetente):
+    if not via_api and not _remetente_e_do_financeiro(remetente):
         logger.warning(
             "E-mail do complementar %s veio de remetente fora do domínio do financeiro (%s) — "
             "ignorado, remetente: %r",
@@ -2233,7 +2233,6 @@ def _processar_resposta_complementar(mensagem, assunto, remetente, codigo, mensa
         )
         return "remetente_nao_reconhecido"
 
-    pdfs, xmls = _classificar_anexos(mensagem)
     padrao_ok = len(pdfs) == len(xmls) and len(pdfs) >= 1
     status_leitura = EmailFinanceiroLog.OK if padrao_ok else EmailFinanceiroLog.FORA_DO_PADRAO
 
@@ -2282,6 +2281,8 @@ def _processar_resposta_complementar(mensagem, assunto, remetente, codigo, mensa
             f"de PDF diferente da de XML; recebido {len(pdfs)} PDF e {len(xmls)} XML). "
             f"Status do RI mantido. Assunto: {assunto}"
         )
+    if via_api:
+        resumo += SUFIXO_RESPOSTA_VIA_API
     entrada_email = RiHistorico.objects.create(
         ri=ri, tipo=RiHistorico.EMAIL, autor=None, mensagem=resumo, faturamento_complementar=complementar,
     )
@@ -2299,13 +2300,18 @@ def _processar_resposta_complementar(mensagem, assunto, remetente, codigo, mensa
     return "identificados"
 
 
+# Resposta do financeiro que chegou pela integração (API), não pela caixa
+# de e-mail (pedido do usuário, 2026-11-13: e-mail fora do ar após ataque).
+SUFIXO_RESPOSTA_VIA_API = " (Recebida pela integração direta com o financeiro: o e-mail estava fora do ar.)"
+
+
 def _processar_mensagem(bruto, mensagem_id_externo):
     """Processa uma mensagem já baixada do Graph (bytes RFC822, formato
     igual ao de um `.eml`). Devolve uma string com o resultado
     (`"identificados"`, `"fora_do_padrao"`, `"sem_codigo"`,
     `"sem_ri_aguardando"`, `"remetente_nao_reconhecido"` ou `"duplicado"`)
     — usada só para contagem."""
-    if mensagem_id_externo and EmailFinanceiroLog.objects.filter(
+    if mensagem_id_externo and EmailFinanceiroLog.todos.filter(
         mensagem_id_externo=mensagem_id_externo
     ).exists():
         # O delta query do Graph pode reentregar a mesma mensagem entre
@@ -2315,6 +2321,23 @@ def _processar_mensagem(bruto, mensagem_id_externo):
     mensagem = message_from_bytes(bruto, policy=policy.default)
     assunto = _decodificar_cabecalho(mensagem.get("Subject", ""))
     remetente = mensagem.get("From", "")
+    pdfs, xmls = _classificar_anexos(mensagem)
+    return processar_resposta_financeiro(assunto, remetente, pdfs, xmls, mensagem_id_externo)
+
+
+def processar_resposta_financeiro(assunto, remetente, pdfs, xmls, mensagem_id_externo, via_api=False):
+    """Resposta do financeiro com as NFs (PDF/XML), venha do e-mail
+    (`_processar_mensagem`) ou da integração (`api_envio_financeiro`,
+    `via_api=True`): o mesmo processo nos dois casos (documentos, logs do
+    RPA EACE, histórico, status), para as automações seguirem iguais.
+    `mensagem_id_externo` é o Message-ID da resposta, o mesmo no e-mail e
+    na API: a segunda chegada cai em "duplicados". Pela API o remetente
+    não é conferido pelo domínio (quem chama já se autenticou com o token
+    do financeiro)."""
+    if mensagem_id_externo and EmailFinanceiroLog.todos.filter(
+        mensagem_id_externo=mensagem_id_externo
+    ).exists():
+        return "duplicados"
 
     inep = extrair_primeiro_inep_rastreio(assunto)
     if not inep:
@@ -2327,7 +2350,7 @@ def _processar_mensagem(bruto, mensagem_id_externo):
     codigo_complementar = extrair_codigo_complementar(assunto)
     if codigo_complementar:
         return _processar_resposta_complementar(
-            mensagem, assunto, remetente, codigo_complementar, mensagem_id_externo
+            pdfs, xmls, assunto, remetente, codigo_complementar, mensagem_id_externo, via_api=via_api
         )
 
     # Correção (pedido do usuário, 2026-09-25; a formalizar pelo
@@ -2346,7 +2369,27 @@ def _processar_mensagem(bruto, mensagem_id_externo):
         )
         return "sem_ri_aguardando"
 
-    if not _remetente_e_do_financeiro(remetente):
+    # Processo cancelado pela EACE (pedido do usuário, 2026-11-13): a
+    # resposta que chega depois do cancelamento não volta a valer - fica só
+    # registrada (escondida, para a auditoria e para não reprocessar).
+    from .cancelamento_eace import resposta_de_processo_cancelado
+
+    cancelamento = resposta_de_processo_cancelado(ri, assunto)
+    if cancelamento:
+        EmailFinanceiroLog.objects.create(
+            ri=ri, direcao=EmailFinanceiroLog.RECEBIDO, remetente=remetente, assunto=assunto,
+            status_leitura=EmailFinanceiroLog.FORA_DO_PADRAO, mensagem_id_externo=mensagem_id_externo or "",
+            cancelamento_eace=cancelamento,
+        )
+        RiHistorico.objects.create(
+            ri=ri, tipo=RiHistorico.EMAIL, autor=None,
+            mensagem=(f"Resposta do financeiro ignorada: o processo foi cancelado pela EACE em "
+                      f"{timezone.localtime(cancelamento.criado_em):%d/%m/%Y %H:%M}. Assunto: {assunto}")[:250],
+        )
+        logger.warning("RI %s: resposta de processo cancelado pela EACE ignorada (%s).", ri.pk, assunto)
+        return "cancelados"
+
+    if not via_api and not _remetente_e_do_financeiro(remetente):
         # RN-016 (correção 2026-09-02): código de rastreio no assunto não
         # basta — só remetente do domínio do financeiro conta como resposta
         # de verdade. Não altera o status nem grava log/histórico (mesmo
@@ -2360,7 +2403,6 @@ def _processar_mensagem(bruto, mensagem_id_externo):
         )
         return "remetente_nao_reconhecido"
 
-    pdfs, xmls = _classificar_anexos(mensagem)
     # RN-005 (correção 2026-09-02): financeiro pode responder com mais de 1
     # Nota Fiscal no mesmo e-mail (1 PDF + 1 XML por NF, pareados pelo
     # número da NF no nome do arquivo) — usuário reportou (INEP 35095874)
@@ -2422,6 +2464,8 @@ def _processar_mensagem(bruto, mensagem_id_externo):
             f'{resumo} (RI em "{ri.get_status_display()}" — status mantido, '
             'não avançou para "Resposta Financeiro").'
         )
+    if via_api:
+        resumo += SUFIXO_RESPOSTA_VIA_API
     entrada_email = RiHistorico.objects.create(ri=ri, tipo=RiHistorico.EMAIL, autor=None, mensagem=resumo)
     if documentos_recebidos:
         # RN-008 (correção 2026-08-27): referencia os `Documento` já
@@ -2468,6 +2512,7 @@ def sincronizar_respostas_financeiro():
         "sem_ri_aguardando": 0,
         "remetente_nao_reconhecido": 0,
         "duplicados": 0,
+        "cancelados": 0,
     }
 
     caixa = _resolver_caixa()
@@ -4444,7 +4489,7 @@ def ler_dados_xml_nf(conteudo, nome_arquivo=""):
 
 
 def _gravar_dados_xml_nf(documento_pk, dados):
-    Documento.objects.filter(pk=documento_pk).update(dados_nf_lidos=dados)
+    Documento.todos.filter(pk=documento_pk).update(dados_nf_lidos=dados)
 
 
 def _dados_xml_nf_do_documento(documento):
@@ -4498,7 +4543,9 @@ def notas_fiscais_vigentes_do_financeiro(ri):
             prefixo = f"compl:{complementar.codigo_rastreio or complementar.pk}:" if complementar else ""
             remessas.append((entrada.criado_em, 0, entrada.pk, xmls, prefixo))
             vistos.update(doc.pk for doc in xmls)
-    for doc in ri.documentos.filter(tipo=Documento.XML).exclude(pk__in=vistos):
+    # `cancelamento_eace` explícito: o relatório NOVO com "Cancelados" pré-carrega
+    # `ri.documentos` com os cancelados também, e o filtro reaproveita essa carga.
+    for doc in ri.documentos.filter(tipo=Documento.XML, cancelamento_eace__isnull=True).exclude(pk__in=vistos):
         remessas.append((doc.recebido_em or doc.criado_em, 1, doc.pk, [doc], ""))
     remessas.sort(key=lambda remessa: remessa[:3])
 
@@ -4521,6 +4568,40 @@ def notas_fiscais_vigentes_do_financeiro(ri):
     baixadas = _nfs_canceladas_baixadas(ri, notas.values())
     if baixadas:
         notas = {numero: nota for numero, nota in notas.items() if not _nf_cancelada_baixada(nota, ri, baixadas)}
+    return sorted(notas.values(), key=lambda nota: (len(nota["numero_nf"]), nota["numero_nf"]))
+
+
+CANCELADA_NO_FINANCEIRO = "Cancelada no financeiro"
+CANCELADA_PELA_EACE = "Cancelada pela EACE"
+# Os cancelados pela EACE ficam separados dos cancelados no financeiro (pedido do usuário, 2026-11-13).
+FILTROS_CANCELADAS_NF = (
+    ("sem", "Sem cancelados"),
+    ("financeiro", "Cancelados"),
+    ("eace", "Cancelados EACE"),
+    ("todos", "Todos"),
+)
+_SITUACAO_DO_FILTRO = {"financeiro": CANCELADA_NO_FINANCEIRO, "eace": CANCELADA_PELA_EACE}
+
+
+def notas_fiscais_canceladas_do_financeiro(ri):
+    """NF-e recebidas do financeiro que não contam mais para o INEP (filtro "Cancelados" do relatório NOVO, pedido
+    do usuário 2026-11-13): as canceladas no financeiro e já baixadas aqui, e as do processo cancelado pela EACE
+    (`CancelamentoEace`). Mesmo formato de `notas_fiscais_vigentes_do_financeiro` + "situacao"; a mesma NF
+    recebida 2 vezes conta 1."""
+    notas = {}
+    excluidos = _ids_documentos_so_de_logs_cancelados(ri)
+    ativos = [doc for doc in ri.documentos.filter(tipo=Documento.XML, cancelamento_eace__isnull=True).order_by("criado_em")
+              if doc.pk not in excluidos]
+    lidas = [(doc, _dados_xml_nf_do_documento(doc)) for doc in ativos]
+    lidas = [(doc, dados) for doc, dados in lidas if dados and dados["numero_nf"]]
+    baixadas = _nfs_canceladas_baixadas(ri, [dados for _, dados in lidas])
+    for doc, dados in lidas:
+        if baixadas and _nf_cancelada_baixada(dados, ri, baixadas):
+            notas.setdefault(dados["numero_nf"], {**dados, "documento": doc, "situacao": CANCELADA_NO_FINANCEIRO})
+    for doc in Documento.todos.filter(ri=ri, tipo=Documento.XML, cancelamento_eace__isnull=False).order_by("criado_em"):
+        dados = _dados_xml_nf_do_documento(doc)
+        if dados and dados["numero_nf"]:
+            notas.setdefault(dados["numero_nf"], {**dados, "documento": doc, "situacao": CANCELADA_PELA_EACE})
     return sorted(notas.values(), key=lambda nota: (len(nota["numero_nf"]), nota["numero_nf"]))
 
 
@@ -4571,7 +4652,7 @@ def _nf_no_periodo(nota, data_inicio, data_fim, inicio=None, fim=None):
 
 
 def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio=None, hora_fim=None,
-                                                    processo=""):
+                                                    processo="", cancelados="sem"):
     """Linhas do relatório "Faturamento EACE Materiais (NOVO)": 1 por NF-e
     recebida do financeiro e vigente (`notas_fiscais_vigentes_do_
     financeiro`) com a data da NF em [`data_inicio`, `data_fim`] - o mesmo
@@ -4581,7 +4662,11 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
     `hora_inicio` até `data_fim` + `hora_fim` (minuto inclusive).
     `processo`: "classico"/"especial" (vazio = todos). O Nº OSP vem do item
     do Lado Relatório EACE com o mesmo número de NF (vazio se não houver) -
-    só informativo, não muda o valor."""
+    só informativo, não muda o valor. `cancelados` (pedido do usuário,
+    2026-11-13): "sem" (padrão: só as que valem), "financeiro" (só as
+    canceladas no financeiro e baixadas aqui), "eace" (só as de processo
+    cancelado pela EACE) ou "todos" (`notas_fiscais_canceladas_do_
+    financeiro`); a coluna "situacao" diz qual."""
     inicio = fim = None
     if hora_inicio:
         inicio = timezone.make_aware(datetime.combine(data_inicio, hora_inicio))
@@ -4594,21 +4679,32 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
     # A NF nunca chega ao pós-venda antes de ser emitida: só os RI com XML
     # recebido a partir da véspera de `data_inicio` (folga de fuso).
     desde = timezone.make_aware(datetime.combine(data_inicio - timedelta(days=1), time.min))
+    gerenciador = Documento.objects if cancelados == "sem" else Documento.todos
     ri_ids = set(
-        Documento.objects.filter(tipo=Documento.XML, criado_em__gte=desde).values_list("ri_id", flat=True)
+        gerenciador.filter(tipo=Documento.XML, criado_em__gte=desde).values_list("ri_id", flat=True)
     )
     if not ri_ids:
         return []
     ris = (
         Ri.objects.filter(pk__in=ri_ids)
         .select_related("escola")
-        .prefetch_related("itens_relatorio_eace", "logs_rpa_eace", "documentos")
+        .prefetch_related("itens_relatorio_eace", "logs_rpa_eace",
+                          Prefetch("documentos", queryset=gerenciador.all()))
     )
 
     linhas = []
     for ri in ris:
+        candidatas = []
+        if cancelados in ("sem", "todos"):
+            candidatas += [{**nota, "situacao": ""} for nota in notas_fiscais_vigentes_do_financeiro(ri)]
+        if cancelados != "sem":
+            vigentes = {nota["numero_nf"] for nota in candidatas}
+            so_situacao = _SITUACAO_DO_FILTRO.get(cancelados)
+            candidatas += [nota for nota in notas_fiscais_canceladas_do_financeiro(ri)
+                           if nota["numero_nf"] not in vigentes
+                           and (not so_situacao or nota["situacao"] == so_situacao)]
         notas = [
-            nota for nota in notas_fiscais_vigentes_do_financeiro(ri)
+            nota for nota in candidatas
             if _nf_no_periodo(nota, data_inicio, data_fim, inicio, fim)
             and (not processo or nota["processo"] == processo)
         ]
@@ -4641,6 +4737,7 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
                 "numero_osp": osp_por_nf.get(numero) or osp_por_xml.get(nota["documento"].pk, ""),
                 "ri_id": ri.pk,
                 "documento_ids": [nota["documento"].pk, *pdfs_da_nf],
+                "situacao": nota["situacao"],
             })
 
     linhas.sort(key=lambda linha: (linha["data_nf"] or data_inicio, linha["inep"],
@@ -4804,9 +4901,10 @@ COLUNAS_RELATORIO_FATURAMENTO_EACE_MATERIAIS_NOVO = (
     ("processo", "PROCESSO"),
     ("valor", "VALOR"),
     ("numero_osp", "Nº OSP"),
+    ("situacao", "SITUAÇÃO"),
 )
 
-_LARGURA_COLUNAS_PLANILHA_NOVO = {"A": 14.0, "B": 13.44, "C": 14.0, "D": 18.0, "E": 19.22, "F": 14.44}
+_LARGURA_COLUNAS_PLANILHA_NOVO = {"A": 14.0, "B": 13.44, "C": 14.0, "D": 18.0, "E": 19.22, "F": 14.44, "G": 24.0}
 
 
 def total_valor_relatorio_faturamento_eace_materiais_novo(linhas):
@@ -4932,7 +5030,7 @@ def gerar_zip_arquivos_relatorio_faturamento_eace_materiais_novo(linhas):
     `linhas` (`documento_ids` de cada linha), 1 pasta por INEP - NF fora do
     período ou substituída não entra."""
     ids = list(dict.fromkeys(pk for linha in linhas for pk in linha["documento_ids"]))
-    documentos = Documento.objects.filter(pk__in=ids).select_related("ri__escola").order_by("ri_id", "criado_em")
+    documentos = Documento.todos.filter(pk__in=ids).select_related("ri__escola").order_by("ri_id", "criado_em")
     buffer = io.BytesIO()
     nomes_usados = set()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as arquivo_zip:

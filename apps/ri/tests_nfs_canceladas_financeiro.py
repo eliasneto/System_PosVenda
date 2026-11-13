@@ -296,3 +296,54 @@ class TelaNfsCanceladasTests(TestCase):
         resp = self.client.get(reverse("relatorio_administrador"))
         self.assertContains(resp, self.url)
         self.assertContains(resp, "NFs canceladas no financeiro")
+
+
+class BaixaEmLoteTests(TestCase):
+    """Baixa em várias NFs de uma vez (pedido do usuário, 2026-11-13)."""
+
+    def setUp(self):
+        TelaNfsCanceladasTests.setUp(self)
+        self.segunda = NfCanceladaFinanceiro.objects.create(
+            id_financeiro="456-0", numero_nf="3472", inep="52039412", escola="COLEGIO TESTE", ri=self.ri)
+        self.url_lote = reverse("nfs_canceladas_financeiro_baixar_lote")
+
+    def test_tela_tem_caixas_so_nas_aguardando_baixa(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(self.url, {"status": "todas"})
+        self.assertContains(resp, 'id="form-baixa-lote"')
+        self.assertContains(resp, 'form="form-baixa-lote"', count=2)
+        self.assertContains(resp, 'data-baixa-lote-nf="3471"')
+        self.assertNotContains(resp, 'data-baixa-lote-nf="3999"')
+        self.assertNotContains(self.client.get(self.url, {"status": "baixadas"}), 'id="form-baixa-lote"')
+
+    def test_baixa_as_marcadas_com_historico_e_auditoria_de_cada_uma(self):
+        self.client.force_login(self.admin)
+        resp = self.client.post(self.url_lote, {"nfs": [self.pendente.pk, self.segunda.pk, self.baixada.pk],
+                                                "next": self.url}, follow=True)
+        self.assertContains(resp, "Baixa dada em 2 NFs (3471, 3472)")
+        self.assertContains(resp, "1 NF já estava baixada.")
+        for nf in (self.pendente, self.segunda):
+            nf.refresh_from_db()
+            self.assertEqual(nf.baixada_por, self.admin)
+            self.assertTrue(Auditoria.objects.filter(entidade="NfCanceladaFinanceiro", entidade_id=nf.pk).exists())
+        self.assertEqual(RiHistorico.objects.filter(ri=self.ri, mensagem__startswith="Baixa da NF").count(), 2)
+        self.baixada.refresh_from_db()
+        self.assertEqual(self.baixada.baixada_por, self.admin)
+
+    def test_sem_nf_marcada_nao_faz_nada(self):
+        self.client.force_login(self.admin)
+        resp = self.client.post(self.url_lote, {"next": self.url}, follow=True)
+        self.assertContains(resp, "Marque pelo menos uma NF")
+        self.pendente.refresh_from_db()
+        self.assertIsNone(self.pendente.baixada_em)
+
+    def test_analista_nao_da_baixa_em_lote(self):
+        self.client.force_login(self.analista)
+        self.assertEqual(self.client.post(self.url_lote, {"nfs": [self.pendente.pk]}).status_code, 403)
+        self.assertEqual(self.client.get(self.url_lote).status_code, 405)
+        self.pendente.refresh_from_db()
+        self.assertIsNone(self.pendente.baixada_em)
+
+    def test_icone_da_aba(self):
+        self.client.force_login(self.admin)
+        self.assertContains(self.client.get(self.url), 'rel="icon" type="image/svg+xml"')

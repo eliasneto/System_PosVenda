@@ -1,0 +1,59 @@
+{% comment %}
+Processo cancelado pela EACE (pedido do usuário, 2026-11-13): botão + janela do motivo na tela do RI. Só aparece
+com e-mail enviado ao financeiro neste processo. Confirmar: o RI volta para "Implantação EACE", o envio, a resposta
+e os logs do RPA ficam só no histórico e o financeiro é avisado pela integração (`cancelamento_eace.py`). Abrir e
+fechar: JS delegado em `core/base.html` (data-abrir-modal-email / data-fechar-modal-email).
+{% endcomment %}
+{% if pode_cancelar_eace %}
+<button type="button" data-abrir-modal-email="modal-cancelar-eace-{{ ri.pk }}"
+        {% if bloqueio_cancelar_eace %}disabled title="{{ bloqueio_cancelar_eace }}"{% endif %}
+        class="bg-white dark:bg-gray-900 border-2 border-red-600 px-6 py-3 rounded-2xl shadow-lg text-red-700 dark:text-red-400 font-black uppercase italic text-xs hover:bg-red-50 dark:hover:bg-red-900/20 transition flex flex-col items-start disabled:opacity-40 disabled:cursor-not-allowed">
+    <span class="text-[10px] font-black text-gray-500 uppercase leading-none mb-1 not-italic">EACE</span>
+    Cancelado pela EACE
+</button>
+
+{% if not bloqueio_cancelar_eace %}
+<div id="modal-cancelar-eace-{{ ri.pk }}" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" data-modal-email
+     role="dialog" aria-modal="true" aria-labelledby="titulo-cancelar-eace-{{ ri.pk }}">
+    <div class="absolute inset-0 bg-black/60" data-fechar-modal-email></div>
+    <div class="relative bg-white dark:bg-gray-900 rounded-[2rem] shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
+        <form method="POST" action="{% url 'ri_cancelar_eace' pk=ri.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next_url }}">
+            <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800">
+                <h2 id="titulo-cancelar-eace-{{ ri.pk }}" class="text-base font-black italic uppercase text-gray-900 dark:text-gray-100">
+                    Processo cancelado pela EACE — INEP {{ escola.inep }}
+                </h2>
+                <button type="button" data-fechar-modal-email class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Fechar">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                <div class="text-[12px] text-gray-600 dark:text-gray-300 leading-relaxed space-y-2">
+                    <p>Ao confirmar:</p>
+                    <ul class="list-disc pl-5 space-y-1">
+                        <li>o RI volta para <strong>Implantação EACE</strong>;</li>
+                        <li>o e-mail enviado ao financeiro, a resposta (PDF/XML das NFs) e os logs do RPA EACE deixam de valer e ficam só no histórico;</li>
+                        <li>o financeiro é avisado pela integração e não gera mais NF desse e-mail;</li>
+                        <li>os itens dos 3 lados e os dados preenchidos continuam como estão.</li>
+                    </ul>
+                </div>
+                <div>
+                    <label for="motivo-cancelar-eace-{{ ri.pk }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">Motivo (obrigatório)</label>
+                    <textarea id="motivo-cancelar-eace-{{ ri.pk }}" name="motivo" rows="3" required maxlength="1000"
+                              placeholder="Ex.: EACE cancelou a instalação da escola"
+                              class="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl text-sm font-semibold text-gray-900 dark:text-gray-100"></textarea>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800">
+                <button type="button" data-fechar-modal-email class="px-5 py-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-[10px] font-black uppercase italic text-gray-700 dark:text-gray-200">Voltar</button>
+                <button type="submit" class="px-5 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg text-[10px] font-black uppercase italic inline-flex items-center gap-2">
+                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+                    Confirmar cancelamento
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+{% endif %}

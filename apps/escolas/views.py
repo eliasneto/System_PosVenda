@@ -1416,7 +1416,7 @@ def mip_detail_view(request, inep):
     if ri:
         historico_form = RiHistoricoForm()
         historico_paginator = Paginator(
-            ri.historico.select_related("autor").prefetch_related("documentos"),
+            ri.historico.select_related("autor").prefetch_related(Prefetch("documentos", queryset=Documento.todos.all())),
             HISTORICO_ITENS_POR_PAGINA,
         )
         historico_page_obj = historico_paginator.get_page(request.GET.get("historico_page"))

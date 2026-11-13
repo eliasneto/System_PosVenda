@@ -232,6 +232,10 @@ EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
 EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+# Sem limite, um servidor de e-mail fora do ar prende a tela do usuário
+# até o proxy desistir. Com ele, a falha chega rápido e o envio vai ao
+# financeiro pela integração (apps/ri/envio_financeiro.py).
+EMAIL_TIMEOUT = config("EMAIL_TIMEOUT", default=30, cast=int)
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="posvendas@megainfraestrutura.com.br")
 
 # FEAT-009 (RF-08/RF-19): leitura da resposta do financeiro na mesma caixa,

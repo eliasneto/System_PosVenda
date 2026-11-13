@@ -24,55 +24,48 @@
     </div>
 </div>
 
-<form method="GET" class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-8 flex flex-col lg:flex-row lg:items-end gap-4">
-    <div class="w-full lg:w-56">
+<form method="GET" class="bg-white dark:bg-gray-900 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-8 flex flex-col lg:flex-row lg:flex-wrap lg:items-end gap-4">
+    <div class="w-full lg:flex-1 lg:min-w-0">
         <label for="{{ form.data_inicio.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
             {{ form.data_inicio.label }}
         </label>
         {{ form.data_inicio }}
     </div>
-    <div class="w-full lg:w-36">
+    <div class="w-full lg:flex-1 lg:min-w-0">
         <label for="{{ form.hora_inicio.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
             {{ form.hora_inicio.label }}
         </label>
         {{ form.hora_inicio }}
     </div>
-    <div class="w-full lg:w-56">
+    <div class="w-full lg:flex-1 lg:min-w-0">
         <label for="{{ form.data_fim.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
             {{ form.data_fim.label }}
         </label>
         {{ form.data_fim }}
     </div>
-    <div class="w-full lg:w-36">
+    <div class="w-full lg:flex-1 lg:min-w-0">
         <label for="{{ form.hora_fim.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
             {{ form.hora_fim.label }}
         </label>
         {{ form.hora_fim }}
     </div>
-    <div class="w-full lg:w-44">
+    <div class="w-full lg:flex-1 lg:min-w-0">
         <label for="{{ form.processo.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
             {{ form.processo.label }}
         </label>
         {{ form.processo }}
     </div>
-    <div class="flex gap-2 w-full lg:w-auto">
-        <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center">
-            <i data-lucide="search" class="w-4 h-4"></i>
-            Gerar relatório
-        </button>
-        {% if linhas is not None %}
-        <a href="{% url 'relatorio_faturamento_eace_materiais_novo_exportar' %}?{{ filtro_querystring }}"
-           class="px-6 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-black uppercase italic text-xs rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-700 transition flex items-center gap-2 w-full lg:w-auto justify-center">
-            <i data-lucide="download" class="w-4 h-4"></i>
-            Exportar Excel
-        </a>
-        <a href="{% url 'relatorio_faturamento_eace_materiais_novo_exportar_arquivos' %}?{{ filtro_querystring }}"
-           class="px-6 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-black uppercase italic text-xs rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-700 transition flex items-center gap-2 w-full lg:w-auto justify-center">
-            <i data-lucide="archive" class="w-4 h-4"></i>
-            Exportar Arquivos (.zip)
-        </a>
-        {% endif %}
+    <div class="w-full lg:flex-1 lg:min-w-0">
+        <label for="{{ form.cancelados.id_for_label }}" class="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5"
+               title="NF canceladas no financeiro (com baixa aqui) e NF de processo cancelado pela EACE">
+            {{ form.cancelados.label }}
+        </label>
+        {{ form.cancelados }}
     </div>
+    <button type="submit" class="px-6 py-3 bg-pv-black text-pv-yellow font-black uppercase italic text-xs rounded-2xl hover:bg-gray-800 transition shadow-lg flex items-center gap-2 w-full lg:w-auto justify-center shrink-0 whitespace-nowrap">
+        <i data-lucide="search" class="w-4 h-4"></i>
+        Gerar relatório
+    </button>
     {% if form.non_field_errors %}
     <p class="text-xs font-bold text-red-500 w-full">{{ form.non_field_errors.0 }}</p>
     {% endif %}
@@ -106,6 +99,29 @@
         <i data-lucide="wallet" class="w-3.5 h-3.5"></i>
         Total: R$ {{ total_valor|intcomma }}
     </span>
+    {% if total_canceladas is not None %}
+    <span class="inline-flex items-center gap-2 px-4 py-1.5 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-full text-xs font-black uppercase tracking-wider">
+        <i data-lucide="ban" class="w-3.5 h-3.5"></i>
+        Canceladas: R$ {{ total_canceladas|intcomma }}
+    </span>
+    {% endif %}
+    {% if total_canceladas_eace is not None %}
+    <span class="inline-flex items-center gap-2 px-4 py-1.5 bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 rounded-full text-xs font-black uppercase tracking-wider">
+        <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+        Canceladas EACE: R$ {{ total_canceladas_eace|intcomma }}
+    </span>
+    {% endif %}
+    <span class="flex-1"></span>
+    <a href="{% url 'relatorio_faturamento_eace_materiais_novo_exportar' %}?{{ filtro_querystring }}"
+       class="px-4 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 font-black uppercase italic text-[10px] rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition inline-flex items-center gap-2 whitespace-nowrap">
+        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+        Exportar Excel
+    </a>
+    <a href="{% url 'relatorio_faturamento_eace_materiais_novo_exportar_arquivos' %}?{{ filtro_querystring }}"
+       class="px-4 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 font-black uppercase italic text-[10px] rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition inline-flex items-center gap-2 whitespace-nowrap">
+        <i data-lucide="archive" class="w-3.5 h-3.5"></i>
+        Exportar Arquivos (.zip)
+    </a>
 </div>
 
 <div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
@@ -119,6 +135,7 @@
                     <th class="px-3 py-2">Processo</th>
                     <th class="px-3 py-2" title="Valor da NF-e recebida do financeiro (XML)">Valor</th>
                     <th class="px-3 py-2">Nº OSP</th>
+                    <th class="px-3 py-2" title="NF cancelada no financeiro (com baixa aqui) ou de processo cancelado pela EACE">Situação</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
@@ -130,6 +147,7 @@
                     <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.processo }}</td>
                     <td class="px-3 py-2 text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.valor is not None %}R$ {{ linha.valor|intcomma }}{% else %}—{% endif %}</td>
                     <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.numero_osp|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] font-bold">{% if linha.situacao %}<span class="inline-flex items-center px-3 py-1 rounded-full bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-[10px] font-black uppercase">{{ linha.situacao }}</span>{% else %}<span class="text-gray-400">—</span>{% endif %}</td>
                 </tr>
                 {% endfor %}
             </tbody>

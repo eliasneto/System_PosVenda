@@ -3460,7 +3460,7 @@ class SincronizarEmailFinanceiroTests(TestCase):
         self.assertEqual(resultado, {
             "processados": 1, "identificados": 1, "fora_do_padrao": 0,
             "sem_codigo": 0, "sem_ri_aguardando": 0,
-            "remetente_nao_reconhecido": 0, "duplicados": 0,
+            "remetente_nao_reconhecido": 0, "duplicados": 0, "cancelados": 0,
         })
         self.ri.refresh_from_db()
         self.assertEqual(self.ri.status, Ri.AGUARDANDO_ANEXO_PORTAL_EACE)

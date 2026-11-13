@@ -48,6 +48,7 @@ class Command(BaseCommand):
                 f"sem RI para o INEP: {resultado['sem_ri_aguardando']}; "
                 f"remetente fora do domínio do financeiro (RN-016): "
                 f"{resultado['remetente_nao_reconhecido']}; "
-                f"duplicados (já processados antes): {resultado['duplicados']}."
+                f"duplicados (já processados antes): {resultado['duplicados']}; "
+                f"de processo cancelado pela EACE (ignorados): {resultado['cancelados']}."
             )
         )

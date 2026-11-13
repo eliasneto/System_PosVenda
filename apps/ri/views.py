@@ -8,7 +8,6 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.files.base import ContentFile
-from django.core.mail import EmailMessage
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Case, IntegerField, Prefetch, Q, Value, When
@@ -19,6 +18,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_POST
 
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
@@ -45,9 +45,12 @@ from .forms import (
     RiItemRelatorioEaceKitForm,
     RiItemRelatorioEaceProdutoFormSet,
 )
+from .cancelamento_eace import CancelamentoEaceError, cancelar_pela_eace, motivo_bloqueio_cancelamento
+from .envio_financeiro import enviar_ao_financeiro, texto_canal
 from .models import (
     Documento,
     EmailFinanceiroLog,
+    EnvioFinanceiro,
     FaturamentoComplementar,
     KitPadrao,
     LogRpaEace,
@@ -92,6 +95,8 @@ from .services import (
     # 2026-11-11).
     gerar_planilha_relatorio_faturamento_eace_materiais_novo,
     gerar_zip_arquivos_relatorio_faturamento_eace_materiais_novo,
+    CANCELADA_NO_FINANCEIRO,
+    CANCELADA_PELA_EACE,
     montar_relatorio_faturamento_eace_materiais_novo,
     total_valor_relatorio_faturamento_eace_materiais_novo,
     montar_corpo_email_financeiro,
@@ -1315,7 +1320,7 @@ def ri_validar_notas_fiscais_view(request, pk):
 
     if _requisicao_htmx(request):
         historico_page_obj = Paginator(
-            ri.historico.select_related("autor").prefetch_related("documentos"),
+            ri.historico.select_related("autor").prefetch_related(Prefetch("documentos", queryset=Documento.todos.all())),
             HISTORICO_ITENS_POR_PAGINA,
         ).get_page(1)
         return _fragmento_historico_htmx(request, ri, RiHistoricoForm(), historico_page_obj)
@@ -1674,18 +1679,23 @@ def ri_enviar_email_financeiro_view(request, pk):
         corpo = montar_corpo_email_financeiro(ri)
         nome_planilha = nome_arquivo_planilha_faturamento(ri.escola)
 
-        email = EmailMessage(
-            subject=assunto,
-            body=corpo,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=destinatarios,
-            cc=copia,
-        )
-        email.attach(nome_planilha, planilha_bytes, MIME_PLANILHA_FATURAMENTO)
         anexo_extra = form.cleaned_data.get("anexo_extra")
-        if anexo_extra:
-            email.attach(anexo_extra.name, anexo_extra.read(), anexo_extra.content_type)
-        email.send(fail_silently=False)
+        # E-mail primeiro; se falhar, o financeiro recebe pela integração
+        # (pedido do usuário, 2026-11-13 - envio_financeiro.py).
+        envio = enviar_ao_financeiro(
+            ri=ri,
+            assunto=assunto,
+            corpo=corpo,
+            para=destinatarios,
+            copia=copia,
+            nome_planilha=nome_planilha,
+            planilha_bytes=planilha_bytes,
+            tipo_planilha=MIME_PLANILHA_FATURAMENTO,
+            usuario=request.user,
+            anexo_extra=(
+                (anexo_extra.name, anexo_extra.read(), anexo_extra.content_type) if anexo_extra else None
+            ),
+        )
 
         EmailFinanceiroLog.objects.create(
             ri=ri,
@@ -1710,13 +1720,22 @@ def ri_enviar_email_financeiro_view(request, pk):
             ri=ri,
             tipo=RiHistorico.EMAIL,
             autor=request.user,
-            mensagem=f"E-mail enviado ao financeiro (CFOP {cfop}). Assunto: {assunto}",
+            mensagem=(
+                f"E-mail enviado ao financeiro (CFOP {cfop}). Assunto: {assunto}" + texto_canal(envio)
+            ),
         )
         entrada_email.anexo.save(nome_planilha, ContentFile(planilha_bytes), save=False)
         entrada_email.save()
 
         trocar_status_com_log(ri, Ri.AGUARDANDO_FINANCEIRO, request.user)
-        messages.success(request, "E-mail enviado ao financeiro. Status do RI atualizado.")
+        if envio.canal == EnvioFinanceiro.API:
+            messages.warning(
+                request,
+                "O servidor de e-mail está fora do ar: a planilha foi enviada ao financeiro pela integração "
+                "direta entre os sistemas. Status do RI atualizado.",
+            )
+        else:
+            messages.success(request, "E-mail enviado ao financeiro. Status do RI atualizado.")
 
     return redirect(next_url)
 
@@ -1773,6 +1792,41 @@ def _assunto_sugerido_complementar(escola, hoje, numero):
     return montar_assunto_com_codigo(
         codigo, f"Faturamento EACE complementar — INEP {escola.inep} — {escola.nome}"
     )
+
+
+def _contexto_cancelamento_eace(ri, user):
+    """Botão "Cancelado pela EACE" da tela do RI: só aparece com e-mail enviado ao financeiro neste processo; mesma
+    permissão do envio (Administrador e Analista). Bloqueado (MIP, robô rodando, complementar): botão desabilitado
+    com o motivo."""
+    if ri is None or not _lado_ixc_editavel(user, ri):
+        return {"pode_cancelar_eace": False}
+    bloqueio = motivo_bloqueio_cancelamento(ri)
+    if bloqueio == "Este RI não tem e-mail enviado ao financeiro para cancelar.":
+        return {"pode_cancelar_eace": False}
+    return {"pode_cancelar_eace": True, "bloqueio_cancelar_eace": bloqueio}
+
+
+@login_required
+@require_POST
+def ri_cancelar_eace_view(request, pk):
+    """Processo cancelado pela EACE (pedido do usuário, 2026-11-13): com o motivo, o RI volta para "Implantação
+    EACE" e o envio ao financeiro, a resposta e os logs do RPA deixam de valer (`cancelamento_eace.py`)."""
+    ri = get_object_or_404(Ri.objects.select_related("escola"), pk=pk)
+    next_url = request.POST.get("next") or ""
+    if not next_url.startswith("/"):
+        next_url = reverse("ri_detail", kwargs={"inep": ri.escola.inep})
+    if not _lado_ixc_editavel(request.user, ri):
+        messages.error(request, "Você não tem permissão para cancelar o processo deste RI.")
+        return redirect(next_url)
+    try:
+        cancelar_pela_eace(ri, request.POST.get("motivo"), request.user, request.META.get("REMOTE_ADDR"))
+    except CancelamentoEaceError as erro:
+        messages.error(request, str(erro))
+    else:
+        messages.success(request, 'Processo cancelado pela EACE: o RI voltou para "Implantação EACE". O e-mail '
+                                  "enviado e a resposta do financeiro ficaram só no histórico, e o financeiro é "
+                                  "avisado pela integração.")
+    return redirect(next_url)
 
 
 def _contexto_faturamento_complementar(ri, user):
@@ -1897,15 +1951,20 @@ def ri_faturamento_complementar_view(request, pk):
     assunto = form.cleaned_data["assunto"]
     if not assunto_contem_codigo(assunto, codigo):
         assunto = montar_assunto_com_codigo(codigo, assunto)
-    email = EmailMessage(
-        subject=assunto,
-        body=montar_corpo_email_complementar(complementar),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        to=destinatarios,
-        cc=copia,
+    # E-mail primeiro; se falhar, o financeiro recebe pela integração
+    # (pedido do usuário, 2026-11-13 - envio_financeiro.py).
+    envio = enviar_ao_financeiro(
+        ri=ri,
+        complementar=complementar,
+        assunto=assunto,
+        corpo=montar_corpo_email_complementar(complementar),
+        para=destinatarios,
+        copia=copia,
+        nome_planilha=nome_planilha,
+        planilha_bytes=planilha_bytes,
+        tipo_planilha=MIME_PLANILHA_FATURAMENTO,
+        usuario=request.user,
     )
-    email.attach(nome_planilha, planilha_bytes, MIME_PLANILHA_FATURAMENTO)
-    email.send(fail_silently=False)
 
     EmailFinanceiroLog.objects.create(
         ri=ri,
@@ -1939,6 +1998,7 @@ def ri_faturamento_complementar_view(request, pk):
             f"total R$ {complementar.total:.2f}). Itens: {resumo_itens}."
             + (f" Observações: {complementar.observacoes}." if complementar.observacoes else "")
             + f" Assunto: {assunto}"
+            + texto_canal(envio)
         ),
     )
     entrada_email.anexo.save(nome_planilha, ContentFile(planilha_bytes), save=False)
@@ -1953,10 +2013,17 @@ def ri_faturamento_complementar_view(request, pk):
     complementar.save(
         update_fields=["status", "codigo_rastreio", "assunto", "enviado_por", "enviado_em", "historico_envio"]
     )
-    messages.success(
-        request,
-        f"Faturamento complementar {complementar.rotulo} enviado ao financeiro. O status do RI não mudou.",
-    )
+    if envio.canal == EnvioFinanceiro.API:
+        messages.warning(
+            request,
+            f"O servidor de e-mail está fora do ar: o faturamento complementar {complementar.rotulo} foi "
+            "enviado ao financeiro pela integração direta entre os sistemas. O status do RI não mudou.",
+        )
+    else:
+        messages.success(
+            request,
+            f"Faturamento complementar {complementar.rotulo} enviado ao financeiro. O status do RI não mudou.",
+        )
     return redirect(next_url)
 
 
@@ -2406,7 +2473,7 @@ def ri_detail_view(request, inep):
     historico_page_obj = None
     if ri:
         historico_paginator = Paginator(
-            ri.historico.select_related("autor").prefetch_related("documentos"), HISTORICO_ITENS_POR_PAGINA
+            ri.historico.select_related("autor").prefetch_related(Prefetch("documentos", queryset=Documento.todos.all())), HISTORICO_ITENS_POR_PAGINA
         )
         historico_page_obj = historico_paginator.get_page(request.GET.get("historico_page"))
 
@@ -2513,6 +2580,8 @@ def ri_detail_view(request, inep):
             "cc_financeiro_sugestao": ", ".join(COPIA_FINANCEIRO),
             # Faturamento complementar (v1.6.0): botão + modal na tela do RI.
             **_contexto_faturamento_complementar(ri, request.user),
+            # Processo cancelado pela EACE (2026-11-13): botão + janela do motivo.
+            **_contexto_cancelamento_eace(ri, request.user),
             # FEAT-033 (Fase 2/3, RN-056/RN-057/RN-058): logs de anexo no
             # portal EACE (log/seleção manual + estado "Na fila").
             **(_contexto_logs_rpa_eace(ri, request.get_full_path()) if ri else {
@@ -2715,14 +2784,21 @@ def relatorio_faturamento_eace_materiais_novo_view(request):
 
     form = RelatorioFaturamentoEaceMateriaisNovoForm(request.GET or None)
     linhas = None
-    total_valor = None
+    total_valor = total_canceladas = total_canceladas_eace = None
     filtro_querystring = ""
     if form.is_bound and form.is_valid():
         dados = form.cleaned_data
         linhas = montar_relatorio_faturamento_eace_materiais_novo(
             dados["data_inicio"], dados["data_fim"], dados["hora_inicio"], dados["hora_fim"], dados["processo"],
+            dados["cancelados"],
         )
         total_valor = total_valor_relatorio_faturamento_eace_materiais_novo(linhas)
+        # Cancelados no financeiro e pela EACE em totais separados.
+        canceladas = [linha for linha in linhas if linha["situacao"] == CANCELADA_NO_FINANCEIRO]
+        canceladas_eace = [linha for linha in linhas if linha["situacao"] == CANCELADA_PELA_EACE]
+        total_canceladas = total_valor_relatorio_faturamento_eace_materiais_novo(canceladas) if canceladas else None
+        total_canceladas_eace = (total_valor_relatorio_faturamento_eace_materiais_novo(canceladas_eace)
+                                 if canceladas_eace else None)
         # Mesmo filtro repassado aos botões "Exportar Excel" e
         # "Exportar Arquivos (.zip)".
         filtro = {"data_inicio": f"{dados['data_inicio']:%Y-%m-%d}", "data_fim": f"{dados['data_fim']:%Y-%m-%d}"}
@@ -2732,12 +2808,16 @@ def relatorio_faturamento_eace_materiais_novo_view(request):
             filtro["hora_fim"] = f"{dados['hora_fim']:%H:%M}"
         if dados["processo"]:
             filtro["processo"] = dados["processo"]
+        if dados["cancelados"] != "sem":
+            filtro["cancelados"] = dados["cancelados"]
         filtro_querystring = urlencode(filtro)
 
     return render(request, "ri/relatorio_faturamento_eace_materiais_novo.html", {
         "form": form,
         "linhas": linhas,
         "total_valor": total_valor,
+        "total_canceladas": total_canceladas,
+        "total_canceladas_eace": total_canceladas_eace,
         "filtro_querystring": filtro_querystring,
     })
 
@@ -2760,7 +2840,7 @@ def relatorio_faturamento_eace_materiais_novo_exportar_view(request):
     hora_inicio = form.cleaned_data["hora_inicio"]
     hora_fim = form.cleaned_data["hora_fim"]
     linhas = montar_relatorio_faturamento_eace_materiais_novo(
-        data_inicio, data_fim, hora_inicio, hora_fim, form.cleaned_data["processo"],
+        data_inicio, data_fim, hora_inicio, hora_fim, form.cleaned_data["processo"], form.cleaned_data["cancelados"],
     )
     conteudo = gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas)
 
@@ -2793,7 +2873,7 @@ def relatorio_faturamento_eace_materiais_novo_exportar_arquivos_view(request):
     hora_inicio = form.cleaned_data["hora_inicio"]
     hora_fim = form.cleaned_data["hora_fim"]
     linhas = montar_relatorio_faturamento_eace_materiais_novo(
-        data_inicio, data_fim, hora_inicio, hora_fim, form.cleaned_data["processo"],
+        data_inicio, data_fim, hora_inicio, hora_fim, form.cleaned_data["processo"], form.cleaned_data["cancelados"],
     )
     conteudo = gerar_zip_arquivos_relatorio_faturamento_eace_materiais_novo(linhas)
 

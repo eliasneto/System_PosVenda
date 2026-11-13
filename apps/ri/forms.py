@@ -6,7 +6,13 @@ from django.db.models import F
 from django.utils import timezone
 
 from .models import KitPadrao, PlanilhaEace, Ri, RiHistorico, RiItemIxc, RiItemRelatorioEace
-from .services import CFOP_ANTIGO, CFOPS_PLANILHA_FATURAMENTO, PROCESSOS_NF, detectar_delimitador_planilha_eace
+from .services import (
+    CFOP_ANTIGO,
+    CFOPS_PLANILHA_FATURAMENTO,
+    FILTROS_CANCELADAS_NF,
+    PROCESSOS_NF,
+    detectar_delimitador_planilha_eace,
+)
 
 CAMPO_TEXTO = (
     "w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-xl outline-none "
@@ -702,6 +708,17 @@ class RelatorioFaturamentoEaceMateriaisNovoForm(RelatorioFaturamentoEaceMateriai
         required=False,
         widget=forms.TimeInput(format="%H:%M", attrs={"class": CAMPO_TEXTO, "type": "time"}),
     )
+    # Pedido do usuário (2026-11-13): NF canceladas no financeiro (baixadas
+    # aqui) e de processo cancelado pela EACE - fora (padrão), só elas ou todas.
+    cancelados = forms.ChoiceField(
+        label="Cancelados",
+        required=False,
+        choices=FILTROS_CANCELADAS_NF,
+        widget=forms.Select(attrs={"class": CAMPO_TEXTO}),
+    )
+
+    def clean_cancelados(self):
+        return self.cleaned_data.get("cancelados") or "sem"
 
     def clean(self):
         cleaned = super().clean()

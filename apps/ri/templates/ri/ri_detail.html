@@ -679,6 +679,7 @@ Histórico de Comunicação, mais espaço pra respirar.
     {% include "ri/_acao_envio_email_detail.html" with ri=ri escola=escola next_url=request.get_full_path assunto_sugerido=assunto_sugerido %}
     {# Faturamento complementar (v1.6.0): visível para Administrador/Analista, em qualquer status do RI. #}
     {% include "ri/_modal_faturamento_complementar.html" with next_url=request.get_full_path %}
+    {% include "ri/_modal_cancelar_eace.html" with next_url=request.get_full_path %}
 </div>
 
 {% include "ri/_logs_rpa_eace_detail.html" with ri=ri logs_rpa_eace=logs_rpa_eace documentos_pdf=documentos_pdf documentos_xml=documentos_xml next_url=request.get_full_path existe_log_ativo=existe_log_ativo oob=oob %}

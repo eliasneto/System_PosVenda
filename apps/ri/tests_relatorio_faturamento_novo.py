@@ -193,7 +193,7 @@ class GerarPlanilhaRelatorioFaturamentoNovoTests(TestCase):
         ]
         aba = openpyxl.load_workbook(BytesIO(gerar_planilha_relatorio_faturamento_eace_materiais_novo(linhas)))[
             "CONSOLIDADO"]
-        self.assertEqual([c.value for c in aba[2]], ["INEP", "NF", "DATA DA NF", "PROCESSO", "VALOR", "Nº OSP"])
+        self.assertEqual([c.value for c in aba[2]], ["INEP", "NF", "DATA DA NF", "PROCESSO", "VALOR", "Nº OSP", "SITUAÇÃO"])
         self.assertEqual([aba["A3"].value, aba["B3"].value, aba["D3"].value, aba["E3"].value],
                          ["60000099", "3847", "Especial", 20171.96])
         self.assertEqual(aba["C3"].value.date(), date(2026, 11, 10))
@@ -263,3 +263,63 @@ class RelatorioFaturamentoNovoViewTests(TestCase):
         nomes = sorted(zipfile.ZipFile(BytesIO(resp.content)).namelist())
         esperados = sorted(f"60000098/{os.path.basename(d.arquivo.name)}" for d in self.docs[:2])
         self.assertEqual(nomes, esperados)  # só a 3847 (PDF + XML); a 3378 é clássica e a 3000 é de 01/11
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class FiltroCanceladosRelatorioNovoTests(TestCase):
+    """Filtro "Cancelados" (pedido do usuário, 2026-11-13): NF cancelada no financeiro e baixada aqui, e NF de
+    processo cancelado pela EACE - fora (padrão), só elas ou todas, com a Situação de cada uma."""
+
+    def setUp(self):
+        from .models import CancelamentoEace, NfCanceladaFinanceiro
+
+        self.escola = Escola.objects.create(inep="60000099", nome="Escola NF Financeiro", estado="SP", lote=9)
+        self.ri = Ri.objects.create(escola=self.escola, status=Ri.FATURAMENTO_RI_CONCLUIDO)
+        _receber(self.ri, [("5001", "10-11-2026", "100.00", "KIT 15", ESPECIAL),
+                           ("5002", "10-11-2026", "50.00", "NOBREAK", ESPECIAL)], _quando(10))
+        NfCanceladaFinanceiro.objects.create(id_financeiro="9-0", numero_nf="5002", inep="60000099",
+                                             baixada_em=_quando(11))
+        # outro INEP com o processo cancelado pela EACE depois de receber a NF
+        outra = Escola.objects.create(inep="60000098", nome="Escola Cancelada", estado="SP", lote=9)
+        self.ri_eace = Ri.objects.create(escola=outra, status=Ri.IMPLANTACAO_EACE)
+        documentos = _receber(self.ri_eace, [("6001", "11-11-2026", "30.00", "KIT 15", ESPECIAL)], _quando(11))
+        cancelamento = CancelamentoEace.objects.create(ri=self.ri_eace, motivo="EACE cancelou", status_anterior="x")
+        Documento.objects.filter(pk__in=[d.pk for d in documentos]).update(cancelamento_eace=cancelamento)
+
+    def _nfs(self, cancelados):
+        return [(linha["nota_fiscal"], linha["situacao"]) for linha in _montar(cancelados=cancelados)]
+
+    def test_sem_cancelados_e_o_padrao(self):
+        self.assertEqual(self._nfs("sem"), [("5001", "")])
+        self.assertEqual([linha["nota_fiscal"] for linha in _montar()], ["5001"])
+
+    def test_cancelados_e_cancelados_eace_separados(self):
+        self.assertEqual(self._nfs("financeiro"), [("5002", "Cancelada no financeiro")])
+        self.assertEqual(self._nfs("eace"), [("6001", "Cancelada pela EACE")])
+
+    def test_todos(self):
+        self.assertEqual(self._nfs("todos"), [("5001", ""), ("5002", "Cancelada no financeiro"),
+                                              ("6001", "Cancelada pela EACE")])
+
+    def test_tela_excel_e_zip_respeitam_o_filtro(self):
+        admin = User.objects.create_user("admin-canc-rel", password="x", perfil=User.PERFIL_ADMINISTRADOR)
+        self.client.force_login(admin)
+        filtro = {"data_inicio": "2026-11-10", "data_fim": "2026-11-11", "cancelados": "todos"}
+        resposta = self.client.get(reverse("relatorio_faturamento_eace_materiais_novo"), filtro)
+        self.assertContains(resposta, "Cancelada pela EACE")
+        self.assertContains(resposta, "Canceladas: R$ 50,00")
+        self.assertContains(resposta, "Canceladas EACE: R$ 30,00")
+        self.assertContains(resposta, "cancelados=todos")
+        planilha = openpyxl.load_workbook(BytesIO(self.client.get(
+            reverse("relatorio_faturamento_eace_materiais_novo_exportar"), filtro).content)).active
+        valores = [celula for linha in planilha.iter_rows(values_only=True) for celula in linha]
+        self.assertIn("SITUAÇÃO", valores)
+        self.assertIn("Cancelada no financeiro", valores)
+        pacote = zipfile.ZipFile(BytesIO(self.client.get(
+            reverse("relatorio_faturamento_eace_materiais_novo_exportar_arquivos"), filtro).content))
+        self.assertTrue(any("6001" in nome for nome in pacote.namelist()))
+        pacote_eace = zipfile.ZipFile(BytesIO(self.client.get(
+            reverse("relatorio_faturamento_eace_materiais_novo_exportar_arquivos"),
+            {**filtro, "cancelados": "eace"}).content))
+        self.assertTrue(any("6001" in nome for nome in pacote_eace.namelist()))
+        self.assertFalse(any("5001" in nome or "5002" in nome for nome in pacote_eace.namelist()))

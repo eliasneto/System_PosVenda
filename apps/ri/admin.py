@@ -1,9 +1,11 @@
 from django.contrib import admin
 
 from .models import (
+    CancelamentoEace,
     Documento,
     EmailFinanceiroLog,
     EmailFinanceiroSync,
+    EnvioFinanceiro,
     FaturamentoComplementar,
     KitPadrao,
     NfCanceladaFinanceiro,
@@ -76,3 +78,18 @@ class FaturamentoComplementarAdmin(admin.ModelAdmin):
     search_fields = ("codigo_rastreio", "ri__escola__inep")
     list_filter = ("status",)
     raw_id_fields = ("ri", "historico_envio", "historico_resposta")
+
+
+@admin.register(EnvioFinanceiro)
+class EnvioFinanceiroAdmin(admin.ModelAdmin):
+    list_display = ("ri", "assunto", "canal", "criado_em", "coletado_em")
+    search_fields = ("assunto", "message_id", "ri__escola__inep")
+    list_filter = ("canal",)
+    raw_id_fields = ("ri", "faturamento_complementar")
+
+
+@admin.register(CancelamentoEace)
+class CancelamentoEaceAdmin(admin.ModelAdmin):
+    list_display = ("ri", "status_anterior", "criado_por", "criado_em", "confirmado_em")
+    search_fields = ("ri__escola__inep", "motivo")
+    raw_id_fields = ("ri",)

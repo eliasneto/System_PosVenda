@@ -56,11 +56,36 @@
     </div>
 </div>
 {% else %}
+{% if pendentes_na_pagina %}
+{# Baixa em lote (pedido do usuário, 2026-11-13): as caixas de cada linha usam form="form-baixa-lote" #}
+<form id="form-baixa-lote" method="POST" action="{% url 'nfs_canceladas_financeiro_baixar_lote' %}"
+      class="flex flex-wrap items-center gap-3 mb-4" data-baixa-lote>
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ voltar }}">
+    <span class="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400" data-baixa-lote-contagem>Nenhuma NF marcada</span>
+    <button type="submit" disabled
+            data-confirmar
+            data-confirmar-titulo="Dar baixa nas NFs marcadas"
+            data-confirmar-mensagem=""
+            data-confirmar-texto-botao="Dar baixa"
+            data-baixa-lote-botao
+            class="px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[10px] rounded-lg hover:bg-gray-800 transition inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
+        <i data-lucide="check-check" class="w-3.5 h-3.5"></i>
+        Dar baixa nas marcadas
+    </button>
+</form>
+{% endif %}
 <div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
     <div class="overflow-x-auto contain-layout">
         <table class="min-w-full text-left border-collapse">
             <thead>
                 <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700 whitespace-nowrap">
+                    {% if pendentes_na_pagina %}
+                    <th class="px-3 py-2 w-8">
+                        <input type="checkbox" data-baixa-lote-todas title="Marcar todas as NFs aguardando baixa desta página"
+                               aria-label="Marcar todas as NFs aguardando baixa desta página" class="w-4 h-4 accent-amber-500 cursor-pointer">
+                    </th>
+                    {% endif %}
                     <th class="px-3 py-2">INEP</th>
                     <th class="px-3 py-2">Escola</th>
                     <th class="px-3 py-2">Item</th>
@@ -77,6 +102,14 @@
             <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
                 {% for nf in pagina.object_list %}
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all divide-x divide-gray-300 dark:divide-gray-700 align-top">
+                    {% if pendentes_na_pagina %}
+                    <td class="px-3 py-2">
+                        {% if not nf.baixada_em %}
+                        <input type="checkbox" name="nfs" value="{{ nf.pk }}" form="form-baixa-lote" data-baixa-lote-nf="{{ nf.numero_nf }}"
+                               aria-label="Marcar a NF {{ nf.numero_nf }} (INEP {{ nf.inep }})" class="w-4 h-4 accent-amber-500 cursor-pointer">
+                        {% endif %}
+                    </td>
+                    {% endif %}
                     <td class="px-3 py-2 whitespace-nowrap">
                         {% if nf.ri_id %}
                         <a href="{% url 'ri_detail' nf.inep %}" class="font-black text-gray-900 dark:text-gray-100 italic uppercase text-[11px] hover:text-pv-yellow">{{ nf.inep }}</a>
@@ -137,4 +170,42 @@
 </div>
 {% endif %}
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Baixa em lote: contagem, "marcar todas" e o texto da confirmação com as NFs marcadas.
+    (function () {
+        var form = document.querySelector('[data-baixa-lote]');
+        if (!form) return;
+        var botao = form.querySelector('[data-baixa-lote-botao]');
+        var contagem = form.querySelector('[data-baixa-lote-contagem]');
+        var todas = document.querySelector('[data-baixa-lote-todas]');
+        var caixas = Array.prototype.slice.call(document.querySelectorAll('[data-baixa-lote-nf]'));
+
+        function atualizar() {
+            var marcadas = caixas.filter(function (c) { return c.checked; });
+            var n = marcadas.length;
+            botao.disabled = n === 0;
+            contagem.textContent = n === 0 ? 'Nenhuma NF marcada' : n + (n === 1 ? ' NF marcada' : ' NFs marcadas');
+            if (todas) {
+                todas.checked = n > 0 && n === caixas.length;
+                todas.indeterminate = n > 0 && n < caixas.length;
+            }
+            var numeros = marcadas.map(function (c) { return c.getAttribute('data-baixa-lote-nf'); }).join(', ');
+            botao.setAttribute('data-confirmar-mensagem', 'Confirma que ' + (n === 1 ? 'a NF ' : 'as ' + n + ' NFs ')
+                + numeros + (n === 1 ? ' foi cancelada' : ' foram canceladas') + ' no financeiro? Depois da baixa '
+                + (n === 1 ? 'ela deixa' : 'elas deixam') + ' de contar no relatório Faturamento EACE Materiais (NOVO).');
+        }
+
+        caixas.forEach(function (c) { c.addEventListener('change', atualizar); });
+        if (todas) {
+            todas.addEventListener('change', function () {
+                caixas.forEach(function (c) { c.checked = todas.checked; });
+                atualizar();
+            });
+        }
+        atualizar();
+    })();
+</script>
 {% endblock %}
