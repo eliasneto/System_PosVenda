@@ -95,10 +95,31 @@ class MontarRelatorioFaturamentoNovoTests(TestCase):
         _receber(self.ri, [("3847", "10-11-2026", "20171.96", "KIT 10", ESPECIAL),
                            ("3849", "10-11-2026", "1551.93", "Nobreak", ESPECIAL)], _quando(10))
         linhas = _montar()
-        self.assertEqual([(l["nota_fiscal"], l["valor"], l["numero_osp"]) for l in linhas],
-                         [("3847", Decimal("20171.96"), ""), ("3849", Decimal("1551.93"), "5877")])
+        self.assertEqual([(l["nota_fiscal"], l["valor"], l["numero_osp"], l["osp_do_ri"]) for l in linhas],
+                         [("3847", Decimal("20171.96"), "5877", True), ("3849", Decimal("1551.93"), "5877", False)])
         self.assertEqual({l["data_nf"] for l in linhas}, {date(2026, 11, 10)})
         self.assertEqual({l["processo"] for l in linhas}, {"Especial"})
+
+    def test_osp_do_ri_quando_a_planilha_eace_ainda_nao_trouxe_a_nf(self):
+        """Caso real do INEP 35058476 (2026-11-13): OSP 4225 nos 2 itens, sem
+        o número da NF ainda; as NFs 4247/4248 do dia vêm com a OSP do RI."""
+        for descricao in ("KIT 10", "Nobreak"):
+            RiItemRelatorioEace.objects.create(ri=self.ri, descricao_item=descricao, quantidade=1,
+                                               valor_unitario="1.00", num_osp="4225")
+        _receber(self.ri, [("4247", "10-11-2026", "20171.96", "KIT 10", ESPECIAL),
+                           ("4248", "10-11-2026", "1551.93", "Nobreak", ESPECIAL)], _quando(10))
+        self.assertEqual([(l["numero_osp"], l["osp_do_ri"]) for l in _montar()], [("4225", True), ("4225", True)])
+
+    def test_mais_de_uma_osp_usa_a_dos_itens_sem_nf_e_nunca_escolhe(self):
+        RiItemRelatorioEace.objects.create(ri=self.ri, descricao_item="KIT 10", quantidade=1, valor_unitario="1.00",
+                                           num_osp="4628", nota_fiscal="1960")
+        RiItemRelatorioEace.objects.create(ri=self.ri, descricao_item="Nobreak", quantidade=1, valor_unitario="1.00",
+                                           num_osp="5335")
+        _receber(self.ri, [("1965", "10-11-2026", "1551.93", "Nobreak", ESPECIAL)], _quando(10))
+        self.assertEqual(_montar()[0]["numero_osp"], "5335")  # a unica OSP dos itens ainda sem NF
+        RiItemRelatorioEace.objects.create(ri=self.ri, descricao_item="Rack", quantidade=1, valor_unitario="1.00",
+                                           num_osp="5400")
+        self.assertEqual((_montar()[0]["numero_osp"], _montar()[0]["osp_do_ri"]), ("", False))  # 2 sem NF: duvida
 
     def test_periodo_e_a_data_da_nf_nao_a_do_recebimento(self):
         _receber(self.ri, [("3518", "09-11-2026", "20171.96", "KIT 10", ESPECIAL)], _quando(10))

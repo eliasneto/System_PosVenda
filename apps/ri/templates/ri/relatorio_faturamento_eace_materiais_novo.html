@@ -146,7 +146,7 @@
                     <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_nf|date:"d/m/Y"|default:"—" }}</td>
                     <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.processo }}</td>
                     <td class="px-3 py-2 text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.valor is not None %}R$ {{ linha.valor|intcomma }}{% else %}—{% endif %}</td>
-                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.numero_osp|default:"—" }}</td>
+                    <td class="px-3 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.numero_osp|default:"—" }}{% if linha.osp_do_ri %} <span class="text-[9px] font-black uppercase text-amber-600 dark:text-amber-400" title="A Planilha EACE ainda não trouxe o número desta NF no item: OSP do RI (única)">do RI</span>{% endif %}</td>
                     <td class="px-3 py-2 text-[11px] font-bold">{% if linha.situacao %}<span class="inline-flex items-center px-3 py-1 rounded-full bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-[10px] font-black uppercase">{{ linha.situacao }}</span>{% else %}<span class="text-gray-400">—</span>{% endif %}</td>
                 </tr>
                 {% endfor %}

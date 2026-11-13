@@ -4651,6 +4651,20 @@ def _nf_no_periodo(nota, data_inicio, data_fim, inicio=None, fim=None):
     return data_inicio <= datetime.fromisoformat(nota["data_nf"]).date() <= data_fim
 
 
+def _osp_unica_do_ri(itens):
+    """Pedido do usuário (2026-11-13, INEP 35058476: OSP 4225 nos itens e o
+    relatório sem OSP): a Planilha EACE só traz o número da NF no item algum
+    tempo depois de a NF ser anexada, então a NF nova ainda não casa pelo
+    número. Sem dúvida de qual é, vale a OSP do RI: a única OSP dos itens
+    ou, havendo mais de uma, a única entre os itens ainda sem NF. Senão
+    vazio - nunca escolhe entre OSPs diferentes."""
+    osps = {item.num_osp.strip() for item in itens if item.num_osp.strip()}
+    if len(osps) == 1:
+        return osps.pop()
+    sem_nf = {item.num_osp.strip() for item in itens if item.num_osp.strip() and not item.nota_fiscal.strip()}
+    return sem_nf.pop() if len(sem_nf) == 1 else ""
+
+
 def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora_inicio=None, hora_fim=None,
                                                     processo="", cancelados="sem"):
     """Linhas do relatório "Faturamento EACE Materiais (NOVO)": 1 por NF-e
@@ -4661,8 +4675,9 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
     filtrar pela hora da autorização na SEFAZ, de `data_inicio` +
     `hora_inicio` até `data_fim` + `hora_fim` (minuto inclusive).
     `processo`: "classico"/"especial" (vazio = todos). O Nº OSP vem do item
-    do Lado Relatório EACE com o mesmo número de NF (vazio se não houver) -
-    só informativo, não muda o valor. `cancelados` (pedido do usuário,
+    do Lado Relatório EACE com o mesmo número de NF; sem ele, a OSP do RI
+    quando não há dúvida (`_osp_unica_do_ri`, "osp_do_ri") - só
+    informativo, não muda o valor. `cancelados` (pedido do usuário,
     2026-11-13): "sem" (padrão: só as que valem), "financeiro" (só as
     canceladas no financeiro e baixadas aqui), "eace" (só as de processo
     cancelado pela EACE) ou "todos" (`notas_fiscais_canceladas_do_
@@ -4711,9 +4726,11 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
         if not notas:
             continue
         osp_por_nf = {}
-        for item in ri.itens_relatorio_eace.all():
+        itens = list(ri.itens_relatorio_eace.all())
+        for item in itens:
             if item.nota_fiscal and item.num_osp:
                 osp_por_nf.setdefault(item.nota_fiscal.strip(), item.num_osp)
+        osp_do_ri = _osp_unica_do_ri(itens)
         # Faturamento complementar (v1.6.0): OSP gravada no log da NF.
         osp_por_xml = {
             log.documento_xml_id: log.num_osp
@@ -4734,7 +4751,9 @@ def montar_relatorio_faturamento_eace_materiais_novo(data_inicio, data_fim, hora
                 "data_nf": datetime.fromisoformat(nota["data_nf"]).date() if nota["data_nf"] else None,
                 "processo": _ROTULO_PROCESSO_NF.get(nota["processo"], "Não identificado"),
                 "valor": valor,
-                "numero_osp": osp_por_nf.get(numero) or osp_por_xml.get(nota["documento"].pk, ""),
+                "numero_osp": osp_por_nf.get(numero) or osp_por_xml.get(nota["documento"].pk) or osp_do_ri,
+                # OSP deduzida do RI (a Planilha EACE ainda não ligou o número da NF ao item): a tela marca
+                "osp_do_ri": not (osp_por_nf.get(numero) or osp_por_xml.get(nota["documento"].pk)) and bool(osp_do_ri),
                 "ri_id": ri.pk,
                 "documento_ids": [nota["documento"].pk, *pdfs_da_nf],
                 "situacao": nota["situacao"],
