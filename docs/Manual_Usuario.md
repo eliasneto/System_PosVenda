@@ -404,36 +404,80 @@ Mensagens: **"Já existe uma validação em andamento - aguarde ela terminar."**
 
 Caminho: **Projeto › BDO**.
 
-A tela mostra o faturamento mensal das manutenções de RI e RE por Boletim: quantidade de Boletins, INEPs, municípios e valor total.
+A tela abre no Boletim mais recente. Para ver todos juntos, escolha **Todos os Boletins** no filtro **Boletim**.
 
-1. Filtre por **Boletim**, **INEP**, **UF**, **Município**, **Ativação de**, **Ativação até** e **Status** e clique em **Filtrar**.
-2. Em **Agrupar**, escolha ver por INEP, município ou UF.
-3. Clique em **Excel** para baixar as linhas com os filtros escolhidos.
-4. Com um Boletim escolhido, clique em **Atualizar do portal EACE** para trazer o Status, o Valor total a ser emitido e o arquivo da Nota Fiscal de cada município. A tela informa se o número de municípios da planilha confere com o número de cards no portal.
+Com um Boletim escolhido, o quadro **andamento** mostra as etapas do processo, na ordem:
 
-Colunas principais (por INEP): **Data de ativação**, **Ativado em (cliente)** (verde quando igual, vermelho quando diferente), **Dias proporcionais**, **Valor assinatura**, **Valor proporcional**, **Desconto (cliente)**, **Valor pago (cliente)**, **Status** e **Valor faltando**.
+1. **Planilha do Boletim**: municípios, INEPs e tipo (RE ou RI).
+2. **Mês de referência**: o Administrador pode informar aqui mesmo, se estiver faltando.
+3. **Pro rata do cliente**: o Administrador envia ou reenvia a planilha aqui mesmo.
+4. **Divergências**: quantos INEPs têm status e quantos ainda estão pendentes. O link **Ver os pendentes** leva direto a eles.
+5. **Portal EACE**: o status dos cards dos municípios no portal (Aprovado, Pendente).
+6. **Medição**: número, data e quem gerou.
+
+Cada etapa aparece verde quando está concluída, amarela quando precisa de atenção e cinza quando falta fazer. Ao lado ficam os totais para comparar: **Planilha do cliente**, **Total MEGA (sistema)**, **Portal EACE** e **Medição**.
+
+Abaixo das etapas, **Por motivo** mostra quantos INEPs há em cada motivo de divergência e quantos estão **Sem valor no sistema**. Clique em um deles para ver só aqueles INEPs.
+
+Como usar a tela:
+
+- Filtre por **Boletim**, **INEP**, **UF**, **Município**, **Ativação de**, **Ativação até** e **Status** (inclui os motivos e **Sem valor no sistema**) e clique em **Filtrar**.
+- Em **Agrupar**, escolha ver por INEP, por município ou por UF.
+- Use **Mostrar valores da planilha** para ver os valores de serviços, créditos, descontos e descontos proporcionais do município. Eles ficam escondidos para o grid caber na tela.
+- Clique em **Excel** para baixar as linhas com os filtros escolhidos.
+- Clique em **Atualizar do portal EACE** para trazer o status, o Valor total a ser emitido e o arquivo da Nota Fiscal de cada município. A tela informa se o número de municípios da planilha confere com o número de cards no portal.
+
+No agrupamento **Por INEP**, as colunas vêm em grupos:
+
+- **Escola**: INEP, Município e UF.
+- **Conferência**: Status e Valor faltando.
+- **Sistema**: Data de ativação, Dias proporcionais, Valor assinatura e Valor proporcional.
+- **Cliente (Pro rata)**: Ativado em, Desconto e Valor pago.
+- **Planilha do município**: os valores da planilha FR.
+- **Boletim**: número, tipo e situação do faturamento.
+
+Cores: verde = confere, vermelho = diferente, amarelo = pendente de decisão.
 
 Se não houver Boletim, aparece **"Nenhum Boletim importado"**: o Administrador importa a planilha em **Administrador › Relatório BDO**.
+
+## Quando um INEP do BDO tem divergência
+
+Só recebe **Status** o INEP que tem uma divergência de verdade. O motivo aparece embaixo do campo:
+
+- **Sem data de ativação no sistema**: o INEP não tem data de ativação (ou não tem escola no sistema).
+- **Data diferente da Pro rata**: o "Ativado em" do cliente é diferente da data de ativação do sistema.
+- **Valor pago menor que o do sistema**: o cliente pagou menos que o Valor proporcional (mais de R$ 0,01 de diferença).
+- **Ativado depois do mês do Boletim**: a ativação é depois do mês de referência e mesmo assim o INEP está no Boletim.
+- **Ativado no mês e fora da Pro rata**: a ativação foi no mês de referência, mas o cliente não deu desconto (cobrou o mês cheio).
+
+O INEP ativado antes do mês e fora da Pro rata não tem divergência: o cliente cobrou o mês cheio, que é o mesmo que o sistema calcula.
+
+Enquanto a Pro rata do Boletim não for importada, não há com o que comparar a data e o valor pago: só aparecem os INEPs sem data de ativação e os ativados depois do mês.
 
 ## Como tratar as divergências do BDO (Aprovado ou Contestado)
 
 Caminho: **Projeto › BDO** (agrupado por INEP).
 
-Os INEPs com divergência de data ou de valor pago, ou sem data de ativação, têm o campo **Status** (começa como **Pendente**).
+As linhas pendentes ficam com o fundo amarelo claro.
 
-1. Escolha **Aprovado** ou **Contestado** no **Status** da linha; ou marque vários INEPs, escolha em **Alterar status para** e clique em **Aplicar**.
-2. Cada troca fica registrada.
+1. Escolha **Aprovado** ou **Contestado** no **Status** da linha. Ou marque vários INEPs, escolha em **Alterar status para** e clique em **Aplicar**.
+2. Escolheu errado? Escolha **Pendente** para desfazer.
+3. Cada troca fica registrada (passe o mouse no campo para ver quem alterou e quando).
 
 No INEP **Contestado** em que o cliente pagou menos, a coluna **Valor faltando** mostra o valor a cobrar em outro Boletim. O Visualizador não pode alterar o status.
 
 ## Como gerar a Medição dos Recebíveis do BDO
 
-Caminho: **Projeto › BDO** › botão **Recebíveis**.
+Caminho: **Projeto › BDO** › botão **Recebíveis**. O modal já abre com o Boletim escolhido na tela.
 
 1. Escolha um ou mais **Boletins**.
 2. Escolha a **Visão** e use **Retirar** nos municípios que não entram (use **Voltar todos** para desfazer).
 3. Confira os totais. O valor de cada município é o Valor total do card dele no portal EACE.
-4. Clique em **Gerar Medição (.xlsx)** (com mais de um Boletim, vem um .zip com uma planilha por Boletim).
+4. Clique em **Gerar Medição (.xlsx)**. Com mais de um Boletim, vem um .zip com uma planilha por Boletim.
+
+O card do EACE é do município inteiro, por isso o município entra com todos os INEPs do card. Com um período de ativação escolhido, o período só define quais municípios entram. O selo **"x no período"** mostra quantos INEPs do município estão dentro do período.
+
+Se o Boletim já tem Medição, o modal avisa o número, a data, quem gerou e o valor. Gerar de novo mantém o mesmo número e substitui a anterior.
 
 A Medição só é gerada quando o número de municípios da planilha bate com o número de cards no portal EACE. Se não bater, aparece **"Medição não gerada: ... Atualize do portal EACE na tela BDO (Boletim escolhido)."**
 
@@ -443,7 +487,7 @@ Caminho: **Administrador › Relatório BDO** (só Administrador).
 
 1. Em **Enviar arquivo**, escolha a planilha **.xlsx** (FR_XXXX), o **Tipo do Boletim** (RE ou RI) e o **Mês de referência**.
 2. Clique em **Importar**. Aparece a confirmação com o número do Boletim, municípios e INEPs.
-3. Na lista **Boletins importados**, use **Enviar** / **Reenviar** na coluna **Pro rata** para enviar a planilha Pro rata do cliente (INEP, Ativado em, Dias Descontados e Valor). Reenviar substitui a anterior.
+3. Envie a planilha Pro rata do cliente (colunas INEP, Ativado em, Dias Descontados e Valor). Pode ser pela coluna **Pro rata** da lista **Boletins importados** ou pelo quadro **andamento** do Boletim em **Projeto › BDO**. Reenviar substitui a anterior.
 4. O mês de referência pode ser corrigido na própria lista.
 
 Um Boletim já importado é recusado. Use **Ver no BDO** para abrir o Boletim em **Projeto › BDO**.

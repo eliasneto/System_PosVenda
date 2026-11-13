@@ -138,7 +138,7 @@ class LeituraEaceBdoTests(TestCase):
 
     def test_grid_sem_leitura_mostra_nao_lido(self):
         self.client.force_login(self.admin)
-        resp = self.client.get(reverse("bdo"), {"agrupar": "municipio"})
+        resp = self.client.get(reverse("bdo"), {"boletim": "", "agrupar": "municipio"})
         self.assertContains(resp, "Não lido")
         self.assertNotContains(resp, reverse("bdo_leitura_eace", args=[self.boletim.pk]))
 

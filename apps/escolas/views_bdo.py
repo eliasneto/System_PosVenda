@@ -42,7 +42,9 @@ from .bdo import (
 from .leitura_eace_bdo import conferencia_eace_boletim, enfileirar_leitura_eace_bdo, mensagem_motivo_bdo
 from .forms import MesReferenciaBdoForm, PlanilhaBdoUploadForm, PlanilhaProRataUploadForm
 from .medicao_bdo import MedicaoBdoError, gerar_medicoes
-from .models import BoletimBdo, Escola, InepBdo, LeituraEaceBdo, LogStatusDivergenciaBdo, MunicipioBdo
+from .models import (
+    BoletimBdo, Escola, InepBdo, LeituraEaceBdo, LogStatusDivergenciaBdo, MedicaoBdo, MunicipioBdo,
+)
 from .views import _parse_data_filtro
 
 DIFERENCA_TODOS = "1"
@@ -134,10 +136,8 @@ def _anotar_divergencia(linha):
         None if linha.valor_proporcional is None or linha.valor_pago_cliente is None
         else linha.valor_pago_cliente >= linha.valor_proporcional - TOLERANCIA_VALOR
     )
-    linha.tem_divergencia = (
-        linha.data_ativacao is None or linha.ativado_em_cliente is None
-        or linha.ativacao_confere is False or linha.valor_confere is False
-    )
+    linha.motivos_divergencia = _motivos_divergencia(linha)
+    linha.tem_divergencia = bool(linha.motivos_divergencia)
     # Pedido do usuário (2026-10-15): parte do INEP na Dif. do Total MEGA -
     # valor do sistema menos o pago pelo cliente. INEP sem valor
     # proporcional fica fora do Total MEGA e entra na Dif. sem valor.
@@ -165,6 +165,39 @@ def _anotar_divergencia(linha):
     linha.valor_faltando = (
         linha.diferenca_inep if linha.contestado and linha.lado_diferenca == "menos" else None
     )
+
+
+MOTIVO_SEM_DATA = "Sem data de ativação no sistema"
+MOTIVO_DATA_DIFERENTE = "Data diferente da Pro rata"
+MOTIVO_PAGOU_MENOS = "Valor pago menor que o do sistema"
+MOTIVO_DEPOIS_DO_MES = "Ativado depois do mês do Boletim"
+MOTIVO_FORA_PRO_RATA = "Ativado no mês e fora da Pro rata"
+MOTIVOS_DIVERGENCIA = (
+    MOTIVO_SEM_DATA, MOTIVO_DATA_DIFERENTE, MOTIVO_PAGOU_MENOS, MOTIVO_DEPOIS_DO_MES, MOTIVO_FORA_PRO_RATA,
+)
+
+
+def _motivos_divergencia(linha):
+    """Melhoria do BDO (2026-11-13; antes, todo INEP fora da Pro rata recebia
+    status): só recebe status o INEP com divergência real. A Pro rata do
+    cliente lista só quem teve desconto, então o INEP ativado antes do mês e
+    fora dela foi cobrado pelo mês cheio, como o sistema calcula - confere.
+    Sem Pro rata importada não há com o que comparar data e valor."""
+    if linha.data_ativacao is None:
+        return [MOTIVO_SEM_DATA]
+    motivos = []
+    if linha.ativacao_confere is False:
+        motivos.append(MOTIVO_DATA_DIFERENTE)
+    if linha.valor_confere is False:
+        motivos.append(MOTIVO_PAGOU_MENOS)
+    if linha.dias_proporcionais is None:
+        motivos.append(MOTIVO_DEPOIS_DO_MES)
+    elif (
+        linha.ativado_em_cliente is None and linha.dias_proporcionais < 30
+        and linha.municipio_bdo.boletim.pro_rata_arquivo
+    ):
+        motivos.append(MOTIVO_FORA_PRO_RATA)
+    return motivos
 
 
 def _valor_pago_para_diferenca(linha):
@@ -361,21 +394,33 @@ def _ineps_ativados_no_periodo(data_inicial, data_final):
     return list(escolas.values_list("inep", flat=True))
 
 
+FILTRO_SEM_VALOR = "SEM_VALOR"
+# Filtro por motivo da divergência (melhoria do BDO, 2026-11-13): "MOTIVO_1"...
+FILTROS_MOTIVO = tuple((f"MOTIVO_{indice}", motivo) for indice, motivo in enumerate(MOTIVOS_DIVERGENCIA, start=1))
 FILTROS_STATUS = (
     ("COM_STATUS", "Com status (todos)"),
     ("PENDENTE", "Pendente"),
     (InepBdo.STATUS_APROVADO, "Aprovado"),
     (InepBdo.STATUS_CONTESTADO, "Contestado"),
+    (FILTRO_SEM_VALOR, "Sem valor no sistema"),
+    *FILTROS_MOTIVO,
 )
 
 
 def _ineps_com_status(ineps, status_filtro):
     """Pedido do usuário (2026-10-15): filtro dos INEPs que têm o campo de
     Status (`tem_divergencia`), opcionalmente só os Pendentes, Aprovados ou
-    Contestados. A divergência é calculada em Python, então anota todos os
-    INEPs já filtrados e devolve os ids."""
+    Contestados. Melhoria do BDO (2026-11-13): também só um motivo da
+    divergência ou os INEPs sem valor no sistema (fora do Total MEGA). A
+    divergência é calculada em Python, então anota todos os INEPs já
+    filtrados e devolve os ids."""
     linhas = list(ineps.select_related("municipio_bdo__boletim"))
     _anotar_data_ativacao(linhas)
+    if status_filtro == FILTRO_SEM_VALOR:
+        return [linha.pk for linha in linhas if linha.valor_proporcional is None]
+    motivo = dict(FILTROS_MOTIVO).get(status_filtro)
+    if motivo:
+        return [linha.pk for linha in linhas if motivo in linha.motivos_divergencia]
     return [
         linha.pk for linha in linhas
         if linha.tem_divergencia and (
@@ -528,7 +573,16 @@ def _planilha_grid_bdo(linhas, agrupar):
 @login_required
 def bdo_view(request):
     boletins = list(BoletimBdo.objects.all())
-    numero_filtro = (request.GET.get("boletim") or "").strip()
+    # Melhoria do BDO (2026-11-13): sem Boletim na URL, abre no mais recente
+    # (mês de referência, depois importação) - "Todos" somava RE com RI no
+    # Valor total. "Todos os Boletins" continua no filtro (boletim vazio).
+    boletim_padrao = "boletim" not in request.GET and bool(boletins)
+    if boletim_padrao:
+        numero_filtro = max(
+            boletins, key=lambda b: (b.mes_referencia or date.min, b.importado_em),
+        ).numero
+    else:
+        numero_filtro = (request.GET.get("boletim") or "").strip()
     boletim = next((b for b in boletins if b.numero == numero_filtro), None)
 
     agrupar = request.GET.get("agrupar") or "inep"
@@ -640,18 +694,91 @@ def bdo_view(request):
         "total_municipios": municipios.values("boletim_id", "uf", nome=Upper("municipio")).distinct().count(),
         "total_boletins": municipios.values("boletim_id").distinct().count(),
         "valor_total": valor_total.quantize(Decimal("0.01")),
-        "filtros_ativos": bool(boletim or uf_filtro or municipio_filtro or filtra_ineps),
+        "filtros_ativos": bool((boletim and not boletim_padrao) or uf_filtro or municipio_filtro or filtra_ineps),
         "filtros_status": FILTROS_STATUS,
         "querystring_filtros": urlencode(filtros),
         "querystring_paginacao": urlencode({**filtros, "agrupar": agrupar}),
         "querystring_sem_diferenca": urlencode(
             {**{chave: valor for chave, valor in filtros.items() if chave != "diferenca"}, "agrupar": agrupar},
         ),
-        "status_divergencia_choices": InepBdo.STATUS_DIVERGENCIA_CHOICES,
+        "status_divergencia_choices": OPCOES_STATUS_DIVERGENCIA,
         "divergencias_na_pagina": agrupar == "inep" and any(linha.tem_divergencia for linha in page_obj),
         **(_contexto_leitura_eace(boletim) if boletim else {}),
+        "painel": _painel_boletim(boletim) if boletim else None,
+        "filtros_motivo": FILTROS_MOTIVO,
     })
     return render(request, "escolas/bdo.html", contexto)
+
+
+def _painel_boletim(boletim):
+    """Melhoria do BDO (2026-11-13): o Boletim escolhido em etapas, na ordem
+    do processo - planilha, mês de referência, Pro rata, divergências,
+    portal EACE e Medição - com o que falta em cada uma e os totais
+    (planilha × Total MEGA × EACE). Antes isso ficava espalhado entre o
+    Relatório BDO, o grid e o modal Recebíveis."""
+    ineps = list(InepBdo.objects.filter(municipio_bdo__boletim=boletim).select_related("municipio_bdo__boletim"))
+    _anotar_data_ativacao(ineps)
+    municipios = list(boletim.municipios.all())
+    com_status = [linha for linha in ineps if linha.tem_divergencia]
+    pendentes = sum(1 for linha in com_status if not linha.status_divergencia)
+    contestados = sum(1 for linha in com_status if linha.status_divergencia == InepBdo.STATUS_CONTESTADO)
+    por_motivo = [
+        {"filtro": filtro, "motivo": motivo, "quantidade": sum(1 for linha in com_status if motivo in linha.motivos_divergencia)}
+        for filtro, motivo in FILTROS_MOTIVO
+    ]
+    total_mega = sum(
+        (linha.valor_proporcional - (linha.valor_faltando or Decimal("0")) for linha in ineps
+         if linha.valor_proporcional is not None),
+        Decimal("0"),
+    )
+    lidos = [municipio for municipio in municipios if municipio.eace_lido_em]
+    status_eace = defaultdict(int)
+    for municipio in lidos:
+        status_eace[municipio.status_eace or "Sem card"] += 1
+    valores_eace = [municipio.valor_eace for municipio in municipios if municipio.valor_eace is not None]
+    conferencia = conferencia_eace_boletim(boletim)
+    medicao = MedicaoBdo.objects.filter(boletim=boletim).select_related("gerada_por").first()
+    sem_valor = sum(1 for linha in ineps if linha.valor_proporcional is None)
+
+    def etapa(nome, estado, texto, filtro=""):
+        return {"nome": nome, "estado": estado, "texto": texto, "filtro": filtro}
+
+    etapas = [
+        etapa("Planilha do Boletim", "ok", f"{len(municipios)} município(s), {len(ineps)} INEP(s), {boletim.tipo or 'sem tipo'}"),
+        etapa(
+            "Mês de referência", "ok" if boletim.mes_referencia else "pendente",
+            f"{boletim.mes_referencia:%m/%Y}" if boletim.mes_referencia else "Não informado: os dias contam como antes do mês",
+        ),
+        etapa(
+            "Pro rata do cliente", "ok" if boletim.pro_rata_arquivo else "pendente",
+            boletim.pro_rata_arquivo or "Não importada: sem ela não dá para conferir data e valor pago",
+        ),
+        etapa(
+            "Divergências", "ok" if not pendentes else "atencao",
+            f"{len(com_status)} com status: {pendentes} pendente(s), {contestados} contestado(s)" if com_status
+            else "Nenhuma divergência", "PENDENTE" if pendentes else "",
+        ),
+        etapa(
+            "Portal EACE", "ok" if conferencia["confere"] else ("pendente" if conferencia["leitura"] is None else "atencao"),
+            ", ".join(f"{quantidade} {status}" for status, quantidade in sorted(status_eace.items()))
+            if conferencia["leitura"] else "Ainda não lido",
+        ),
+        etapa(
+            "Medição", "ok" if medicao else "pendente",
+            f"Nº {medicao.numero:02d} em {timezone.localtime(medicao.gerada_em):%d/%m/%Y %H:%M}"
+            f"{' por ' + (medicao.gerada_por.get_full_name() or medicao.gerada_por.username) if medicao.gerada_por else ''}"
+            if medicao else "Ainda não gerada (botão Recebíveis)",
+        ),
+    ]
+    return {
+        "etapas": etapas,
+        "por_motivo": [item for item in por_motivo if item["quantidade"]],
+        "sem_valor": sem_valor,
+        "valor_planilha": sum((municipio.valor_total for municipio in municipios), Decimal("0")),
+        "total_mega": total_mega,
+        "valor_eace": sum(valores_eace, Decimal("0")) if valores_eace else None,
+        "medicao": medicao,
+    }
 
 
 def _contexto_leitura_eace(boletim):
@@ -782,7 +909,7 @@ def bdo_mes_referencia_view(request, pk):
     else:
         mensagens_erro = [erro for erros in form.errors.values() for erro in erros]
         messages.error(request, f"Boletim {boletim.numero}: " + " ".join(mensagens_erro))
-    return redirect("relatorio_bdo")
+    return _voltar_para(request, "relatorio_bdo")
 
 
 @login_required
@@ -799,7 +926,7 @@ def bdo_pro_rata_view(request, pk):
     if not form.is_valid():
         mensagens_erro = [erro for erros in form.errors.values() for erro in erros]
         messages.error(request, f"Boletim {boletim.numero}: Pro rata não importada. " + " ".join(mensagens_erro))
-        return redirect("relatorio_bdo")
+        return _voltar_para(request, "relatorio_bdo")
     atualizados, fora = importar_pro_rata(
         boletim, form.cleaned_data["dados"], form.cleaned_data["arquivo"].name, request.user,
     )
@@ -807,10 +934,23 @@ def bdo_pro_rata_view(request, pk):
     if fora:
         exemplos = ", ".join(fora[:10]) + (", ..." if len(fora) > 10 else "")
         messages.warning(request, f"Boletim {boletim.numero}: {len(fora)} INEP(s) da Pro rata não estão no Boletim: {exemplos}.")
-    return redirect("relatorio_bdo")
+    return _voltar_para(request, "relatorio_bdo")
 
 
-STATUS_DIVERGENCIA = dict(InepBdo.STATUS_DIVERGENCIA_CHOICES)
+def _voltar_para(request, padrao):
+    """`next` do formulário quando é deste site (o painel do Boletim no BDO
+    também envia a Pro rata e o mês de referência); senão a tela `padrao`."""
+    destino = request.POST.get("next") or ""
+    if destino and url_has_allowed_host_and_scheme(destino, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+        return redirect(destino)
+    return redirect(padrao)
+
+
+STATUS_PENDENTE = "PENDENTE"
+# Opções do campo de status (melhoria do BDO, 2026-11-13): "Pendente" volta
+# o INEP para sem status - antes um clique errado não tinha volta.
+OPCOES_STATUS_DIVERGENCIA = ((STATUS_PENDENTE, "Pendente"), *InepBdo.STATUS_DIVERGENCIA_CHOICES)
+STATUS_DIVERGENCIA = {"": "Pendente", **dict(InepBdo.STATUS_DIVERGENCIA_CHOICES)}
 
 
 def _alterar_status_divergencia(linhas, status, usuario, em_massa=False):
@@ -823,7 +963,9 @@ def _alterar_status_divergencia(linhas, status, usuario, em_massa=False):
     agora = timezone.now()
     alterados, sem_divergencia, logs = [], 0, []
     for linha in linhas:
-        if not linha.tem_divergencia:
+        # Voltar para Pendente vale também no INEP que deixou de divergir
+        # (status dado antes da regra de 2026-11-13).
+        if not linha.tem_divergencia and not (status == "" and linha.status_divergencia):
             sem_divergencia += 1
             continue
         if linha.status_divergencia == status:
@@ -847,8 +989,11 @@ def _alterar_status_divergencia(linhas, status, usuario, em_massa=False):
 
 
 def _status_do_post(request):
+    """Status escolhido ("" = Pendente) ou `None` se inválido."""
     status = (request.POST.get("status") or "").strip().upper()
-    return status if status in STATUS_DIVERGENCIA else None
+    if status == STATUS_PENDENTE:
+        return ""
+    return status if status and status in STATUS_DIVERGENCIA else None
 
 
 @login_required
@@ -871,7 +1016,7 @@ def bdo_status_divergencia_view(request, pk):
         messages.error(request, f"INEP {linha.inep}: não há divergência para mudar o status.")
     if request.headers.get("HX-Request"):
         return render(request, "escolas/_bdo_status_divergencia.html", {
-            "linha": linha, "status_divergencia_choices": InepBdo.STATUS_DIVERGENCIA_CHOICES, "oob": True,
+            "linha": linha, "status_divergencia_choices": OPCOES_STATUS_DIVERGENCIA, "oob": True,
         })
     return redirect(f"{reverse('bdo')}?boletim={linha.municipio_bdo.boletim.numero}&inep={linha.inep}")
 
@@ -978,15 +1123,29 @@ def _contexto_recebiveis(dados):
         ineps[municipio_id].append(inep)
     for linha in contestados:
         ineps[linha.municipio_bdo_id].append(linha.inep)
+    # Melhoria do BDO (2026-11-13): o card do EACE é do município inteiro e
+    # é o valor da NF, então o município com card entra com todos os INEPs
+    # do card, mesmo com período escolhido (antes a quantidade caía e o
+    # valor continuava o do card inteiro). O período só decide quem entra.
+    todos_ineps = defaultdict(list)
+    for municipio_id, inep in InepBdo.objects.filter(municipio_bdo__in=municipios).order_by("inep").values_list(
+        "municipio_bdo_id", "inep",
+    ):
+        todos_ineps[municipio_id].append(inep)
     for municipio in municipios:
         municipio.lista_ineps = ineps[municipio.pk]
+        municipio.ineps_no_periodo = len(municipio.lista_ineps)
+        municipio.ineps_do_card = municipio.quantidade_ineps
         nao_contestados = len(municipio.lista_ineps) - quantidade_contestados[municipio.pk]
         municipio.valor_recebivel = (
             municipio.valor_total * nao_contestados / municipio.quantidade_ineps + recebido_contestados[municipio.pk]
         ).quantize(Decimal("0.01")) if municipio.quantidade_ineps else Decimal("0.00")
         municipio.sem_valor_eace = municipio.valor_eace is None
-        if not municipio.sem_valor_eace:
+        municipio.parcial_no_periodo = False
+        if not municipio.sem_valor_eace and municipio.lista_ineps:
             municipio.valor_recebivel = municipio.valor_eace
+            municipio.parcial_no_periodo = municipio.ineps_no_periodo < municipio.ineps_do_card
+            municipio.lista_ineps = todos_ineps[municipio.pk]
         municipio.quantidade_ineps = len(municipio.lista_ineps)
     municipios = [municipio for municipio in municipios if municipio.quantidade_ineps]
     retirados &= {municipio.pk for municipio in municipios}
@@ -1007,10 +1166,15 @@ def _contexto_recebiveis(dados):
         grupo["quantidade_ineps"] += municipio.quantidade_ineps
         grupo["valor_total"] += municipio.valor_recebivel
         grupo["sem_valor_eace"] = grupo.get("sem_valor_eace", False) or municipio.sem_valor_eace
+        grupo["ineps_no_periodo"] = grupo.get("ineps_no_periodo", 0) + municipio.ineps_no_periodo
+        grupo["parcial_no_periodo"] = grupo.get("parcial_no_periodo", False) or municipio.parcial_no_periodo
     for grupo in agrupados.values():
         grupo["ids"] = ",".join(grupo.pop("ids"))
         grupo["quantidade_municipios"] = len(grupo.pop("nomes"))
     conferencias = [conferencia_eace_boletim(boletim) for boletim in selecionados]
+    medicoes = list(
+        MedicaoBdo.objects.filter(boletim__in=selecionados).select_related("boletim", "gerada_por").order_by("boletim__numero")
+    )
 
     return {
         "recebiveis_boletins": boletins,
@@ -1029,6 +1193,8 @@ def _contexto_recebiveis(dados):
         "recebiveis_recebido_contestados": sum(recebido_contestados.values(), Decimal("0.00")),
         "recebiveis_conferencias_eace": conferencias,
         "recebiveis_eace_confere": all(conferencia["confere"] for conferencia in conferencias),
+        "recebiveis_parciais": sum(1 for municipio in mantidos if municipio.parcial_no_periodo),
+        "recebiveis_medicoes": medicoes,
     }
 
 
@@ -1066,15 +1232,18 @@ def bdo_medicao_view(request):
         return HttpResponseForbidden("Visualizador não pode gerar a Medição.")
     contexto = _contexto_recebiveis(request.POST)
     linhas = contexto["recebiveis_linhas"]
+    # Melhoria do BDO (2026-11-13): o erro volta para o Boletim escolhido, não para "Todos".
+    selecionados = sorted(contexto["recebiveis_selecionados"])
+    voltar = f"{reverse('bdo')}?{urlencode({'boletim': selecionados[0]})}" if len(selecionados) == 1 else reverse("bdo")
     if linhas and not contexto["recebiveis_eace_confere"]:
         problemas = " ".join(c["mensagem"] for c in contexto["recebiveis_conferencias_eace"] if not c["confere"])
         messages.error(
             request, f"Medição não gerada: {problemas} Atualize do portal EACE na tela BDO (Boletim escolhido).",
         )
-        return redirect("bdo")
+        return redirect(voltar)
     if not linhas:
         messages.error(request, "Medição não gerada: escolha um Boletim no Recebíveis e mantenha pelo menos um município.")
-        return redirect("bdo")
+        return redirect(voltar)
     chaves = {(linha.uf, _normalizar(linha.municipio)) for linha in linhas}
     escolas, faturados = _faturamento_por_municipio(chaves)
     situacoes = {
@@ -1085,7 +1254,7 @@ def bdo_medicao_view(request):
         arquivos = gerar_medicoes(linhas, situacoes, request.user)
     except MedicaoBdoError as erro:
         messages.error(request, f"Medição não gerada: {erro}")
-        return redirect("bdo")
+        return redirect(voltar)
     if len(arquivos) == 1:
         nome, conteudo = arquivos[0]
         return _anexo(conteudo, nome, MIME_XLSX)

@@ -84,7 +84,7 @@ topo seguem os filtros.
 </div>
 {% else %}
 
-<form method="GET" class="bg-white dark:bg-gray-900 p-4 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-4 flex flex-col lg:flex-row lg:items-end gap-3">
+<form method="GET" class="bg-white dark:bg-gray-900 p-4 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm mb-4 flex flex-col lg:flex-row lg:flex-wrap lg:items-end gap-3">
     <input type="hidden" name="agrupar" value="{{ agrupar }}">
     {% if diferenca_filtro %}<input type="hidden" name="diferenca" value="{{ diferenca_filtro }}">{% endif %}
     <div class="flex flex-col gap-1.5 w-full lg:w-auto">
@@ -139,12 +139,17 @@ topo seguem os filtros.
     </div>
     <div class="flex flex-col gap-1.5 w-full lg:w-auto">
         <label for="bdo-status" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Status</label>
-        <select id="bdo-status" name="status" title="INEPs com o campo de Status: divergência de data ou de valor pago, ou sem Data de ativação ou Ativado em (cliente)"
+        <select id="bdo-status" name="status" style="max-width: 10rem" title="INEPs com divergência real: sem data no sistema, data diferente da Pro rata, cliente pagou a menos, ativado depois do mês ou ativado no mês e fora da Pro rata"
                 class="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl outline-none focus:ring-2 focus:ring-amber-400 transition-all cursor-pointer font-bold text-xs text-gray-800 dark:text-gray-100 uppercase">
             <option value="">Todos os INEPs</option>
-            {% for valor, rotulo in filtros_status %}
+            {% for valor, rotulo in filtros_status %}{% if valor|slice:":7" != "MOTIVO_" %}
             <option value="{{ valor }}" {% if valor == status_filtro %}selected{% endif %}>{{ rotulo }}</option>
-            {% endfor %}
+            {% endif %}{% endfor %}
+            <optgroup label="Motivo da divergência">
+                {% for valor, rotulo in filtros_motivo %}
+                <option value="{{ valor }}" {% if valor == status_filtro %}selected{% endif %}>{{ rotulo }}</option>
+                {% endfor %}
+            </optgroup>
         </select>
     </div>
     <div class="flex gap-2 w-full lg:w-auto">
@@ -168,9 +173,16 @@ topo seguem os filtros.
            {% if agrupar == valor %}aria-current="true"{% endif %}>{{ rotulo }}</a>
         {% endfor %}
     </div>
-    {% if agrupar == "inep" %}
-    <span class="text-[11px] text-gray-500 dark:text-gray-400">Os valores são do município no Boletim e se repetem em cada INEP dele.</span>
-    {% endif %}
+    {# Melhoria do BDO (2026-11-13): os 4 valores de composição da planilha ficam escondidos até pedir. #}
+    <button type="button" id="alternar-composicao" aria-pressed="false" aria-controls="grid-bdo"
+            class="px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 text-[11px] font-black uppercase text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+        Mostrar valores da planilha
+    </button>
+    <span class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold text-gray-500 dark:text-gray-400" aria-label="Legenda das cores">
+        <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500" aria-hidden="true"></span>Confere</span>
+        <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-red-500" aria-hidden="true"></span>Diferente</span>
+        <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-400" aria-hidden="true"></span>Pendente de decisão</span>
+    </span>
     {# Pedido do usuário (2026-10-16): baixa todas as linhas dos filtros e do agrupamento da tela. #}
     <a href="?{{ querystring_paginacao }}&exportar=excel"
        class="sm:ml-auto px-4 py-2 border-2 border-emerald-600 text-emerald-700 dark:text-emerald-400 font-black uppercase italic text-[11px] rounded-xl hover:bg-emerald-600 hover:text-white dark:hover:text-white focus-visible:ring-2 focus-visible:ring-amber-400 outline-none transition flex items-center gap-2 whitespace-nowrap"
@@ -179,7 +191,7 @@ topo seguem os filtros.
     </a>
 </div>
 
-{% if boletim %}{% include "escolas/_bdo_leitura_eace.html" %}{% endif %}
+{% if boletim %}{% include "escolas/_bdo_painel_boletim.html" %}{% include "escolas/_bdo_leitura_eace.html" %}{% endif %}
 
 {% if diferenca_filtro %}
 <div class="mb-4 px-5 py-3 rounded-2xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4" role="status">
@@ -219,8 +231,19 @@ topo seguem os filtros.
 
 <div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
     <div class="overflow-x-auto">
-        <table class="min-w-full text-left border-collapse">
+        <table id="grid-bdo" class="min-w-full text-left border-collapse esconde-composicao">
             <thead>
+                {% if agrupar == "inep" %}
+                {# Melhoria do BDO (2026-11-13): colunas agrupadas pela origem do dado. #}
+                <tr class="text-[10px] font-black uppercase tracking-wider text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 divide-x divide-gray-200 dark:divide-gray-700">
+                    <th colspan="4" class="px-4 py-1.5">Escola</th>
+                    <th colspan="2" class="px-4 py-1.5 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300">Conferência</th>
+                    <th colspan="4" class="px-4 py-1.5 bg-sky-50 dark:bg-sky-900/20 text-sky-800 dark:text-sky-300">Sistema</th>
+                    <th colspan="3" class="px-4 py-1.5 bg-violet-50 dark:bg-violet-900/20 text-violet-800 dark:text-violet-300">Cliente (Pro rata)</th>
+                    <th colspan="5" data-colspan-aberto="5" data-colspan-fechado="1" class="px-4 py-1.5">Planilha do município</th>
+                    <th colspan="3" class="px-4 py-1.5">Boletim</th>
+                </tr>
+                {% endif %}
                 <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
                     {% if agrupar == "inep" %}
                     <th class="px-3 py-2">
@@ -232,15 +255,15 @@ topo seguem os filtros.
                     <th class="px-4 py-2">INEP</th>
                     <th class="px-4 py-2">Município</th>
                     <th class="px-4 py-2">UF</th>
+                    <th class="px-4 py-2" title="Só no INEP com divergência real (o motivo aparece embaixo): Pendente, Aprovado ou Contestado. Cada troca fica registrada em log">Status</th>
+                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Só no INEP Contestado em que o cliente pagou menos: Valor proporcional − valor recebido (Valor pago). É o valor contestado para vir em outro Boletim; o recebido fica">Valor faltando</th>
                     <th class="px-4 py-2 whitespace-nowrap">Data de ativação</th>
-                    <th class="px-4 py-2 whitespace-nowrap" title="Ativado em da planilha Pro rata do cliente para o Boletim, enviada em Administrador &gt; Relatório BDO. Verde: igual à Data de ativação; vermelho: diferente">Ativado em (cliente)</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Dias cobrados no mês de referência do Boletim: ativado antes do mês, 30; ativado no mês, da Data de Ativação até o dia 30 (no dia 31, vai para o mês seguinte); ativado depois do mês, vazio. Boletim sem mês de referência: da Data de Ativação até o dia 30">Dias proporcionais</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Só para conferência: no Boletim RE, a assinatura mensal do RE da escola; no RI, a manutenção mensal do LPU no Lote da escola">Valor assinatura</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor assinatura × Dias proporcionais ÷ 30">Valor proporcional</th>
+                    <th class="px-4 py-2 whitespace-nowrap" title="Ativado em da planilha Pro rata do cliente para o Boletim. Verde: igual à Data de ativação; vermelho: diferente">Ativado em (cliente)</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Coluna Valor da Pro rata do cliente: o valor descontado do INEP pelos Dias Descontados">Desconto (cliente)</th>
                     <th class="px-4 py-2 text-right whitespace-nowrap" title="Valor assinatura − Desconto (cliente). Verde: igual ou maior que o Valor proporcional do sistema (até R$ 0,01 de arredondamento); vermelho: menor. No INEP Contestado é o valor recebido, que fica">Valor pago (cliente)</th>
-                    <th class="px-4 py-2" title="Só nos INEPs com divergência de data ou de valor pago, ou sem Data de ativação ou sem Ativado em (cliente): Aprovado ou Contestado (Pendente até o primeiro status). Cada troca fica registrada em log">Status</th>
-                    <th class="px-4 py-2 text-right whitespace-nowrap" title="Só no INEP Contestado em que o cliente pagou menos: Valor proporcional − valor recebido (Valor pago). É o valor contestado para vir em outro Boletim; o recebido fica">Valor faltando</th>
                     {% elif agrupar == "municipio" %}
                     <th class="px-4 py-2">Município</th>
                     <th class="px-4 py-2">UF</th>
@@ -256,10 +279,10 @@ topo seguem os filtros.
                     <th class="px-4 py-2 text-right">Municípios</th>
                     <th class="px-4 py-2 text-right">INEPs</th>
                     {% endif %}
-                    <th class="px-4 py-2 text-right">Valor serviços</th>
-                    <th class="px-4 py-2 text-right">Valor créditos</th>
-                    <th class="px-4 py-2 text-right">Valor descontos</th>
-                    <th class="px-4 py-2 text-right">Valor descontos proporcionais</th>
+                    <th class="px-4 py-2 text-right col-composicao">Valor serviços</th>
+                    <th class="px-4 py-2 text-right col-composicao">Valor créditos</th>
+                    <th class="px-4 py-2 text-right col-composicao">Valor descontos</th>
+                    <th class="px-4 py-2 text-right col-composicao whitespace-nowrap">Valor descontos proporcionais</th>
                     {% if agrupar != "municipio" %}<th class="px-4 py-2 text-right">Valor total</th>{% endif %}
                     <th class="px-4 py-2">Boletim de desempenho</th>
                     <th class="px-4 py-2">Tipo</th>
@@ -268,7 +291,7 @@ topo seguem os filtros.
             </thead>
             <tbody class="divide-y divide-gray-200 dark:divide-gray-800">
                 {% for linha in page_obj %}
-                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors{% if agrupar == 'inep' and linha.tem_divergencia and not linha.status_divergencia %} bg-amber-50/50 dark:bg-amber-900/10{% endif %}">
                     {% if agrupar == "inep" %}
                     {% with valores=linha.municipio_bdo %}
                     <td class="px-3 py-2">
@@ -279,9 +302,17 @@ topo seguem os filtros.
                         {% endif %}
                     </td>
                     <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ linha.inep }}</span></td>
-                    <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold uppercase">{{ valores.municipio }}</span></td>
+                    <td class="px-4 py-2 whitespace-nowrap"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold uppercase">{{ valores.municipio }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ valores.uf }}</span></td>
+                    {% include "escolas/_bdo_status_divergencia.html" %}
+                    {% include "escolas/_bdo_valor_faltando.html" %}
                     <td class="px-4 py-2 whitespace-nowrap"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ linha.data_ativacao|date:"d/m/Y"|default:"—" }}</span></td>
+                    <td class="px-4 py-2 text-right"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.dias_proporcionais is None %}—{% else %}{{ linha.dias_proporcionais }}{% endif %}</span></td>
+                    <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-bold text-gray-600 dark:text-gray-400">{% if linha.valor_assinatura is None %}—{% else %}R$ {{ linha.valor_assinatura|intcomma }}{% endif %}</span></td>
+                    <td class="px-4 py-2 text-right whitespace-nowrap">
+                        <span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.valor_proporcional is None %}—{% else %}R$ {{ linha.valor_proporcional|intcomma }}{% endif %}</span>
+                        {% if diferenca_filtro %}<span class="block text-[10px] font-bold text-red-600 dark:text-red-400" title="Parte do INEP na Dif. do Total MEGA: Valor proporcional − valor pago pelo cliente">{% if linha.diferenca_inep is None %}Sem valor no sistema{% elif linha.lado_diferenca == "mais" %}Cliente pagou R$ {{ linha.valor_lado_diferenca|intcomma }} a mais{% elif linha.lado_diferenca == "menos" %}Cliente pagou R$ {{ linha.valor_lado_diferenca|intcomma }} a menos{% else %}Dif. R$ {{ linha.diferenca_inep|intcomma }}{% endif %}</span>{% endif %}
+                    </td>
                     <td class="px-4 py-2 whitespace-nowrap">
                         {% if linha.ativado_em_cliente %}
                         <span class="inline-flex items-center gap-1 align-middle text-[11px] font-black {% if linha.ativacao_confere %}text-emerald-700 dark:text-emerald-400{% elif linha.ativacao_confere is False %}text-red-600 dark:text-red-400{% else %}text-gray-600 dark:text-gray-400{% endif %}">
@@ -290,12 +321,6 @@ topo seguem os filtros.
                             {% if linha.ativacao_confere %}<span class="sr-only">(confere)</span>{% elif linha.ativacao_confere is False %}<span class="sr-only">(diferente da Data de ativação)</span>{% endif %}
                         </span>
                         {% else %}<span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">—</span>{% endif %}
-                    </td>
-                    <td class="px-4 py-2 text-right"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.dias_proporcionais is None %}—{% else %}{{ linha.dias_proporcionais }}{% endif %}</span></td>
-                    <td class="px-4 py-2 text-right whitespace-nowrap"><span class="text-[11px] font-bold text-gray-600 dark:text-gray-400">{% if linha.valor_assinatura is None %}—{% else %}R$ {{ linha.valor_assinatura|intcomma }}{% endif %}</span></td>
-                    <td class="px-4 py-2 text-right whitespace-nowrap">
-                        <span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{% if linha.valor_proporcional is None %}—{% else %}R$ {{ linha.valor_proporcional|intcomma }}{% endif %}</span>
-                        {% if diferenca_filtro %}<span class="block text-[10px] font-bold text-red-600 dark:text-red-400" title="Parte do INEP na Dif. do Total MEGA: Valor proporcional − valor pago pelo cliente">{% if linha.diferenca_inep is None %}Sem valor no sistema{% elif linha.lado_diferenca == "mais" %}Cliente pagou R$ {{ linha.valor_lado_diferenca|intcomma }} a mais{% elif linha.lado_diferenca == "menos" %}Cliente pagou R$ {{ linha.valor_lado_diferenca|intcomma }} a menos{% else %}Dif. R$ {{ linha.diferenca_inep|intcomma }}{% endif %}</span>{% endif %}
                     </td>
                     <td class="px-4 py-2 text-right whitespace-nowrap">
                         <span class="text-[11px] font-bold text-gray-600 dark:text-gray-400"{% if linha.valor_desconto_sistema is not None %} title="Desconto do sistema: R$ {{ linha.valor_desconto_sistema|intcomma }}"{% endif %}>{% if linha.valor_desconto_cliente is None %}—{% else %}R$ {{ linha.valor_desconto_cliente|intcomma }}{% endif %}</span>
@@ -311,8 +336,6 @@ topo seguem os filtros.
                         {% if linha.valor_confere is False %}<span class="block text-[10px] font-bold text-gray-500 dark:text-gray-400">Sistema R$ {{ linha.valor_proporcional|intcomma }}</span>{% endif %}
                         {% endif %}
                     </td>
-                    {% include "escolas/_bdo_status_divergencia.html" %}
-                    {% include "escolas/_bdo_valor_faltando.html" %}
                     {% include "escolas/_bdo_valores.html" with valores=valores.valores_em_ordem %}
                     <td class="px-4 py-2"><span class="text-[11px] text-gray-600 dark:text-gray-400 font-bold">{{ valores.boletim.numero }}</span></td>
                     <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ valores.boletim.tipo|default:"—" }}</span></td>
@@ -341,7 +364,7 @@ topo seguem os filtros.
                         <span class="text-[11px] font-black {% if linha.diferenca_mega == 0 and not linha.ineps_sem_valor_mega %}text-emerald-700 dark:text-emerald-400{% else %}text-gray-900 dark:text-gray-100{% endif %}">{% if linha.total_mega is None %}—{% else %}R$ {{ linha.total_mega|intcomma }}{% endif %}</span>
                         {% if linha.diferenca_mega %}<a href="?boletim={{ linha.boletim|urlencode }}&uf={{ linha.uf|urlencode }}&municipio={{ linha.municipio|urlencode }}&agrupar=inep&diferenca=1" class="block text-[10px] font-bold text-red-600 dark:text-red-400 underline decoration-dotted underline-offset-2 hover:text-red-800 dark:hover:text-red-300" title="Total MEGA − Valor total da planilha do cliente (R$ {{ linha.valor_conferencia_mega|intcomma }}). Clique para ver os INEPs que formam a diferença">Dif. R$ {{ linha.diferenca_mega|intcomma }}</a>{% endif %}
                         {% if linha.lado_diferenca_mega %}<span class="block text-[10px] font-bold text-gray-600 dark:text-gray-400" title="Valor total da planilha do cliente (o que ele pagou) comparado com o Total MEGA">Cliente pagou a {{ linha.lado_diferenca_mega }}: R$ {{ linha.valor_lado_diferenca_mega|intcomma }}</span>{% endif %}
-                        {% if linha.ineps_sem_valor_mega %}<span class="block text-[10px] font-bold text-amber-600 dark:text-amber-400" title="INEPs sem valor assinatura, sem data de ativação ou ativados depois do mês de referência ficam fora da soma">{{ linha.ineps_sem_valor_mega }} INEP(s) sem valor</span>{% endif %}
+                        {% if linha.ineps_sem_valor_mega %}<a href="?boletim={{ linha.boletim|urlencode }}&uf={{ linha.uf|urlencode }}&municipio={{ linha.municipio|urlencode }}&agrupar=inep&status=SEM_VALOR" class="block text-[10px] font-bold text-amber-600 dark:text-amber-400 underline decoration-dotted underline-offset-2" title="INEPs sem valor assinatura, sem data de ativação ou ativados depois do mês de referência ficam fora da soma. Clique para ver">{{ linha.ineps_sem_valor_mega }} INEP(s) sem valor</a>{% endif %}
                         {% if linha.ineps_contestados_mega %}<span class="block text-[10px] font-bold text-amber-600 dark:text-amber-400" title="Do INEP Contestado, o valor recebido fica no Total MEGA e o faltando é contestado para vir em outro Boletim">{{ linha.ineps_contestados_mega }} contestado(s): faltando R$ {{ linha.total_contestado_mega|intcomma }}</span>{% endif %}
                     </td>
                     <td class="px-4 py-2 min-w-[180px]">{% include "escolas/_bdo_portal_eace.html" %}</td>
@@ -395,7 +418,34 @@ topo seguem os filtros.
 </div>
 {% endif %}
 
+<style>
+#grid-bdo.esconde-composicao .col-composicao { display: none; }
+</style>
 <script>
+// Valores de composição da planilha (melhoria do BDO, 2026-11-13): escondidos
+// por padrão; a escolha fica guardada neste navegador.
+(function () {
+    var botao = document.getElementById('alternar-composicao');
+    var grid = document.getElementById('grid-bdo');
+    if (!botao || !grid) return;
+    function aplicar(mostrar) {
+        grid.classList.toggle('esconde-composicao', !mostrar);
+        botao.setAttribute('aria-pressed', mostrar ? 'true' : 'false');
+        botao.textContent = mostrar ? 'Esconder valores da planilha' : 'Mostrar valores da planilha';
+        grid.querySelectorAll('[data-colspan-aberto]').forEach(function (th) {
+            th.colSpan = parseInt(mostrar ? th.dataset.colspanAberto : th.dataset.colspanFechado, 10);
+        });
+    }
+    var mostrar = false;
+    try { mostrar = localStorage.getItem('bdo-composicao') === '1'; } catch (e) {}
+    aplicar(mostrar);
+    botao.addEventListener('click', function () {
+        mostrar = !mostrar;
+        try { localStorage.setItem('bdo-composicao', mostrar ? '1' : '0'); } catch (e) {}
+        aplicar(mostrar);
+    });
+})();
+
 // Boletim e UF mudam a lista de municípios (só os que estão no grid):
 // recarrega o filtro na hora, sem o município escolhido antes.
 document.querySelectorAll('select[data-recarrega-municipios]').forEach(function (select) {

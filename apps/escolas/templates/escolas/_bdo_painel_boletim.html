@@ -1,0 +1,93 @@
+{% load humanize %}
+{% comment %}
+Painel do Boletim escolhido (melhoria do BDO, 2026-11-13): as etapas do
+processo na ordem (planilha, mês, Pro rata, divergências, portal EACE,
+Medição), o que falta em cada uma e os totais para comparar. O
+Administrador envia a Pro rata e o mês daqui mesmo.
+{% endcomment %}
+<section class="mb-4 bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-5" aria-labelledby="titulo-painel-boletim">
+    <div class="flex flex-col lg:flex-row lg:items-start gap-5">
+        <div class="flex-1 min-w-0">
+            <h2 id="titulo-painel-boletim" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider mb-3">
+                Boletim {{ boletim.numero }}{% if boletim.tipo %} · {{ boletim.tipo }}{% endif %} — andamento
+            </h2>
+            <ol class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+                {% for etapa in painel.etapas %}
+                <li class="flex items-start gap-3 px-3 py-2.5 rounded-2xl border
+                           {% if etapa.estado == 'ok' %}border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/60 dark:bg-emerald-900/10
+                           {% elif etapa.estado == 'atencao' %}border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20
+                           {% else %}border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60{% endif %}">
+                    <span class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-black
+                                 {% if etapa.estado == 'ok' %}bg-emerald-600 text-white{% elif etapa.estado == 'atencao' %}bg-amber-500 text-white{% else %}bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-100{% endif %}"
+                          aria-hidden="true">{% if etapa.estado == 'ok' %}✓{% elif etapa.estado == 'atencao' %}!{% else %}{{ forloop.counter }}{% endif %}</span>
+                    <div class="min-w-0">
+                        <p class="text-[11px] font-black uppercase text-gray-900 dark:text-gray-100">
+                            {{ etapa.nome }}
+                            <span class="sr-only">— {% if etapa.estado == 'ok' %}concluída{% elif etapa.estado == 'atencao' %}precisa de atenção{% else %}pendente{% endif %}</span>
+                        </p>
+                        <p class="text-[11px] font-bold text-gray-600 dark:text-gray-400 break-words">{{ etapa.texto }}</p>
+                        {% if etapa.filtro %}
+                        <a href="?boletim={{ boletim.numero|urlencode }}&agrupar=inep&status={{ etapa.filtro }}" class="text-[11px] font-black text-amber-700 dark:text-pv-yellow underline decoration-dotted underline-offset-2">Ver os pendentes</a>
+                        {% endif %}
+                        {% if user.is_administrador and etapa.nome == "Pro rata do cliente" %}
+                        {# Mesmo padrão do Relatório BDO: o arquivo vai assim que é escolhido. #}
+                        <form method="POST" action="{% url 'bdo_pro_rata' boletim.pk %}" enctype="multipart/form-data" class="mt-1.5">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                            <input id="painel-pro-rata" type="file" name="arquivo" accept=".xlsx" class="sr-only" onchange="this.form.requestSubmit()">
+                            <label for="painel-pro-rata"
+                                   class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black uppercase cursor-pointer transition {% if boletim.pro_rata_arquivo %}text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-gray-100{% else %}bg-pv-black text-pv-yellow hover:bg-gray-800{% endif %}"
+                                   title="{% if boletim.pro_rata_arquivo %}Reenviar a Pro rata (substitui a anterior){% else %}Enviar a planilha Pro rata do Boletim {{ boletim.numero }}{% endif %}">
+                                <i data-lucide="upload" class="w-3.5 h-3.5" aria-hidden="true"></i>
+                                {% if boletim.pro_rata_arquivo %}Reenviar{% else %}Enviar{% endif %}<span class="sr-only"> a Pro rata do Boletim {{ boletim.numero }}</span>
+                            </label>
+                        </form>
+                        {% endif %}
+                        {% if user.is_administrador and etapa.nome == "Mês de referência" and not boletim.mes_referencia %}
+                        <form method="POST" action="{% url 'bdo_mes_referencia' boletim.pk %}" class="mt-1.5 flex items-center gap-2">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                            <label class="sr-only" for="painel-mes">Mês de referência do Boletim {{ boletim.numero }}</label>
+                            <input id="painel-mes" type="month" name="mes_referencia" required class="px-2 py-1 bg-white dark:bg-gray-800 border border-amber-400 rounded-lg text-[11px] font-bold text-gray-800 dark:text-gray-100">
+                            <button type="submit" class="px-2.5 py-1 rounded-lg border border-gray-300 dark:border-gray-600 text-[10px] font-black uppercase text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">Gravar</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </li>
+                {% endfor %}
+            </ol>
+            {% if painel.por_motivo or painel.sem_valor %}
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+                <span class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">Por motivo</span>
+                {% for item in painel.por_motivo %}
+                <a href="?boletim={{ boletim.numero|urlencode }}&agrupar=inep&status={{ item.filtro }}"
+                   class="px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-[10px] font-black uppercase text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40">{{ item.quantidade }} · {{ item.motivo }}</a>
+                {% endfor %}
+                {% if painel.sem_valor %}
+                <a href="?boletim={{ boletim.numero|urlencode }}&agrupar=inep&status=SEM_VALOR"
+                   title="Sem valor assinatura, sem data de ativação ou ativados depois do mês: ficam fora do Total MEGA"
+                   class="px-2.5 py-1 rounded-full bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-[10px] font-black uppercase text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700">{{ painel.sem_valor }} · Sem valor no sistema</a>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+        <dl class="grid grid-cols-2 lg:grid-cols-1 gap-2 lg:w-60 shrink-0">
+            <div class="px-4 py-2.5 rounded-2xl bg-gray-50 dark:bg-gray-800">
+                <dt class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">Planilha do cliente</dt>
+                <dd class="text-sm font-black italic text-gray-900 dark:text-gray-100 whitespace-nowrap">R$ {{ painel.valor_planilha|intcomma }}</dd>
+            </div>
+            <div class="px-4 py-2.5 rounded-2xl bg-gray-50 dark:bg-gray-800" title="Soma do Valor proporcional dos INEPs (do Contestado, só o recebido)">
+                <dt class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">Total MEGA (sistema)</dt>
+                <dd class="text-sm font-black italic text-gray-900 dark:text-gray-100 whitespace-nowrap">R$ {{ painel.total_mega|intcomma }}</dd>
+            </div>
+            <div class="px-4 py-2.5 rounded-2xl bg-gray-50 dark:bg-gray-800" title="Soma do Valor total a ser emitido dos cards no portal EACE">
+                <dt class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500">Portal EACE</dt>
+                <dd class="text-sm font-black italic text-gray-900 dark:text-gray-100 whitespace-nowrap">{% if painel.valor_eace is None %}Não lido{% else %}R$ {{ painel.valor_eace|intcomma }}{% endif %}</dd>
+            </div>
+            <div class="px-4 py-2.5 rounded-2xl bg-pv-black">
+                <dt class="text-[10px] font-black uppercase text-gray-500">Medição</dt>
+                <dd class="text-sm font-black italic text-pv-yellow whitespace-nowrap">{% if painel.medicao and painel.medicao.valor_total is not None %}R$ {{ painel.medicao.valor_total|intcomma }}{% elif painel.medicao %}Nº {{ painel.medicao.numero|stringformat:"02d" }}{% else %}—{% endif %}</dd>
+            </div>
+        </dl>
+    </div>
+</section>

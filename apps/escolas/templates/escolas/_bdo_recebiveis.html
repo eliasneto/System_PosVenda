@@ -65,10 +65,16 @@ municípios retirados e a visão ficam nele. Retirar é só por município
             {% if recebiveis_data_inicial or recebiveis_data_final %}
             <span class="font-black text-gray-900 dark:text-gray-100">Ativação{% if recebiveis_data_inicial %} de {{ recebiveis_data_inicial|date:"d/m/Y" }}{% endif %}{% if recebiveis_data_final %} até {{ recebiveis_data_final|date:"d/m/Y" }}{% endif %}</span> ·
             {% endif %}
-            O valor do município é o Valor total a ser emitido do card dele no portal EACE (Notas Fiscais do Boletim).
+            O valor do município é o Valor total a ser emitido do card dele no portal EACE (Notas Fiscais do Boletim) e entra com todos os INEPs do card:
+            o período só escolhe quais municípios entram{% if recebiveis_parciais %} — <span class="font-black text-amber-700 dark:text-amber-400">{{ recebiveis_parciais }} município(s) com parte dos INEPs fora do período</span>{% endif %}.
             Município ainda sem card no EACE aparece com o rateio da planilha, só para conferência.
         </p>
         {# Pedido do usuário (2026-10-16): municípios da planilha = cards no EACE, senão não gera a Medição. #}
+        {% for medicao in recebiveis_medicoes %}
+        <p class="text-[11px] font-black text-blue-700 dark:text-blue-400">
+            ℹ Boletim {{ medicao.boletim.numero }} já tem a Medição nº {{ medicao.numero|stringformat:"02d" }}, gerada em {{ medicao.gerada_em|date:"d/m/Y H:i" }}{% if medicao.gerada_por %} por {{ medicao.gerada_por.get_full_name|default:medicao.gerada_por.username }}{% endif %}{% if medicao.valor_total is not None %} (R$ {{ medicao.valor_total|intcomma }}, {{ medicao.quantidade_municipios }} município{{ medicao.quantidade_municipios|pluralize }}){% endif %}. Gerar de novo mantém o número e substitui.
+        </p>
+        {% endfor %}
         {% for conferencia in recebiveis_conferencias_eace %}
         <p class="text-[11px] font-black {% if conferencia.confere %}text-emerald-700 dark:text-emerald-400{% else %}text-red-600 dark:text-red-400{% endif %}">
             {% if conferencia.confere %}✓ Boletim {{ conferencia.boletim.numero }}: {{ conferencia.total_planilha }} município{{ conferencia.total_planilha|pluralize }} na planilha = {{ conferencia.cards_eace }} card{{ conferencia.cards_eace|pluralize }} no EACE (lido em {{ conferencia.leitura.finalizado_em|date:"d/m/Y H:i" }}).{% else %}✗ {{ conferencia.mensagem }} Atualize do portal EACE na tela BDO.{% endif %}
@@ -106,6 +112,7 @@ municípios retirados e a visão ficam nele. Retirar é só por município
                     <td class="px-4 py-2">
                         <details>
                             <summary class="cursor-pointer whitespace-nowrap text-[11px] font-black text-gray-900 dark:text-gray-100 underline decoration-dotted underline-offset-2 hover:text-amber-600 dark:hover:text-pv-yellow">{{ linha.quantidade_ineps }} INEP{{ linha.quantidade_ineps|pluralize }}</summary>
+                            {% if linha.parcial_no_periodo %}<span class="block text-[9px] font-black uppercase text-amber-700 dark:text-amber-400" title="O card do EACE é do município inteiro: entram todos os INEPs dele">{{ linha.ineps_no_periodo }} no período</span>{% endif %}
                             <p class="mt-1 text-[11px] font-bold text-gray-600 dark:text-gray-400 break-words max-w-xs">{{ linha.lista_ineps|join:", " }}</p>
                         </details>
                     </td>
@@ -132,7 +139,7 @@ municípios retirados e a visão ficam nele. Retirar é só por município
                     </td>
                     <td class="px-4 py-2 text-[11px] font-bold text-gray-600 dark:text-gray-400">{{ grupo.uf }}</td>
                     {% endif %}
-                    <td class="px-4 py-2 text-right text-[11px] font-black text-gray-900 dark:text-gray-100">{{ grupo.quantidade_ineps|intcomma }}</td>
+                    <td class="px-4 py-2 text-right text-[11px] font-black text-gray-900 dark:text-gray-100">{{ grupo.quantidade_ineps|intcomma }}{% if grupo.parcial_no_periodo %}<span class="block text-[9px] font-black uppercase text-amber-700 dark:text-amber-400" title="O card do EACE é do município inteiro: entram todos os INEPs dele">{{ grupo.ineps_no_periodo|intcomma }} no período</span>{% endif %}</td>
                     <td class="px-4 py-2 text-right whitespace-nowrap text-[11px] font-black text-gray-900 dark:text-gray-100">R$ {{ grupo.valor_total|intcomma }}{% if grupo.sem_valor_eace %}<span class="block text-[9px] font-black uppercase text-red-600 dark:text-red-400" title="Município sem card no portal EACE: valor pelo rateio da planilha, só para conferência">Sem valor EACE</span>{% endif %}</td>
                     {% if recebiveis_visao == "municipio" %}
                     <td class="px-4 py-2 text-right">

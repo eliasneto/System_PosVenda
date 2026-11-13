@@ -9,6 +9,7 @@ coluna da nota em branco. O modelo (cabeçalho e logos) fica em
 import datetime
 import io
 from copy import copy
+from decimal import Decimal
 from pathlib import Path
 
 import openpyxl
@@ -32,8 +33,9 @@ class MedicaoBdoError(Exception):
     pass
 
 
-def numero_da_medicao(boletim, usuario):
-    """Número sequencial por tipo; o Boletim que já tem Medição mantém o dele."""
+def numero_da_medicao(boletim, usuario, linhas=()):
+    """Número sequencial por tipo; o Boletim que já tem Medição mantém o dele.
+    Guarda o resumo das `linhas` que entraram (valor, municípios e INEPs)."""
     medicao = MedicaoBdo.objects.filter(boletim=boletim).first()
     if medicao is None:
         ultima = MedicaoBdo.objects.filter(tipo=boletim.tipo).aggregate(ultima=Max("numero"))["ultima"] or 0
@@ -42,6 +44,9 @@ def numero_da_medicao(boletim, usuario):
             numero=max(ultima, ULTIMA_MEDICAO_FORA_DO_SISTEMA.get(boletim.tipo, 0)) + 1,
         )
     medicao.gerada_por = usuario
+    medicao.valor_total = sum((linha.valor_recebivel for linha in linhas), Decimal("0.00"))
+    medicao.quantidade_municipios = len({(linha.uf, _normalizar(linha.municipio)) for linha in linhas})
+    medicao.quantidade_ineps = sum(len(linha.lista_ineps) for linha in linhas)
     medicao.save()
     return medicao.numero
 
@@ -75,7 +80,7 @@ def gerar_medicoes(linhas, situacoes, usuario):
         datas = primeiro_faturamento(
             boletim.tipo, [inep for linha in linhas_boletim for inep in linha.lista_ineps], hoje,
         )
-        numero = numero_da_medicao(boletim, usuario)
+        numero = numero_da_medicao(boletim, usuario, linhas_boletim)
         dados = [
             (
                 linha.uf, linha.municipio.upper(),

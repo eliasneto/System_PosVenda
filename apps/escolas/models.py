@@ -1160,6 +1160,11 @@ class MedicaoBdo(models.Model):
     gerada_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
     )
+    # O que entrou na última geração (melhoria do BDO, 2026-11-13): a tela
+    # mostra a Medição já gerada e o Recebíveis avisa antes de gerar de novo.
+    valor_total = models.DecimalField("Valor total", max_digits=14, decimal_places=2, null=True, blank=True)
+    quantidade_municipios = models.PositiveIntegerField("Municípios", default=0)
+    quantidade_ineps = models.PositiveIntegerField("INEPs", default=0)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["tipo", "numero"], name="medicao_bdo_numero_unico")]
