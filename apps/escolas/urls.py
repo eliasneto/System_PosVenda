@@ -56,6 +56,9 @@ urlpatterns = [
     path("bdo/<int:pk>/leitura-eace/", views_bdo.bdo_leitura_eace_view, name="bdo_leitura_eace"),
     path("bdo/<int:pk>/leitura-eace/status/", views_bdo.bdo_leitura_eace_status_view, name="bdo_leitura_eace_status"),
     path("bdo/recebiveis/medicao/", views_bdo.bdo_medicao_view, name="bdo_medicao"),
+    path("bdo/nfs/enviar/", views_bdo.bdo_nf_remessa_view, name="bdo_nf_remessa"),
+    path("bdo/nfs/<int:pk>/decidir/", views_bdo.bdo_nf_decidir_view, name="bdo_nf_decidir"),
+    path("bdo/<int:pk>/nfs/fila/", views_bdo.bdo_nf_enfileirar_view, name="bdo_nf_enfileirar"),
     path("bdo/inep/<int:pk>/status-divergencia/", views_bdo.bdo_status_divergencia_view, name="bdo_status_divergencia"),
     path(
         "bdo/status-divergencia/massa/", views_bdo.bdo_status_divergencia_massa_view,

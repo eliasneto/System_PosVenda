@@ -1173,3 +1173,125 @@ class MedicaoBdo(models.Model):
 
     def __str__(self):
         return f"MEDIÇÃO {self.numero:02d} - {self.boletim}"
+
+
+def _caminho_remessa_nf_bdo(instancia, nome):
+    return f"bdo/remessas/{timezone.localdate():%Y/%m}/{nome}"
+
+
+def _caminho_nf_bdo(instancia, nome):
+    return f"bdo/notas/{timezone.localdate():%Y/%m}/{nome}"
+
+
+class RemessaNfBdo(models.Model):
+    """Pedido do usuário (2026-11-13): o .zip/.rar de Notas Fiscais do BDO
+    que o financeiro devolve (uma NFCom por município, de RE e de RI). Cada
+    PDF de dentro vira 1 `NotaFiscalBdo`, ligada ao Boletim pelo "CODIGO
+    DE LIBERACAO" e ao município pelo "UF <MUNICIPIO>/<UF>" + o valor do
+    card no portal EACE (`apps.escolas.nf_bdo`)."""
+
+    arquivo = models.FileField("Arquivo", upload_to=_caminho_remessa_nf_bdo, max_length=500)
+    nome_original = models.CharField("Nome do arquivo", max_length=255)
+    enviado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+    enviado_em = models.DateTimeField("Enviado em", auto_now_add=True)
+    resumo = models.JSONField("Resumo da leitura", default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-enviado_em"]
+        verbose_name = "Remessa de NFs do BDO"
+        verbose_name_plural = "Remessas de NFs do BDO"
+
+    def __str__(self):
+        return self.nome_original
+
+
+class NotaFiscalBdo(models.Model):
+    """Uma NF (PDF) de uma `RemessaNfBdo`: o que foi lido dela, o município
+    do Boletim a que pertence e o envio ao portal EACE pelo robô
+    (`rpa_bdo.anexar_pdf_bdo`, na fila do RPA EACE). Só fica "Pronta" quando
+    o município da NF e o valor do card concordam; senão espera a decisão
+    do usuário (`DIVERGENTE`/`SEM_MUNICIPIO`)."""
+
+    PRONTA = "pronta"
+    DIVERGENTE = "divergente"
+    SEM_MUNICIPIO = "sem_municipio"
+    FORA_DO_BOLETIM = "fora_do_boletim"
+    JA_NO_PORTAL = "ja_no_portal"
+    NA_FILA = "na_fila"
+    PROCESSANDO = "processando"
+    ANEXADA = "anexada"
+    ERRO = "erro"
+    DESCARTADA = "descartada"
+    SITUACAO_CHOICES = [
+        (PRONTA, "Pronta para enviar"),
+        (DIVERGENTE, "Divergente: decidir"),
+        (SEM_MUNICIPIO, "Sem município: decidir"),
+        (FORA_DO_BOLETIM, "Boletim não importado"),
+        (JA_NO_PORTAL, "Card já com NF no portal"),
+        (NA_FILA, "Na fila do robô"),
+        (PROCESSANDO, "Anexando no portal"),
+        (ANEXADA, "Anexada no portal"),
+        (ERRO, "Erro no envio"),
+        (DESCARTADA, "Descartada"),
+    ]
+    # Ainda não foi para o portal: a mesma NF numa remessa nova substitui.
+    SITUACOES_ABERTAS = (PRONTA, DIVERGENTE, SEM_MUNICIPIO, FORA_DO_BOLETIM, JA_NO_PORTAL, ERRO)
+
+    remessa = models.ForeignKey(RemessaNfBdo, on_delete=models.CASCADE, related_name="notas")
+    boletim = models.ForeignKey(
+        BoletimBdo, on_delete=models.CASCADE, null=True, blank=True, related_name="notas_fiscais",
+    )
+    municipio_bdo = models.ForeignKey(
+        MunicipioBdo, on_delete=models.SET_NULL, null=True, blank=True, related_name="notas_fiscais",
+    )
+    arquivo = models.FileField("PDF", upload_to=_caminho_nf_bdo, max_length=500)
+    nome_arquivo = models.CharField("Nome do PDF", max_length=255)
+    numero_nf = models.CharField("Nº da NF", max_length=20, blank=True, db_index=True)
+    valor = models.DecimalField("Valor da NF", max_digits=14, decimal_places=2, null=True, blank=True)
+    # Como veio escrito na NF ("CODIGO DE LIBERACAO 3657 UF ITOBI/SP").
+    boletim_lido = models.CharField("Boletim na NF", max_length=30, blank=True)
+    municipio_lido = models.CharField("Município na NF", max_length=120, blank=True)
+    uf_lida = models.CharField("UF na NF", max_length=2, blank=True)
+    situacao = models.CharField("Situação", max_length=20, choices=SITUACAO_CHOICES, default=SEM_MUNICIPIO)
+    motivo = models.CharField("Motivo", max_length=500, blank=True)
+    # "texto" (município e valor concordam), "manual" (escolhido na tela)
+    ligada_por = models.CharField("Ligada por", max_length=10, blank=True)
+    decidido_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+    decidido_em = models.DateTimeField("Decidido em", null=True, blank=True)
+    enfileirado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+    enfileirado_em = models.DateTimeField("Enfileirado em", null=True, blank=True)
+    iniciado_em = models.DateTimeField("Iniciado em", null=True, blank=True)
+    finalizado_em = models.DateTimeField("Finalizado em", null=True, blank=True)
+    etapa_atual = models.CharField("Etapa atual", max_length=100, blank=True)
+    progresso_pct = models.PositiveSmallIntegerField("Progresso (%)", default=0)
+    # Robô que anexou (ADR-009, robôs em paralelo) - o painel da TV mostra quem está trabalhando.
+    robo = models.ForeignKey("core.RoboRpaEace", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    motivo_erro = models.CharField("Motivo do erro", max_length=60, blank=True)
+    status_portal = models.CharField("Status do card no portal", max_length=60, blank=True)
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+
+    class Meta:
+        ordering = ["boletim_id", "municipio_bdo__uf", "municipio_bdo__municipio", "numero_nf"]
+        verbose_name = "NF do BDO"
+        verbose_name_plural = "NFs do BDO"
+
+    def __str__(self):
+        return f"NF {self.numero_nf or self.nome_arquivo} - {self.municipio_bdo or self.municipio_lido}"
+
+    @property
+    def valor_card(self):
+        """Valor do card do município no portal (ou o da planilha, se ainda não lido)."""
+        if not self.municipio_bdo:
+            return None
+        municipio = self.municipio_bdo
+        return municipio.valor_eace if municipio.valor_eace is not None else municipio.valor_total
+
+    @property
+    def valor_confere(self):
+        return self.valor is not None and self.valor_card is not None and self.valor == self.valor_card

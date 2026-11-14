@@ -1528,6 +1528,14 @@ def fila_rpa_eace_view(request):
     page_mip = Paginator(
         logs_mip_para_fila(status_filtro, inep_filtro, data_processamento_filtro), 10
     ).get_page(request.GET.get("page_mip"))
+    # NFs do BDO (2026-11-13): mesmo worker; o BDO nao e por INEP (o filtro de INEP nao se aplica)
+    from apps.escolas.leitura_eace_bdo import mensagem_motivo_bdo
+    from apps.escolas.models import NotaFiscalBdo
+    from apps.escolas.nf_bdo import notas_para_fila
+
+    page_bdo = Paginator(notas_para_fila(status_filtro, data_processamento_filtro), 10).get_page(request.GET.get("page_bdo"))
+    for nota in page_bdo:
+        nota.motivo_erro_legivel = mensagem_motivo_bdo(nota.motivo_erro) if nota.motivo_erro else ""
 
     return render(
         request,
@@ -1543,15 +1551,18 @@ def fila_rpa_eace_view(request):
             # log próprio) - seção "MIP" abaixo da tabela do RI, mesmos
             # filtros, paginação própria (`?page_mip=`); totais somam os 2.
             "page_mip": page_mip,
+            "page_bdo": page_bdo,
             # Painel para TV (pedido do usuário, 2026-11-11) - botão só
             # aparece com FILA_TV_TOKEN configurado.
             "fila_tv_url": (
                 reverse("fila_tv", kwargs={"token": settings.FILA_TV_TOKEN}) if settings.FILA_TV_TOKEN else ""
             ),
             "total_na_fila": LogRpaEace.objects.filter(resultado=LogRpaEace.NA_FILA).count()
-            + LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count(),
+            + LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA).count()
+            + NotaFiscalBdo.objects.filter(situacao=NotaFiscalBdo.NA_FILA).count(),
             "total_processando": LogRpaEace.objects.filter(resultado=LogRpaEace.PROCESSANDO).count()
-            + LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.PROCESSANDO).count(),
+            + LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.PROCESSANDO).count()
+            + NotaFiscalBdo.objects.filter(situacao=NotaFiscalBdo.PROCESSANDO).count(),
         },
     )
 

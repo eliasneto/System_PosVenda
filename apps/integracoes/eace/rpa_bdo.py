@@ -55,6 +55,32 @@ logger = logging.getLogger(__name__)
 RpaBdoIndisponivel = RpaMipIndisponivel
 ResultadoRpaBdo = ResultadoRpaMip
 
+# NF do BDO e NFCom (fatura de servico de comunicacao), nao NF-e/NFS-e: o valor
+# vem em "TOTAL A PAGAR: R$ 1.120,20" ou "VALOR TOTAL NF 1.120,20" (layout
+# conferido nas NFs do Boletim 3657, 2026-11-13).
+_RES_VALOR_NFCOM = (
+    re.compile(r"TOTAL A PAGAR:\s*R\$\s*([\d.]+,\d{2})"),
+    re.compile(r"VALOR TOTAL NF\s+([\d.]+,\d{2})"),
+)
+
+
+def extrair_valor_nfcom(texto: str) -> str:
+    for regex in _RES_VALOR_NFCOM:
+        encontrado = regex.search(texto or "")
+        if encontrado:
+            return encontrado.group(1)
+    return ""
+
+
+def extrair_dados_nf_bdo(caminho_pdf: str) -> dict:
+    """`extrair_dados_nf_mip` + o valor da NFCom (layout das NFs do BDO)."""
+    from .extrair_dados_pdf import extrair_texto_pdf
+
+    dados = extrair_dados_nf_mip(caminho_pdf)
+    if not dados["valor"]:
+        dados["valor"] = extrair_valor_nfcom(extrair_texto_pdf(caminho_pdf))
+    return dados
+
 # Motivos possiveis em ResultadoRpaBdo.motivo quando sucesso=False - os
 # mesmos do MIP (`rpa_mip`), com estas diferencas:
 #   abrir_bdos               - botao "Ver BDOs" nao encontrado no modal de Medições
@@ -160,7 +186,7 @@ def anexar_pdf_bdo(
             "'python -m playwright install chromium'."
         ) from exc
 
-    dados_pdf = extrair_dados_nf_mip(caminho_pdf) if caminho_pdf else {}
+    dados_pdf = extrair_dados_nf_bdo(caminho_pdf) if caminho_pdf else {}
     progresso.avancar()  # "Lendo os dados da Nota Fiscal"
 
     if caminho_pdf:

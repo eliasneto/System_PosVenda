@@ -23,7 +23,9 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 
 from apps.core.models import EstadoRobosRpaEace, RoboRpaEace
-from apps.escolas.models import LogRpaEaceMip
+from types import SimpleNamespace
+
+from apps.escolas.models import LogRpaEaceMip, NotaFiscalBdo
 
 from .models import LogRpaEace
 
@@ -56,6 +58,30 @@ def _item_mip(log: LogRpaEaceMip) -> dict:
         "inep": f"LOTE {log.lote.estado}",
         "nome": log.lote.municipio,
         "nota": log.nome_nota_fiscal,
+        "log": log,
+    }
+
+
+# NF do BDO (2026-11-13) no mesmo formato dos logs do RI/MIP que o painel usa
+_RESULTADO_BDO = {NotaFiscalBdo.NA_FILA: "na_fila", NotaFiscalBdo.PROCESSANDO: "processando",
+                  NotaFiscalBdo.ANEXADA: "sucesso", NotaFiscalBdo.ERRO: "erro"}
+
+
+def _item_bdo(nota: NotaFiscalBdo) -> dict:
+    from apps.escolas.leitura_eace_bdo import mensagem_motivo_bdo
+
+    log = SimpleNamespace(
+        resultado=_RESULTADO_BDO.get(nota.situacao, "erro"), robo=nota.robo, robo_id=nota.robo_id,
+        etapa_atual=nota.etapa_atual, progresso_pct=nota.progresso_pct, executado_em=nota.finalizado_em,
+        enfileirado_em=nota.enfileirado_em, criado_em=nota.criado_em, motivo_erro=nota.motivo_erro,
+        motivo_erro_legivel=mensagem_motivo_bdo(nota.motivo_erro) if nota.motivo_erro else "",
+        tentativas=1 if nota.situacao == NotaFiscalBdo.NA_FILA and nota.finalizado_em else 0,  # reenvio depois de erro
+    )
+    return {
+        "tipo": "BDO",
+        "inep": f"BDO {nota.boletim.numero}" if nota.boletim else "BDO",
+        "nome": str(nota.municipio_bdo or ""),
+        "nota": nota.nome_arquivo,
         "log": log,
     }
 
@@ -188,13 +214,16 @@ def contexto_fila_tv(agora=None) -> dict:
 
     ri = LogRpaEace.objects.select_related("ri__escola", "documento_pdf", "robo")
     mip = LogRpaEaceMip.objects.select_related("lote", "robo")
+    bdo = NotaFiscalBdo.objects.select_related("boletim", "municipio_bdo", "robo")
 
     processando = [_item_ri(log) for log in ri.filter(resultado=LogRpaEace.PROCESSANDO)]
     processando += [_item_mip(log) for log in mip.filter(resultado=LogRpaEaceMip.PROCESSANDO)]
+    processando += [_item_bdo(nota) for nota in bdo.filter(situacao=NotaFiscalBdo.PROCESSANDO)]
     processando.sort(key=lambda item: (item["log"].robo.nome if item["log"].robo else ""))
 
     proximos = [_item_ri(log) for log in ri.filter(resultado=LogRpaEace.NA_FILA).order_by("enfileirado_em", "id")[:QTD_PROXIMOS]]
     proximos += [_item_mip(log) for log in mip.filter(resultado=LogRpaEaceMip.NA_FILA).order_by("enfileirado_em", "id")[:QTD_PROXIMOS]]
+    proximos += [_item_bdo(nota) for nota in bdo.filter(situacao=NotaFiscalBdo.NA_FILA).order_by("enfileirado_em", "id")[:QTD_PROXIMOS]]
     proximos.sort(key=_quando)
     proximos = proximos[:QTD_PROXIMOS]
 
@@ -202,16 +231,18 @@ def contexto_fila_tv(agora=None) -> dict:
     # que falhou e voltou para a fila (resultado "Na fila" com motivo).
     ultimos = [_item_ri(log) for log in ri.filter(executado_em__isnull=False).order_by("-executado_em")[:QTD_ULTIMOS]]
     ultimos += [_item_mip(log) for log in mip.filter(executado_em__isnull=False).order_by("-executado_em")[:QTD_ULTIMOS]]
+    ultimos += [_item_bdo(nota) for nota in bdo.filter(finalizado_em__isnull=False).order_by("-finalizado_em")[:QTD_ULTIMOS]]
     ultimos.sort(key=_quando, reverse=True)
     ultimos = ultimos[:QTD_ULTIMOS]
 
-    def contar(qs_ri, qs_mip):
-        return qs_ri.count() + qs_mip.count()
+    def contar(qs_ri, qs_mip, qs_bdo=None):
+        return qs_ri.count() + qs_mip.count() + (qs_bdo.count() if qs_bdo is not None else 0)
 
     sucesso_hoje = contar(
         LogRpaEace.objects.filter(resultado=LogRpaEace.SUCESSO, executado_em__gte=inicio_do_dia,
                                   concluido_manualmente=False),
         LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.SUCESSO, executado_em__gte=inicio_do_dia),
+        NotaFiscalBdo.objects.filter(situacao=NotaFiscalBdo.ANEXADA, finalizado_em__gte=inicio_do_dia),
     )
     atencao_hoje = contar(
         LogRpaEace.objects.filter(resultado=LogRpaEace.ATENCAO, executado_em__gte=inicio_do_dia),
@@ -220,6 +251,7 @@ def contexto_fila_tv(agora=None) -> dict:
     erro_hoje = contar(
         LogRpaEace.objects.filter(resultado=LogRpaEace.ERRO, executado_em__gte=inicio_do_dia),
         LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.ERRO, executado_em__gte=inicio_do_dia),
+        NotaFiscalBdo.objects.filter(situacao=NotaFiscalBdo.ERRO, finalizado_em__gte=inicio_do_dia),
     )
     # Pedido do usuário (2026-11-11): o que está sendo reprocessado agora
     # ("Processando") não conta como falha - só conta o que terminou mal
@@ -228,10 +260,12 @@ def contexto_fila_tv(agora=None) -> dict:
     tentativas_hora = contar(
         LogRpaEace.objects.filter(executado_em__gte=uma_hora).exclude(resultado=LogRpaEace.PROCESSANDO),
         LogRpaEaceMip.objects.filter(executado_em__gte=uma_hora).exclude(resultado=LogRpaEaceMip.PROCESSANDO),
+        NotaFiscalBdo.objects.filter(finalizado_em__gte=uma_hora, situacao__in=(NotaFiscalBdo.ANEXADA, NotaFiscalBdo.ERRO)),
     )
     sucesso_hora = contar(
         LogRpaEace.objects.filter(executado_em__gte=uma_hora, resultado__in=LogRpaEace.RESULTADOS_ENVIADOS),
         LogRpaEaceMip.objects.filter(executado_em__gte=uma_hora, resultado__in=(LogRpaEaceMip.SUCESSO, LogRpaEaceMip.ATENCAO)),
+        NotaFiscalBdo.objects.filter(finalizado_em__gte=uma_hora, situacao=NotaFiscalBdo.ANEXADA),
     )
 
     # Previsão de quando a fila zera (pedido do usuário, 2026-11-11): no
@@ -249,10 +283,12 @@ def contexto_fila_tv(agora=None) -> dict:
             executado_em__gte=janela,
             resultado__in=(LogRpaEaceMip.SUCESSO, LogRpaEaceMip.ATENCAO, LogRpaEaceMip.ERRO),
         ),
+        NotaFiscalBdo.objects.filter(finalizado_em__gte=janela, situacao__in=(NotaFiscalBdo.ANEXADA, NotaFiscalBdo.ERRO)),
     ) * 60 // JANELA_RITMO_MINUTOS
     total_na_fila = contar(
         LogRpaEace.objects.filter(resultado=LogRpaEace.NA_FILA),
         LogRpaEaceMip.objects.filter(resultado=LogRpaEaceMip.NA_FILA),
+        NotaFiscalBdo.objects.filter(situacao=NotaFiscalBdo.NA_FILA),
     )
     previsao = _previsao_fila_zerar(total_na_fila + len(processando), saida_hora, agora)
 

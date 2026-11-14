@@ -26,7 +26,7 @@ lista inteira de logs.
         <h1 class="text-4xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter leading-none">
             Fila
         </h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal no portal EACE, RN-058) — RI e MIP (LOTE), 1 robô por INEP · atualiza sozinha a cada 10 s</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-3 font-bold uppercase tracking-wider">Fila do RPA EACE (anexo de Nota Fiscal no portal EACE, RN-058) — RI, MIP (LOTE) e BDO, 1 robô por INEP · atualiza sozinha a cada 10 s</p>
     </div>
 
     <div id="fila-totais" class="flex gap-4 items-stretch">
@@ -308,6 +308,84 @@ lista inteira de logs.
                 <i data-lucide="chevron-right" class="w-5 h-5"></i>
             </a>
             {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- NFs do BDO (pedido do usuário, 2026-11-13): o mesmo worker anexa a NF de cada município no card do Boletim
+     (`apps.escolas.nf_bdo`). Mesmos filtros de Status/Data; o BDO não é por INEP. Paginação própria (`?page_bdo=`). -->
+<h2 class="text-xl font-black text-gray-900 dark:text-gray-100 italic uppercase tracking-tighter mt-12 mb-4">Envios do BDO</h2>
+<div class="bg-white dark:bg-gray-900 rounded-[2.5rem] border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col">
+    <div class="overflow-x-auto contain-layout">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 divide-x divide-gray-300 dark:divide-gray-700">
+                    <th class="px-4 py-2">Tipo</th>
+                    <th class="px-4 py-2">Status</th>
+                    <th class="px-4 py-2">Boletim / Município</th>
+                    <th class="px-4 py-2">Nota fiscal</th>
+                    <th class="px-4 py-2">Detalhe</th>
+                    <th class="px-4 py-2">Quando</th>
+                    <th class="px-4 py-2">Ação</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-300 dark:divide-gray-700">
+                {% for nota in page_bdo %}
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition-all divide-x divide-gray-300 dark:divide-gray-700">
+                    <td class="px-4 py-2"><span class="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-violet-600 text-white whitespace-nowrap">BDO {{ nota.boletim.tipo }}</span></td>
+                    <td class="px-4 py-2">
+                        {% if nota.situacao == 'processando' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-purple-600 text-purple-700 dark:text-purple-400 dark:border-purple-500 animate-pulse whitespace-nowrap">⚙ Processando</span>
+                        {% elif nota.situacao == 'na_fila' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-blue-600 text-blue-700 dark:text-blue-400 dark:border-blue-500 whitespace-nowrap">⏳ Na fila</span>
+                        {% elif nota.situacao == 'anexada' %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-green-600 text-green-700 dark:text-green-400 dark:border-green-500 whitespace-nowrap">✓ Processado</span>
+                        {% else %}
+                        <span class="text-[11px] font-black uppercase px-3 py-1 rounded-full border-2 border-red-600 text-red-700 dark:text-red-400 dark:border-red-500 whitespace-nowrap">✗ Erro</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2">
+                        <span class="font-black text-gray-900 dark:text-gray-100 uppercase text-[11px]">Boletim {{ nota.boletim.numero }}</span>
+                        <span class="block text-[10px] text-gray-400 dark:text-gray-500 font-bold">{{ nota.municipio_bdo|default:"—" }}</span>
+                    </td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold whitespace-nowrap">NF {{ nota.numero_nf }}{% if nota.valor is not None %} · R$ {{ nota.valor }}{% endif %}</td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold max-w-xs">
+                        {% if nota.situacao == 'processando' %}
+                        <div class="flex flex-col gap-1">
+                            <div class="w-32 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                                <div class="h-full bg-purple-600 dark:bg-purple-500" style="width: {{ nota.progresso_pct }}%"></div>
+                            </div>
+                            <span>{{ nota.progresso_pct }}%{% if nota.etapa_atual %} — {{ nota.etapa_atual }}{% endif %}</span>
+                            {% if nota.robo %}<span class="text-gray-400 dark:text-gray-500">{{ nota.robo.nome }}</span>{% endif %}
+                        </div>
+                        {% elif nota.situacao == 'na_fila' %}Aguardando a vez
+                        {% elif nota.situacao == 'anexada' %}Anexada no card do município{% if nota.status_portal %} ({{ nota.status_portal }}){% endif %}
+                        {% else %}<span class="text-red-500 dark:text-red-400">{{ nota.motivo_erro_legivel|default:"—" }}</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold whitespace-nowrap">
+                        {% if nota.finalizado_em %}{{ nota.finalizado_em|date:"d/m/Y H:i" }}{% else %}{{ nota.enfileirado_em|date:"d/m/Y H:i" }}{% endif %}
+                    </td>
+                    <td class="px-4 py-2">
+                        <a href="{% url 'bdo' %}?boletim={{ nota.boletim.numero|urlencode }}#nfs-bdo" class="text-[11px] font-black uppercase text-gray-500 dark:text-gray-400 hover:text-pv-yellow transition whitespace-nowrap">Ver Boletim →</a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" class="px-8 py-10 text-center text-xs font-bold text-gray-400 dark:text-gray-500">
+                        Nenhum envio do BDO {% if status_filtro == "andamento" %}em andamento{% else %}com esse filtro{% endif %}.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if page_bdo.has_other_pages %}
+    <div class="bg-gray-50/50 dark:bg-gray-800/40 px-8 py-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
+        <span class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase italic tracking-widest">Página {{ page_bdo.number }} de {{ page_bdo.paginator.num_pages }}</span>
+        <div class="flex gap-2">
+            {% if page_bdo.has_previous %}<a href="?page_bdo={{ page_bdo.previous_page_number }}&status={{ status_filtro|urlencode }}{% if data_processamento_filtro %}&data_processamento={{ data_processamento_filtro|date:'Y-m-d' }}{% endif %}" aria-label="Página anterior" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-600 dark:text-gray-300"><i data-lucide="chevron-left" class="w-5 h-5"></i></a>{% endif %}
+            {% if page_bdo.has_next %}<a href="?page_bdo={{ page_bdo.next_page_number }}&status={{ status_filtro|urlencode }}{% if data_processamento_filtro %}&data_processamento={{ data_processamento_filtro|date:'Y-m-d' }}{% endif %}" aria-label="Próxima página" class="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-600 dark:text-gray-300"><i data-lucide="chevron-right" class="w-5 h-5"></i></a>{% endif %}
         </div>
     </div>
     {% endif %}

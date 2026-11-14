@@ -2,6 +2,8 @@ from django.core.management.base import BaseCommand, CommandError
 
 from apps.core.models import RoboRpaEace
 from apps.escolas.leitura_eace_bdo import processar_proxima_leitura_eace_bdo, recuperar_leituras_interrompidas
+from apps.escolas.nf_bdo import processar_proximo_envio_nf_bdo
+from apps.escolas.nf_bdo import recuperar_envios_interrompidos as recuperar_envios_nf_bdo_interrompidos
 from apps.escolas.validacao_nf_mip import (
     agendar_validacao_nf_mip_se_devido,
     processar_proxima_validacao_nf_mip,
@@ -79,6 +81,15 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(
                 f"[{nome}] Leitura EACE do BDO #{leitura.pk}: {leitura.get_status_display()}"
                 f"{f' ({leitura.motivo_erro})' if leitura.motivo_erro else ''}"
+            ))
+            return
+        # NFs do BDO (2026-11-13): anexa no card do município, 1 por vez
+        recuperar_envios_nf_bdo_interrompidos()
+        nota_bdo = processar_proximo_envio_nf_bdo(robo)
+        if nota_bdo is not None:
+            self.stdout.write(self.style.SUCCESS(
+                f"[{nome}] NF do BDO {nota_bdo.numero_nf} (Boletim {nota_bdo.boletim.numero}, {nota_bdo.municipio_bdo}): "
+                f"{nota_bdo.get_situacao_display()}{f' ({nota_bdo.motivo_erro})' if nota_bdo.motivo_erro else ''}"
             ))
             return
         validacao = self._processar_validacao_nf_mip()

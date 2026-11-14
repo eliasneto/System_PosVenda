@@ -481,6 +481,25 @@ Se o Boletim já tem Medição, o modal avisa o número, a data, quem gerou e o 
 
 A Medição só é gerada quando o número de municípios da planilha bate com o número de cards no portal EACE. Se não bater, aparece **"Medição não gerada: ... Atualize do portal EACE na tela BDO (Boletim escolhido)."**
 
+## Como enviar as NFs do BDO para o portal EACE
+
+Caminho: **Projeto › BDO**, com o Boletim escolhido. Use a seção **NFs do financeiro no portal EACE**.
+
+O financeiro devolve um **.zip** (ou .rar) com as NFs do Boletim: uma NF por município, de RE e de RI. Cada NF traz em "Informações complementares" o número do Boletim e o município, por exemplo "CODIGO DE LIBERACAO 3657 UF ITOBI/SP".
+
+1. Clique em **Enviar NFs do financeiro (.zip)** e escolha o arquivo. Ele pode trazer as NFs do RE e do RI juntas: cada uma vai para o Boletim do código de liberação dela.
+2. O sistema liga cada NF ao município do Boletim e confere o valor com o card do município no portal. A NF fica **Pronta** quando o município da NF e o valor do card concordam. Erros de digitação no nome do município são aceitos (ex.: "CHAPADA DA NATVIDADE").
+3. As que não concordam ficam como **Divergente: decidir** ou **Sem município: decidir**, com a explicação. Exemplo: "A NF diz HEITORAI/GO, mas o valor é diferente do card de Heitoraí/GO. O valor bate com o card de Cândido Rodrigues/SP". Escolha o município certo na lista e clique em **Confirmar**, ou em **Descartar**.
+4. Clique em **Colocar N prontas na fila**. O robô do portal EACE anexa cada NF no card do município, uma por vez, depois dos envios de RI e MIP.
+5. Quando o robô confirma, a NF fica **Anexada** e o município recebe a baixa. O quadro de andamento mostra **NFs no portal: x de y municípios com NF**.
+
+Bom saber:
+
+- **Card que já tem NF no portal** (Aguardando aprovação, Aprovado): a NF fica como "Card já com NF no portal" e não vai para a fila.
+- **Erro do robô** (valor diferente no portal, portal fora do ar): a NF mostra o motivo e o botão **Enviar de novo**.
+- **Mesmo arquivo enviado de novo:** as NFs já enviadas ao portal ficam de fora, e as que ainda não foram são substituídas.
+- **NF de Boletim não importado:** importe o Boletim em **Administrador › Relatório BDO** e envie o arquivo de novo.
+
 ## Como importar um Boletim do BDO e a Pro rata
 
 Caminho: **Administrador › Relatório BDO** (só Administrador).

@@ -48,7 +48,7 @@
   <div class="em-execucao">
     {% for item in processando %}
     <div class="exec">
-      <div class="linha1"><span>{% if item.log.robo %}{{ item.log.robo.nome }}{% else %}Robô padrão{% endif %}</span><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></div>
+      <div class="linha1"><span>{% if item.log.robo %}{{ item.log.robo.nome }}{% else %}Robô padrão{% endif %}</span><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% elif item.tipo == 'BDO' %}etq-bdo{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></div>
       <div class="inep">{{ item.inep }}</div>
       <div class="nome">{{ item.nome }}{% if item.nota %} · {{ item.nota }}{% endif %}</div>
       <div class="barra"><div style="width: {{ item.log.progresso_pct }}%"></div></div>
@@ -69,7 +69,7 @@
       {% for item in proximos %}
       <tr>
         <td>{{ forloop.counter }}º</td>
-        <td><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></td>
+        <td><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% elif item.tipo == 'BDO' %}etq-bdo{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></td>
         <td><b>{{ item.inep }}</b></td>
         <td class="nome">{{ item.nome }}</td>
         <td>{% if item.log.tentativas %}<span class="st-repete">nova tentativa</span>{% endif %}</td>
@@ -88,7 +88,7 @@
       {% for item in ultimos %}
       <tr>
         <td>{{ item.log.executado_em|date:"H:i" }}</td>
-        <td><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></td>
+        <td><span class="etiqueta {% if item.tipo == 'RI' %}etq-ri{% elif item.tipo == 'BDO' %}etq-bdo{% else %}etq-mip{% endif %}">{{ item.tipo }}</span></td>
         <td><b>{{ item.inep }}</b></td>
         <td>
           {% if item.log.resultado == 'sucesso' %}<span class="st-sucesso">Enviada</span>

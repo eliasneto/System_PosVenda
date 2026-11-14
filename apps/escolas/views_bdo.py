@@ -43,7 +43,7 @@ from .leitura_eace_bdo import conferencia_eace_boletim, enfileirar_leitura_eace_
 from .forms import MesReferenciaBdoForm, PlanilhaBdoUploadForm, PlanilhaProRataUploadForm
 from .medicao_bdo import MedicaoBdoError, gerar_medicoes
 from .models import (
-    BoletimBdo, Escola, InepBdo, LeituraEaceBdo, LogStatusDivergenciaBdo, MedicaoBdo, MunicipioBdo,
+    BoletimBdo, Escola, InepBdo, LeituraEaceBdo, LogStatusDivergenciaBdo, MedicaoBdo, MunicipioBdo, NotaFiscalBdo,
 )
 from .views import _parse_data_filtro
 
@@ -705,6 +705,7 @@ def bdo_view(request):
         "divergencias_na_pagina": agrupar == "inep" and any(linha.tem_divergencia for linha in page_obj),
         **(_contexto_leitura_eace(boletim) if boletim else {}),
         "painel": _painel_boletim(boletim) if boletim else None,
+        **(_contexto_notas_fiscais(boletim) if boletim else {}),
         "filtros_motivo": FILTROS_MOTIVO,
     })
     return render(request, "escolas/bdo.html", contexto)
@@ -770,6 +771,19 @@ def _painel_boletim(boletim):
             if medicao else "Ainda não gerada (botão Recebíveis)",
         ),
     ]
+    # NFs do financeiro anexadas no portal (2026-11-13): baixa de cada município do Boletim
+    from .nf_bdo import resumo_notas_boletim
+
+    nfs = resumo_notas_boletim(boletim)
+    detalhes = [f"{nfs['municipios_com_nf']} de {nfs['total_municipios']} município(s) com NF no portal"]
+    detalhes += [texto for quantidade, texto in (
+        (nfs["pendentes_decisao"], f"{nfs['pendentes_decisao']} para decidir"), (nfs["prontas"], f"{nfs['prontas']} pronta(s)"),
+        (nfs["na_fila"], f"{nfs['na_fila']} na fila"), (nfs["erros"], f"{nfs['erros']} com erro")) if quantidade]
+    completo = nfs["total_municipios"] and nfs["municipios_com_nf"] == nfs["total_municipios"]
+    etapas.append(etapa(
+        "NFs no portal", "ok" if completo else ("atencao" if nfs["pendentes_decisao"] or nfs["erros"] else "pendente"),
+        ", ".join(detalhes),
+    ))
     return {
         "etapas": etapas,
         "por_motivo": [item for item in por_motivo if item["quantidade"]],
@@ -1263,3 +1277,103 @@ def bdo_medicao_view(request):
         for nome, conteudo in arquivos:
             arquivo_zip.writestr(nome, conteudo)
     return _anexo(saida.getvalue(), "MEDIÇÕES - MANUTENÇÃO.zip", "application/zip")
+
+
+# ------------------------------------------------------------------ NFs do financeiro no portal EACE (2026-11-13)
+
+def _voltar_bdo_boletim(request, numero=""):
+    destino = request.POST.get("next") or ""
+    if destino and url_has_allowed_host_and_scheme(destino, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+        return redirect(destino)
+    return redirect(f"{reverse('bdo')}?{urlencode({'boletim': numero})}" if numero else reverse("bdo"))
+
+
+@login_required
+@require_POST
+def bdo_nf_remessa_view(request):
+    """Botão "Enviar NFs do financeiro": lê o .zip/.rar, guarda cada NF e liga ao Boletim e ao município."""
+    from .nf_bdo import RemessaNfBdoError, processar_remessa
+
+    if request.user.is_visualizador:
+        return HttpResponseForbidden("Visualizador não pode enviar as NFs.")
+    arquivo = request.FILES.get("arquivo")
+    if not arquivo:
+        messages.error(request, "Escolha o arquivo .zip (ou .rar) das NFs do financeiro.")
+        return _voltar_bdo_boletim(request)
+    try:
+        remessa = processar_remessa(arquivo, request.user)
+    except RemessaNfBdoError as erro:
+        messages.error(request, f"NFs não lidas: {erro}")
+        return _voltar_bdo_boletim(request)
+    resumo = remessa.resumo
+    situacoes = resumo["situacoes"]
+    partes = [f"{resumo['pdfs']} NF(s) lida(s) de {remessa.nome_original}"]
+    if resumo["boletins"]:
+        partes.append(f"Boletim(ns) {', '.join(resumo['boletins'])}")
+    rotulos = dict(NotaFiscalBdo.SITUACAO_CHOICES)
+    partes += [f"{quantidade} {rotulos[situacao].lower()}" for situacao, quantidade in sorted(situacoes.items())]
+    if resumo["ja_enviadas"]:
+        partes.append(f"{resumo['ja_enviadas']} já enviada(s) antes, ignorada(s)")
+    messages.success(request, "; ".join(partes) + ".")
+    if situacoes.get(NotaFiscalBdo.FORA_DO_BOLETIM):
+        messages.warning(request, "Há NFs de Boletim não importado no sistema: importe o Boletim em Administrador › "
+                                  "Relatório BDO e envie o arquivo de novo.")
+    return _voltar_bdo_boletim(request, resumo["boletins"][0] if len(resumo["boletins"]) == 1 else "")
+
+
+@login_required
+@require_POST
+def bdo_nf_decidir_view(request, pk):
+    """Confirma o município de uma NF divergente/sem município, ou descarta a NF."""
+    from .nf_bdo import decidir_nota
+
+    if request.user.is_visualizador:
+        return HttpResponseForbidden("Visualizador não pode alterar as NFs.")
+    nota = get_object_or_404(NotaFiscalBdo.objects.select_related("boletim"), pk=pk)
+    escolha = request.POST.get("municipio") or ""
+    try:
+        decidir_nota(nota, None if escolha == "descartar" else int(escolha) if escolha.isdigit() else -1, request.user)
+    except ValueError as erro:
+        messages.error(request, f"NF {nota.numero_nf}: {erro}")
+    else:
+        messages.success(request, f"NF {nota.numero_nf}: {nota.get_situacao_display().lower()}"
+                                  + (f" ({nota.municipio_bdo})" if nota.municipio_bdo else "") + ".")
+    return _voltar_bdo_boletim(request, nota.boletim.numero if nota.boletim else "")
+
+
+@login_required
+@require_POST
+def bdo_nf_enfileirar_view(request, pk):
+    """Coloca na fila do RPA EACE as NFs prontas do Boletim (ou a NF com erro escolhida, para enviar de novo)."""
+    from .nf_bdo import enfileirar_notas
+
+    if request.user.is_visualizador:
+        return HttpResponseForbidden("Visualizador não pode enviar as NFs ao portal.")
+    boletim = get_object_or_404(BoletimBdo, pk=pk)
+    ids = [int(v) for v in request.POST.getlist("nota") if v.isdigit()] or None
+    quantidade = enfileirar_notas(boletim, request.user, ids)
+    if quantidade:
+        messages.success(request, f"{quantidade} NF(s) do Boletim {boletim.numero} na fila do robô do portal EACE.")
+    else:
+        messages.info(request, f"Boletim {boletim.numero}: nenhuma NF pronta para enviar.")
+    return _voltar_bdo_boletim(request, boletim.numero)
+
+
+def _contexto_notas_fiscais(boletim):
+    from .leitura_eace_bdo import mensagem_motivo_bdo
+    from .nf_bdo import resumo_notas_boletim, valor_do_card
+
+    notas = list(NotaFiscalBdo.objects.filter(boletim=boletim).exclude(situacao=NotaFiscalBdo.DESCARTADA)
+                 .select_related("municipio_bdo", "decidido_por").order_by("numero_nf"))
+    ordem = {NotaFiscalBdo.DIVERGENTE: 0, NotaFiscalBdo.SEM_MUNICIPIO: 0, NotaFiscalBdo.ERRO: 1, NotaFiscalBdo.PRONTA: 2,
+             NotaFiscalBdo.PROCESSANDO: 3, NotaFiscalBdo.NA_FILA: 3}
+    for nota in notas:
+        nota.valor_do_card = valor_do_card(nota.municipio_bdo) if nota.municipio_bdo else None
+        nota.motivo_erro_legivel = mensagem_motivo_bdo(nota.motivo_erro) if nota.motivo_erro else ""
+    abertas = sorted([n for n in notas if n.situacao in ordem], key=lambda n: (ordem[n.situacao], len(n.numero_nf), n.numero_nf))
+    return {
+        "nf_abertas": abertas,
+        "nf_concluidas": [n for n in notas if n.situacao not in ordem],
+        "nf_resumo": resumo_notas_boletim(boletim),
+        "nf_municipios": list(boletim.municipios.order_by("uf", "municipio")),
+    }

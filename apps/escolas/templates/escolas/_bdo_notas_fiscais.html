@@ -1,0 +1,134 @@
+{% load humanize %}
+{% comment %}
+NFs do financeiro no portal EACE (pedido do usuário, 2026-11-13): envio do .zip/.rar do financeiro, as NFs do
+Boletim ligadas a cada município (pelo município escrito na NF + o valor do card), as que esperam decisão e a fila
+do robô que anexa no portal. Anexada = baixa do município.
+{% endcomment %}
+<section id="nfs-bdo" class="mb-4 bg-white dark:bg-gray-900 rounded-[2rem] border border-gray-100 dark:border-gray-800 shadow-sm p-5" aria-labelledby="titulo-nfs-bdo">
+    <div class="flex flex-col md:flex-row md:items-center gap-3 mb-4">
+        <div class="flex-1 min-w-0">
+            <h2 id="titulo-nfs-bdo" class="text-[10px] font-black uppercase text-gray-400 dark:text-gray-500 tracking-wider">NFs do financeiro no portal EACE — Boletim {{ boletim.numero }}</h2>
+            <p class="text-[11px] font-bold text-gray-600 dark:text-gray-400 mt-1">
+                {{ nf_resumo.municipios_com_nf }} de {{ nf_resumo.total_municipios }} município{{ nf_resumo.total_municipios|pluralize }} com NF no portal.
+                Cada NF é ligada pelo "CODIGO DE LIBERACAO … UF Município/UF" da NF e pelo valor do card; se os dois não concordarem, ela espera a sua decisão.
+            </p>
+        </div>
+        {% if not user.is_visualizador %}
+        <form method="POST" action="{% url 'bdo_nf_remessa' %}" enctype="multipart/form-data" class="shrink-0">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}#nfs-bdo">
+            <input id="nfs-bdo-arquivo" type="file" name="arquivo" accept=".zip,.rar" class="sr-only" onchange="this.form.requestSubmit()">
+            <label for="nfs-bdo-arquivo" class="inline-flex items-center gap-2 px-4 py-2 bg-pv-black text-pv-yellow font-black uppercase italic text-[11px] rounded-xl hover:bg-gray-800 cursor-pointer transition whitespace-nowrap"
+                   title="O .zip (ou .rar) que o financeiro mandou: pode ter as NFs do RE e do RI juntas">
+                <i data-lucide="upload" class="w-4 h-4" aria-hidden="true"></i> Enviar NFs do financeiro (.zip)
+            </label>
+        </form>
+        {% endif %}
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+        {% if nf_resumo.pendentes_decisao %}<span class="px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 text-[10px] font-black uppercase text-amber-800 dark:text-amber-300">{{ nf_resumo.pendentes_decisao }} para decidir</span>{% endif %}
+        {% if nf_resumo.prontas %}<span class="px-2.5 py-1 rounded-full bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-800 text-[10px] font-black uppercase text-sky-800 dark:text-sky-300">{{ nf_resumo.prontas }} pronta{{ nf_resumo.prontas|pluralize }}</span>{% endif %}
+        {% if nf_resumo.na_fila %}<span class="px-2.5 py-1 rounded-full bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 text-[10px] font-black uppercase text-violet-800 dark:text-violet-300">{{ nf_resumo.na_fila }} na fila do robô</span>{% endif %}
+        {% if nf_resumo.anexadas %}<span class="px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-[10px] font-black uppercase text-emerald-800 dark:text-emerald-300">{{ nf_resumo.anexadas }} anexada{{ nf_resumo.anexadas|pluralize }} pelo sistema</span>{% endif %}
+        {% if nf_resumo.erros %}<span class="px-2.5 py-1 rounded-full bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-[10px] font-black uppercase text-red-700 dark:text-red-300">{{ nf_resumo.erros }} com erro</span>{% endif %}
+        <span class="flex-1"></span>
+        {% if nf_resumo.prontas and not user.is_visualizador %}
+        <form method="POST" action="{% url 'bdo_nf_enfileirar' boletim.pk %}"
+              onsubmit="return confirm('Colocar {{ nf_resumo.prontas }} NF(s) na fila do robô? Ele anexa cada uma no card do município no portal EACE.')">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}#nfs-bdo">
+            <button type="submit" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-black uppercase whitespace-nowrap">
+                Colocar {{ nf_resumo.prontas }} pronta{{ nf_resumo.prontas|pluralize }} na fila
+            </button>
+        </form>
+        {% endif %}
+        {% if nf_resumo.na_fila %}<a href="{{ request.get_full_path }}#nfs-bdo" class="text-[11px] font-black uppercase text-violet-700 dark:text-violet-300 hover:underline">Atualizar</a>{% endif %}
+    </div>
+
+    {% if nf_abertas %}
+    <div class="overflow-x-auto rounded-2xl border border-gray-100 dark:border-gray-800">
+        <table class="min-w-full text-left border-collapse">
+            <thead>
+                <tr class="text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800">
+                    <th class="px-3 py-2">NF</th>
+                    <th class="px-3 py-2">Na NF</th>
+                    <th class="px-3 py-2 text-right">Valor NF</th>
+                    <th class="px-3 py-2">Município do Boletim</th>
+                    <th class="px-3 py-2 text-right">Valor do card</th>
+                    <th class="px-3 py-2">Situação</th>
+                    <th class="px-3 py-2"><span class="sr-only">Ação</span></th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                {% for nota in nf_abertas %}
+                <tr class="align-top {% if nota.situacao == 'divergente' or nota.situacao == 'sem_municipio' %}bg-amber-50/50 dark:bg-amber-900/10{% elif nota.situacao == 'erro' %}bg-red-50/50 dark:bg-red-900/10{% endif %}">
+                    <td class="px-3 py-2 text-[11px] font-black text-gray-900 dark:text-gray-100 whitespace-nowrap"><a href="{{ nota.arquivo.url }}" target="_blank" rel="noopener" class="underline decoration-dotted underline-offset-2" title="Abrir o PDF">{{ nota.numero_nf|default:nota.nome_arquivo }}</a></td>
+                    <td class="px-3 py-2 text-[11px] font-bold text-gray-600 dark:text-gray-400 whitespace-nowrap">{% if nota.municipio_lido %}{{ nota.municipio_lido }}/{{ nota.uf_lida }}{% else %}—{% endif %}</td>
+                    <td class="px-3 py-2 text-[11px] font-black text-right whitespace-nowrap {% if nota.valor_do_card is not None and nota.valor != nota.valor_do_card %}text-red-600 dark:text-red-400{% else %}text-gray-900 dark:text-gray-100{% endif %}">{% if nota.valor is not None %}R$ {{ nota.valor|intcomma }}{% else %}—{% endif %}</td>
+                    <td class="px-3 py-2 text-[11px] font-bold text-gray-900 dark:text-gray-100">
+                        {% if nota.situacao == 'divergente' or nota.situacao == 'sem_municipio' %}
+                        {% if user.is_visualizador %}{{ nota.municipio_bdo|default:"—" }}{% else %}
+                        <form method="POST" action="{% url 'bdo_nf_decidir' nota.pk %}" class="flex flex-wrap items-center gap-2">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}#nfs-bdo">
+                            <label for="nf-municipio-{{ nota.pk }}" class="sr-only">Município da NF {{ nota.numero_nf }}</label>
+                            <select id="nf-municipio-{{ nota.pk }}" name="municipio" required
+                                    class="max-w-[14rem] px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-gray-800 text-[11px] font-bold text-gray-800 dark:text-gray-100">
+                                <option value="" {% if not nota.municipio_bdo %}selected{% endif %} disabled>Escolha o município</option>
+                                {% for municipio in nf_municipios %}
+                                <option value="{{ municipio.pk }}" {% if municipio.pk == nota.municipio_bdo_id %}selected{% endif %}>{{ municipio.municipio }}/{{ municipio.uf }} — R$ {% if municipio.valor_eace is not None %}{{ municipio.valor_eace|intcomma }}{% else %}{{ municipio.valor_total|intcomma }}{% endif %}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="px-2.5 py-1 rounded-lg bg-pv-black text-pv-yellow text-[10px] font-black uppercase">Confirmar</button>
+                            <button type="submit" name="municipio" value="descartar" formnovalidate class="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase text-gray-500 hover:text-red-600"
+                                    onclick="return confirm('Descartar a NF {{ nota.numero_nf }}? Ela não vai para o portal.')">Descartar</button>
+                        </form>
+                        {% endif %}
+                        {% else %}{{ nota.municipio_bdo|default:"—" }}{% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-[11px] font-bold text-right text-gray-600 dark:text-gray-400 whitespace-nowrap">{% if nota.valor_do_card is not None %}R$ {{ nota.valor_do_card|intcomma }}{% else %}—{% endif %}</td>
+                    <td class="px-3 py-2 text-[11px] font-bold min-w-[16rem]">
+                        <span class="inline-block px-2 py-0.5 rounded-md border text-[10px] font-black uppercase whitespace-nowrap
+                            {% if nota.situacao == 'pronta' %}bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300
+                            {% elif nota.situacao == 'na_fila' or nota.situacao == 'processando' %}bg-violet-50 dark:bg-violet-900/20 border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-300
+                            {% elif nota.situacao == 'erro' %}bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300
+                            {% else %}bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300{% endif %}">{{ nota.get_situacao_display }}</span>
+                        {% if nota.situacao == 'processando' and nota.etapa_atual %}<span class="block mt-1 text-[10px] text-violet-700 dark:text-violet-300">{{ nota.etapa_atual }}</span>{% endif %}
+                        {% if nota.motivo_erro_legivel %}<span class="block mt-1 text-[10px] text-red-700 dark:text-red-300">{{ nota.motivo_erro_legivel }}{% if nota.status_portal %} (card: {{ nota.status_portal }}){% endif %}</span>{% endif %}
+                        {% if nota.motivo %}<span class="block mt-1 text-[10px] text-gray-600 dark:text-gray-400">{{ nota.motivo }}</span>{% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if nota.situacao == 'erro' and not user.is_visualizador %}
+                        <form method="POST" action="{% url 'bdo_nf_enfileirar' boletim.pk %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}#nfs-bdo">
+                            <input type="hidden" name="nota" value="{{ nota.pk }}">
+                            <button type="submit" class="px-2.5 py-1 rounded-lg border border-gray-300 dark:border-gray-600 text-[10px] font-black uppercase text-gray-700 dark:text-gray-200 whitespace-nowrap">Enviar de novo</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% elif not nf_concluidas %}
+    <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">Nenhuma NF deste Boletim enviada ainda.</p>
+    {% endif %}
+
+    {% if nf_concluidas %}
+    <details class="mt-3">
+        <summary class="cursor-pointer text-[10px] font-black uppercase text-gray-500 dark:text-gray-400 tracking-wider">{{ nf_concluidas|length }} NF{{ nf_concluidas|length|pluralize }} já no portal</summary>
+        <ul class="mt-2 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-4 gap-y-1">
+            {% for nota in nf_concluidas %}
+            <li class="text-[11px] font-bold text-gray-600 dark:text-gray-400">
+                <a href="{{ nota.arquivo.url }}" target="_blank" rel="noopener" class="font-black text-gray-900 dark:text-gray-100 underline decoration-dotted underline-offset-2">NF {{ nota.numero_nf }}</a>
+                · {{ nota.municipio_bdo|default:"—" }} · R$ {{ nota.valor|intcomma }}
+                · <span class="{% if nota.situacao == 'anexada' %}text-emerald-700 dark:text-emerald-400{% else %}text-gray-500{% endif %}">{% if nota.situacao == 'anexada' %}anexada pelo sistema{% else %}{{ nota.status_portal|default:nota.municipio_bdo.status_eace|default:"já com NF" }} no portal{% endif %}</span>
+            </li>
+            {% endfor %}
+        </ul>
+    </details>
+    {% endif %}
+</section>
