@@ -46,11 +46,18 @@ TEMPO_MAXIMO_PROCESSANDO = timedelta(minutes=30)
 SEMELHANCA_MINIMA_NOME = 0.85  # erro de digitação no nome ("CHAPADA DA NATVIDADE")
 TAMANHO_MINIMO_NOME_CONTIDO = 5  # "LENCOIS ABADIANIA" contém "ABADIANIA"
 
-_RE_LIBERACAO = re.compile(r"CODIGO DE LIBERACAO\s+(\d+)\s+UF\s+(.+?)\s*/\s*([A-Z]{2})\b")
+# NFCom do RE: "CODIGO DE LIBERACAO 3657 UF ITOBI/SP"; NFS-e da Prefeitura de SP do RI (2026-11-14):
+# "CÓDIGO DE LIBERAÇÃO 3658|UF ABADIÂNIA/GO|VENCIMENTO ..." (separado por "|").
+_RE_LIBERACAO = re.compile(r"CODIGO DE LIBERACAO\s*(\d+)[\s|]+UF\s+([^|/]+?)\s*/\s*([A-Z]{2})\b")
 _RE_NUMERO = re.compile(r"NOTA FISCAL N\S*\s*(\d+)")
+# NFS-e de SP: na 2a pagina, "CPF/CNPJ/NIF do Fornecedor Número da Nota Código de Verificação" e na linha seguinte
+# "07.525.262/0004-61 00000413 VDAU-ETCS"
+_RE_NUMERO_NFSE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\s+0*(\d+)\s+[A-Z0-9]{4}-[A-Z0-9]{4}")
 _RE_VALORES = (
     re.compile(r"TOTAL A PAGAR:\s*R\$\s*([\d.]+,\d{2})"),
     re.compile(r"VALOR TOTAL NF\s+([\d.]+,\d{2})"),
+    re.compile(r"VALOR TOTAL DO SERVI\S+\s*=\s*R\$\s*([\d.]+,\d{2})"),  # NFS-e do RI
+    re.compile(r"VALOR TOTAL COBRADO\s*=\s*R\$\s*([\d.]+,\d{2})"),
 )
 
 
@@ -79,7 +86,7 @@ def ler_nf(texto):
     """O que interessa da NFCom do BDO: {"numero", "valor", "boletim", "municipio", "uf"} (vazios se não achar)."""
     normalizado = _normalizar(texto)
     liberacao = _RE_LIBERACAO.search(normalizado)
-    numero = _RE_NUMERO.search(normalizado)
+    numero = _RE_NUMERO.search(normalizado) or _RE_NUMERO_NFSE.search(normalizado)
     valor = next((r.search(texto or "") for r in _RE_VALORES if r.search(texto or "")), None)
     return {
         "numero": numero.group(1) if numero else "",

@@ -84,6 +84,16 @@ class NfBdoTests(TestCase):
                                  "municipio": "ARAGUAINA", "uf": "TO"})
         self.assertEqual(extrair_valor_nfcom(_texto_nf("359", "1.120,20")), "1.120,20")
 
+    def test_le_o_layout_da_nfse_do_ri(self):
+        """NFS-e da Prefeitura de SP do RI (texto da NFS-e 413 de 13/10/2026, Medição 3658)."""
+        texto = ("NOTA FISCAL ELETRÔNICA DE SERVIÇOS - NFS-e\nNúmero da Nota\n00000413\n13/10/2026 13:37:13\n"
+                 "DISCRIMINAÇÃO DE SERVIÇOS\nCÓDIGO DE LIBERAÇÃO 3658|UF ABADIÂNIA/GO|VENCIMENTO 12/11/2026|Banco Itaú "
+                 "Ag: 1646 | CC: 99351-7\nVALOR TOTAL DO SERVIÇO = R$ 363,76\nCódigo do Serviço\n02919\n"
+                 "CPF/CNPJ/NIF do Fornecedor Número da Nota Código de Verificação\n07.525.262/0004-61 00000413 VDAU-ETCS\n"
+                 "VALOR TOTAL COBRADO =  R$ 363,76")
+        self.assertEqual(nf_bdo.ler_nf(texto), {"numero": "413", "valor": Decimal("363.76"), "boletim": "3658",
+                                                "municipio": "ABADIANIA", "uf": "GO"})
+
     def test_liga_pelo_municipio_e_valor_e_para_o_que_nao_concorda(self):
         remessa = nf_bdo.processar_remessa(_zip([
             ("349", "6,27", "3657 UF ITOBI/SP"),
