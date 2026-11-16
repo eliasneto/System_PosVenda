@@ -12,11 +12,12 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.integracoes.eace.rpa_bdo import extrair_valor_nfcom
 
 from . import nf_bdo
-from .models import BoletimBdo, MunicipioBdo, NotaFiscalBdo
+from .models import BoletimBdo, MunicipioBdo, NotaFiscalBdo, RemessaNfBdo
 
 User = get_user_model()
 _MEDIA_ROOT = tempfile.mkdtemp()
@@ -152,10 +153,46 @@ class NfBdoTests(TestCase):
         remessa = nf_bdo.processar_remessa(_zip([("349", "6,27", "3657 UF ITOBI/SP")]))
         self.assertEqual((remessa.resumo["ja_enviadas"], NotaFiscalBdo.objects.filter(numero_nf="349").count()), (1, 1))
 
+    def test_envio_so_guarda_e_a_leitura_roda_depois(self):
+        # 2026-11-16: ler as ~285 NFs na hora do envio dava 504 no servidor
+        self.client.force_login(self.analista)
+        with patch("apps.escolas.nf_bdo.ler_remessa_em_segundo_plano") as em_segundo_plano, \
+                self.captureOnCommitCallbacks(execute=True):
+            resposta = self.client.post(reverse("bdo_nf_remessa"), {"arquivo": _zip([("349", "6,27", "3657 UF ITOBI/SP")])},
+                                        follow=True)
+        remessa = RemessaNfBdo.objects.get()
+        em_segundo_plano.assert_called_once_with(remessa.pk)
+        self.assertEqual(remessa.situacao, RemessaNfBdo.LENDO)
+        self.assertFalse(NotaFiscalBdo.objects.exists())
+        self.assertContains(resposta, "O sistema está lendo as NFs")
+        self.assertContains(resposta, "a tela atualiza sozinha a cada 10 s")
+        nf_bdo.ler_remessa(remessa)
+        remessa.refresh_from_db()
+        self.assertEqual((remessa.situacao, remessa.resumo["pdfs"]), (RemessaNfBdo.CONCLUIDA, 1))
+        resposta = self.client.get(reverse("bdo"))
+        self.assertContains(resposta, "1 NF(s) lida(s); 1 pronta para enviar.")
+        self.assertContains(resposta, "Ver Boletim 3657")
+        self.assertNotContains(resposta, "a tela atualiza sozinha a cada 10 s")
+
+    def test_leitura_com_erro_e_interrompida(self):
+        remessa = nf_bdo.receber_remessa(SimpleUploadedFile("nfs.zip", b"nao e zip"), self.analista)
+        nf_bdo.ler_remessa(remessa)
+        remessa.refresh_from_db()
+        self.assertEqual((remessa.situacao, remessa.erro), (RemessaNfBdo.ERRO, "O arquivo não é um .zip válido."))
+        parada = nf_bdo.receber_remessa(_zip([("349", "6,27", "3657 UF ITOBI/SP")]))
+        self.assertEqual(nf_bdo.recuperar_remessas_interrompidas(), 0)
+        self.assertEqual(nf_bdo.recuperar_remessas_interrompidas(timezone.now() + timezone.timedelta(minutes=31)), 1)
+        parada.refresh_from_db()
+        self.assertIn("interrompida", parada.erro)
+
     def test_tela_envia_o_zip_decide_e_coloca_na_fila(self):
         self.client.force_login(self.analista)
-        resposta = self.client.post(reverse("bdo_nf_remessa"), {"arquivo": _zip([
-            ("349", "6,27", "3657 UF ITOBI/SP"), ("218", "246,27", "3657 UF HEITORAI/GO")])}, follow=True)
+        with patch("apps.escolas.nf_bdo.ler_remessa_em_segundo_plano",
+                   lambda pk: nf_bdo.ler_remessa(RemessaNfBdo.objects.get(pk=pk))), \
+                self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("bdo_nf_remessa"), {"arquivo": _zip([
+                ("349", "6,27", "3657 UF ITOBI/SP"), ("218", "246,27", "3657 UF HEITORAI/GO")])})
+        resposta = self.client.get(reverse("bdo"), {"boletim": "3657"})
         pagina = resposta.content.decode()
         self.assertIn("2 NF(s) lida(s)", pagina)
         self.assertIn("NFs do financeiro no portal EACE — Boletim 3657", pagina)
@@ -207,3 +244,31 @@ class NfBdoNaFilaETvTests(TestCase):
         self.assertEqual(contexto["total_na_fila"], 1)
         pagina = self.client.get(reverse("fila_tv", args=["tv-teste"])).content.decode()
         self.assertIn("etq-bdo", pagina)
+        self.assertIn('<option value="BDO">BDO</option>', pagina)
+
+    def test_planilha_da_tv_traz_o_bdo_e_filtra_por_processo(self):
+        # Pedido do usuário (2026-11-16): "hoje eu não consigo baixar os dados de BDO"
+        import io
+
+        import openpyxl
+
+        NotaFiscalBdo.objects.update(situacao=NotaFiscalBdo.ANEXADA, finalizado_em=timezone.now(),
+                                     status_portal="Aguardando aprovação")
+
+        def abrir(**params):
+            resposta = self.client.get(reverse("fila_tv_planilha", args=["tv-teste"]), params)
+            self.assertEqual(resposta.status_code, 200)
+            return resposta, openpyxl.load_workbook(io.BytesIO(resposta.content))
+
+        _, livro = abrir()
+        self.assertEqual(livro.sheetnames, ["Resumo", "Robôs", "Notas RI", "Envios MIP", "NFs BDO"])
+        resposta, livro = abrir(tipo="bdo", de=timezone.localdate().isoformat())
+        self.assertIn("relatorio_rpa_eace_bdo_", resposta["Content-Disposition"])
+        self.assertEqual(livro.sheetnames, ["Resumo", "Robôs", "NFs BDO"])
+        linhas = list(livro["NFs BDO"].iter_rows(min_row=2, values_only=True))
+        self.assertEqual([(l[1], l[2], l[3], l[4], l[5], l[8]) for l in linhas],
+                         [("3657", "RE", "SP", "Itobi", "349", "Sucesso")])
+        resumo = list(livro["Resumo"].iter_rows(values_only=True))
+        self.assertIn(("Total", 1, 1, None, None, None), resumo)
+        _, livro = abrir(tipo="RI")
+        self.assertEqual(livro.sheetnames, ["Resumo", "Robôs", "Notas RI"])

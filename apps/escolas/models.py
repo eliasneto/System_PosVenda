@@ -1197,6 +1197,15 @@ class RemessaNfBdo(models.Model):
     )
     enviado_em = models.DateTimeField("Enviado em", auto_now_add=True)
     resumo = models.JSONField("Resumo da leitura", default=dict, blank=True)
+    # Leitura em segundo plano (2026-11-16): ler as ~285 NFs na hora do envio passava de 60 s e o servidor
+    # respondia 504. O envio só guarda o arquivo; a leitura roda depois e a tela acompanha.
+    LENDO = "lendo"
+    CONCLUIDA = "concluida"
+    ERRO = "erro"
+    SITUACAO_CHOICES = [(LENDO, "Lendo as NFs"), (CONCLUIDA, "Lida"), (ERRO, "Erro")]
+    situacao = models.CharField("Situação", max_length=10, choices=SITUACAO_CHOICES, default=CONCLUIDA)
+    erro = models.CharField("Erro da leitura", max_length=500, blank=True)
+    concluida_em = models.DateTimeField("Leitura terminada em", null=True, blank=True)
 
     class Meta:
         ordering = ["-enviado_em"]

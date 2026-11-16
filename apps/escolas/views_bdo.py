@@ -10,9 +10,10 @@ Relatório BDO" (`relatorio_bdo_view`), só do Administrador, mesmo critério
 das demais importações (RN-004)."""
 
 import io
+import logging
 import zipfile
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from urllib.parse import quote, urlencode
 
@@ -22,7 +23,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Count, DateField, OuterRef, Subquery, Sum
+from django.db.models import Count, DateField, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Upper
 from django.http import HttpResponse, HttpResponseForbidden, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
@@ -44,8 +45,11 @@ from .forms import MesReferenciaBdoForm, PlanilhaBdoUploadForm, PlanilhaProRataU
 from .medicao_bdo import MedicaoBdoError, gerar_medicoes
 from .models import (
     BoletimBdo, Escola, InepBdo, LeituraEaceBdo, LogStatusDivergenciaBdo, MedicaoBdo, MunicipioBdo, NotaFiscalBdo,
+    RemessaNfBdo,
 )
 from .views import _parse_data_filtro
+
+logger = logging.getLogger(__name__)
 
 DIFERENCA_TODOS = "1"
 AGRUPAMENTOS = (("inep", "Por INEP"), ("municipio", "Por Município"), ("uf", "Por UF"))
@@ -707,7 +711,9 @@ def bdo_view(request):
         "painel": _painel_boletim(boletim) if boletim else None,
         **(_contexto_notas_fiscais(boletim) if boletim else {}),
         "filtros_motivo": FILTROS_MOTIVO,
+        "remessas_nf": _remessas_recentes(),
     })
+    contexto["remessas_lendo"] = any(r.situacao == RemessaNfBdo.LENDO for r in contexto["remessas_nf"])
     return render(request, "escolas/bdo.html", contexto)
 
 
@@ -923,6 +929,42 @@ def bdo_mes_referencia_view(request, pk):
     else:
         mensagens_erro = [erro for erros in form.errors.values() for erro in erros]
         messages.error(request, f"Boletim {boletim.numero}: " + " ".join(mensagens_erro))
+    return _voltar_para(request, "relatorio_bdo")
+
+
+@login_required
+@require_POST
+def bdo_tipo_view(request, pk):
+    """Corrige o tipo (RE/RI) de um Boletim importado com o tipo trocado (pedido do usuário, 2026-11-16: 3851 e
+    3852). Só Administrador, como a importação. A Medição já gerada acompanha o tipo e mantém o número (a planilha
+    com esse número pode já ter ido ao cliente)."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode alterar o Boletim.")
+    boletim = get_object_or_404(BoletimBdo, pk=pk)
+    tipo = request.POST.get("tipo") or ""
+    if tipo not in dict(BoletimBdo.TIPO_CHOICES):
+        messages.error(request, f"Boletim {boletim.numero}: escolha o tipo RE ou RI.")
+        return _voltar_para(request, "relatorio_bdo")
+    if tipo == boletim.tipo:
+        messages.info(request, f"Boletim {boletim.numero} já é {tipo}.")
+        return _voltar_para(request, "relatorio_bdo")
+    medicao = MedicaoBdo.objects.filter(boletim=boletim).first()
+    if medicao and MedicaoBdo.objects.filter(tipo=tipo, numero=medicao.numero).exclude(pk=medicao.pk).exists():
+        messages.error(request, f"Boletim {boletim.numero}: já existe a Medição {medicao.numero:02d} do {tipo} em outro "
+                                "Boletim. Corrija o tipo do outro Boletim primeiro.")
+        return _voltar_para(request, "relatorio_bdo")
+    anterior = boletim.tipo or "sem tipo"
+    with transaction.atomic():
+        boletim.tipo = tipo
+        boletim.save(update_fields=["tipo"])
+        if medicao:
+            medicao.tipo = tipo
+            medicao.save(update_fields=["tipo"])
+    logger.info("Boletim %s: tipo %s -> %s por %s", boletim.numero, anterior, tipo, request.user)
+    texto = f"Boletim {boletim.numero}: tipo alterado de {anterior} para {tipo}."
+    if medicao:
+        texto += f" A Medição {medicao.numero:02d} dele passou para o {tipo} com o mesmo número."
+    messages.success(request, texto)
     return _voltar_para(request, "relatorio_bdo")
 
 
@@ -1291,8 +1333,9 @@ def _voltar_bdo_boletim(request, numero=""):
 @login_required
 @require_POST
 def bdo_nf_remessa_view(request):
-    """Botão "Enviar NFs do financeiro": lê o .zip/.rar, guarda cada NF e liga ao Boletim e ao município."""
-    from .nf_bdo import RemessaNfBdoError, processar_remessa
+    """Botão "Enviar NFs do financeiro": guarda o .zip/.rar e lê as NFs em segundo plano (2026-11-16: ler na hora
+    dava 504 com as ~285 NFs de um Boletim). O quadro "Arquivos de NFs do financeiro" acompanha a leitura."""
+    from . import nf_bdo
 
     if request.user.is_visualizador:
         return HttpResponseForbidden("Visualizador não pode enviar as NFs.")
@@ -1301,24 +1344,46 @@ def bdo_nf_remessa_view(request):
         messages.error(request, "Escolha o arquivo .zip (ou .rar) das NFs do financeiro.")
         return _voltar_bdo_boletim(request)
     try:
-        remessa = processar_remessa(arquivo, request.user)
-    except RemessaNfBdoError as erro:
+        remessa = nf_bdo.receber_remessa(arquivo, request.user)
+    except nf_bdo.RemessaNfBdoError as erro:
         messages.error(request, f"NFs não lidas: {erro}")
         return _voltar_bdo_boletim(request)
-    resumo = remessa.resumo
-    situacoes = resumo["situacoes"]
-    partes = [f"{resumo['pdfs']} NF(s) lida(s) de {remessa.nome_original}"]
-    if resumo["boletins"]:
-        partes.append(f"Boletim(ns) {', '.join(resumo['boletins'])}")
+    transaction.on_commit(lambda: nf_bdo.ler_remessa_em_segundo_plano(remessa.pk))
+    messages.success(request, f"{remessa.nome_original} recebido. O sistema está lendo as NFs: acompanhe no quadro "
+                              "\"Arquivos de NFs do financeiro\" (a tela atualiza sozinha).")
+    return _voltar_bdo_boletim(request)
+
+
+def _texto_remessa(remessa):
+    """O resultado da leitura de uma remessa em 1 linha (quadro "Arquivos de NFs do financeiro")."""
+    resumo = remessa.resumo or {}
+    if remessa.situacao == RemessaNfBdo.LENDO:
+        return f"Lendo as NFs… {resumo['lidas']} lida(s) até agora." if resumo.get("lidas") else "Lendo as NFs…"
+    if remessa.situacao == RemessaNfBdo.ERRO:
+        return f"NFs não lidas: {remessa.erro}"
     rotulos = dict(NotaFiscalBdo.SITUACAO_CHOICES)
-    partes += [f"{quantidade} {rotulos[situacao].lower()}" for situacao, quantidade in sorted(situacoes.items())]
-    if resumo["ja_enviadas"]:
+    partes = [f"{resumo.get('pdfs', 0)} NF(s) lida(s)"]
+    partes += [f"{quantidade} {rotulos.get(situacao, situacao).lower()}"
+               for situacao, quantidade in sorted((resumo.get("situacoes") or {}).items())]
+    if resumo.get("ja_enviadas"):
         partes.append(f"{resumo['ja_enviadas']} já enviada(s) antes, ignorada(s)")
-    messages.success(request, "; ".join(partes) + ".")
-    if situacoes.get(NotaFiscalBdo.FORA_DO_BOLETIM):
-        messages.warning(request, "Há NFs de Boletim não importado no sistema: importe o Boletim em Administrador › "
-                                  "Relatório BDO e envie o arquivo de novo.")
-    return _voltar_bdo_boletim(request, resumo["boletins"][0] if len(resumo["boletins"]) == 1 else "")
+    if (resumo.get("situacoes") or {}).get(NotaFiscalBdo.FORA_DO_BOLETIM):
+        partes.append("há NFs de Boletim não importado: importe em Administrador › Relatório BDO e envie de novo")
+    return "; ".join(partes) + "."
+
+
+def _remessas_recentes():
+    """As remessas lendo agora e as terminadas nas últimas 2 horas (quadro no topo da tela BDO)."""
+    from .nf_bdo import recuperar_remessas_interrompidas
+
+    recuperar_remessas_interrompidas()
+    desde = timezone.now() - timedelta(hours=2)
+    remessas = list(RemessaNfBdo.objects.filter(Q(enviado_em__gte=desde) | Q(situacao=RemessaNfBdo.LENDO))
+                    .select_related("enviado_por").order_by("-enviado_em")[:10])
+    for remessa in remessas:
+        remessa.texto = _texto_remessa(remessa)
+        remessa.boletins = (remessa.resumo or {}).get("boletins") or []
+    return remessas
 
 
 @login_required

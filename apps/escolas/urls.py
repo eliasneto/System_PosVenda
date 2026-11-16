@@ -93,6 +93,7 @@ urlpatterns = [
         name="bdo_mes_referencia",
     ),
     path("administrador/relatorio-bdo/<int:pk>/pro-rata/", views_bdo.bdo_pro_rata_view, name="bdo_pro_rata"),
+    path("administrador/relatorio-bdo/<int:pk>/tipo/", views_bdo.bdo_tipo_view, name="bdo_tipo"),
     path(
         "administrador/relatorio-eace-mip/",
         views.relatorio_eace_mip_view,

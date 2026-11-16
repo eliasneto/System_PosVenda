@@ -122,6 +122,30 @@ class TravaFilaRpaEace(models.Model):
         verbose_name_plural = "Trava da fila do RPA EACE"
 
 
+def _novo_codigo_painel():
+    import secrets
+
+    return secrets.token_urlsafe(24)
+
+
+class LinkPainelTecnico(models.Model):
+    """Link do painel técnico da fila do RPA EACE (pedido do usuário, 2026-11-16): criado no admin para entregar a
+    quem precisa acompanhar servidor e robôs sem acesso ao admin. Um por pessoa; desativar corta o acesso só dela."""
+
+    nome = models.CharField("Para quem", max_length=100)
+    codigo = models.CharField("Código do link", max_length=64, unique=True, default=_novo_codigo_painel, editable=False)
+    ativo = models.BooleanField("Ativo", default=True)
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+
+    class Meta:
+        ordering = ["nome"]
+        verbose_name = "Link do painel técnico"
+        verbose_name_plural = "Links do painel técnico"
+
+    def __str__(self):
+        return self.nome
+
+
 class EstadoRobosRpaEace(models.Model):
     """Linha única (pk=1) que o supervisor dos robôs atualiza a cada ~15 s
     (pedido do usuário, 2026-11-11): capacidade da máquina, limite em vigor
@@ -133,7 +157,11 @@ class EstadoRobosRpaEace(models.Model):
     teto_manual = models.PositiveIntegerField("Teto manual (RPA_EACE_MAX_ROBOS, 0 = automático)", default=0)
     robos_rodando = models.PositiveIntegerField("Robôs rodando", default=0)
     freio_motivo = models.CharField("Freio de segurança acionado por", max_length=120, blank=True)
-    recursos = models.CharField("Recursos da máquina", max_length=200, blank=True)
+    # Aviso do freio na TV só até este horário (1 minuto depois de uma redução; pedido do usuário, 2026-11-16).
+    freio_aviso_ate = models.DateTimeField("Aviso do freio até", null=True, blank=True)
+    # Painel técnico (2026-11-16): {"<id do robô>" ou "padrao": {"memoria_pct", "cpu_pct", "memoria_mb"}}, % da máquina.
+    robos_uso = models.JSONField("Uso de cada robô", default=dict, blank=True)
+    recursos =models.CharField("Recursos da máquina", max_length=200, blank=True)
     atualizado_em = models.DateTimeField("Atualizado em", null=True, blank=True)
 
     class Meta:

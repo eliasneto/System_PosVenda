@@ -56,6 +56,77 @@ class FilaTvTests(TestCase):
         self.client.force_login(user)
         self.assertEqual(self.client.get(reverse("fila_tv", args=[TOKEN])).status_code, 200)
 
+    def _estado(self):
+        from apps.core.models import EstadoRobosRpaEace
+
+        return EstadoRobosRpaEace.objects.create(
+            pk=1, capacidade_maquina=3, limite_atual=5, robos_rodando=1, recursos="6 núcleos · 12 GB de memória",
+            freio_motivo="memória disponível baixa (1947 MB)", atualizado_em=timezone.now(),
+            freio_aviso_ate=timezone.now() + timezone.timedelta(seconds=60),
+            robos_uso={str(self.robo.pk): {"memoria_pct": 8.5, "cpu_pct": 15.2, "memoria_mb": 1044}},
+        )
+
+    def test_link_do_usuario_sem_informacao_tecnica(self):
+        # Pedido do usuário (2026-11-16): só o que o usuário precisa ver
+        self._estado()
+        pagina = self.client.get(reverse("fila_tv", args=[TOKEN])).content.decode()
+        for tecnico in ("Servidor:", "Memória", "Processador", "a máquina aguenta", "A máquina aguenta",
+                        "Freio de segurança", "mem 8"):
+            self.assertNotIn(tecnico, pagina)
+        self.assertNotIn("Servidor:", self.client.get(reverse("fila_tv_conteudo", args=[TOKEN])).content.decode())
+
+    def test_painel_tecnico_no_admin_com_uso_de_cada_robo(self):
+        self._estado()
+        url = reverse("admin:core_roborpaeace_painel_tecnico")
+        self.assertEqual(self.client.get(url).status_code, 302)  # sem login: tela de login do admin
+        comum = User.objects.create_user(username="comum", password="senha-teste-123", acesso_liberado=True)
+        self.client.force_login(comum)
+        self.assertEqual(self.client.get(url).status_code, 302)  # não é da equipe do admin
+        admin = User.objects.create_superuser(username="adm", password="senha-teste-123", email="adm@t.local")
+        self.client.force_login(admin)
+        pagina = self.client.get(url).content.decode()
+        self.assertIn("técnico", pagina)
+        self.assertIn("A máquina aguenta <b>3</b>", pagina)
+        self.assertIn("Robô 1 · trabalhando", pagina)
+        self.assertRegex(pagina, r"mem 8[.,]5% · cpu 15[.,]2%")
+        self.assertIn('style="width: 8.5%"', pagina)
+        self.assertIn("Freio de segurança", pagina)
+        self.assertIn(reverse("admin:core_roborpaeace_painel_tecnico_conteudo").replace("-", "\\u002D"), pagina)
+        conteudo = self.client.get(reverse("admin:core_roborpaeace_painel_tecnico_conteudo"))
+        self.assertContains(conteudo, "Em execução agora")
+        self.assertNotContains(conteudo, "<html")
+        planilha = self.client.get(reverse("admin:core_roborpaeace_painel_tecnico_planilha"), {"tipo": "RI"})
+        self.assertIn("attachment", planilha["Content-Disposition"])
+        lista = self.client.get(reverse("admin:core_roborpaeace_changelist"))
+        self.assertContains(lista, "abrir o painel técnico")
+
+    def test_link_do_painel_tecnico_criado_no_admin_para_entregar(self):
+        from apps.core.models import LinkPainelTecnico
+
+        self._estado()
+        admin = User.objects.create_superuser(username="adm2", password="senha-teste-123", email="adm2@t.local")
+        self.client.force_login(admin)
+        self.client.post(reverse("admin:core_linkpaineltecnico_add"), {"nome": "Equipe de infra", "ativo": "on"})
+        link = LinkPainelTecnico.objects.get()
+        self.assertGreaterEqual(len(link.codigo), 30)
+        url = reverse("painel_tecnico_link", args=[link.codigo])
+        lista = self.client.get(reverse("admin:core_linkpaineltecnico_changelist"))
+        self.assertContains(lista, f"http://testserver{url}")
+        self.client.logout()
+        # quem recebe abre sem login
+        pagina = self.client.get(url)
+        self.assertContains(pagina, "Memória em uso")
+        self.assertRegex(pagina.content.decode(), r"mem 8[.,]5% · cpu 15[.,]2%")
+        self.assertContains(self.client.get(reverse("painel_tecnico_link_conteudo", args=[link.codigo])), "Servidor:")
+        planilha = self.client.get(reverse("painel_tecnico_link_planilha", args=[link.codigo]))
+        self.assertIn("attachment", planilha["Content-Disposition"])
+        # desativado ou código errado: 404
+        self.assertEqual(self.client.get(reverse("painel_tecnico_link", args=["errado"])).status_code, 404)
+        link.ativo = False
+        link.save()
+        self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual(self.client.get(reverse("painel_tecnico_link_conteudo", args=[link.codigo])).status_code, 404)
+
     def test_tela_fila_atualiza_sozinha_e_mostra_o_botao_da_tv(self):
         user = User.objects.create_user(username="analista", password="senha-teste-123", acesso_liberado=True)
         self.client.force_login(user)
@@ -193,7 +264,7 @@ class PlanilhaFilaTvTests(TestCase):
 
     def test_abas_e_conteudo_sem_login(self):
         livro = self._abrir()
-        self.assertEqual(livro.sheetnames, ["Resumo", "Robôs", "Notas RI", "Envios MIP"])
+        self.assertEqual(livro.sheetnames, ["Resumo", "Robôs", "Notas RI", "Envios MIP", "NFs BDO"])
         notas = list(livro["Notas RI"].iter_rows(values_only=True))
         self.assertEqual(len(notas), 1 + 3)  # cabeçalho + 3 processados (o "Na fila" não entra)
         self.assertIn("11000004", [linha[1] for linha in notas])

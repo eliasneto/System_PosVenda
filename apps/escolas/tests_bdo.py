@@ -681,7 +681,42 @@ class BdoViewTests(TestCase):
         self.client.post(reverse("relatorio_bdo"), {"tipo": "RE", "mes_referencia": "2026-09", "arquivo": _planilha(LINHAS_3658)})
         self.assertEqual(BoletimBdo.objects.get().tipo, "RE")
         resp = self.client.get(reverse("relatorio_bdo"))
-        self.assertContains(resp, ">RE</span>")
+        self.assertContains(resp, '<option value="RE" selected>RE</option>')
+
+    def test_administrador_corrige_o_tipo_e_a_medicao_acompanha(self):
+        self._importar()
+        boletim = BoletimBdo.objects.get()
+        boletim.tipo = "RI"
+        boletim.save(update_fields=["tipo"])
+        MedicaoBdo.objects.create(boletim=boletim, tipo="RI", numero=1)
+        url = reverse("bdo_tipo", args=[boletim.pk])
+        self.client.force_login(self.analista)
+        self.assertEqual(self.client.post(url, {"tipo": "RE"}).status_code, 403)
+        self.client.force_login(self.admin)
+        resp = self.client.post(url, {"tipo": "RE"}, follow=True)
+        self.assertRedirects(resp, reverse("relatorio_bdo"))
+        self.assertContains(resp, "Boletim 3658: tipo alterado de RI para RE.")
+        boletim.refresh_from_db()
+        self.assertEqual(boletim.tipo, "RE")
+        self.assertEqual(MedicaoBdo.objects.get().tipo, "RE")
+        resp = self.client.post(url, {"tipo": "XX"}, follow=True)
+        self.assertContains(resp, "escolha o tipo RE ou RI")
+        boletim.refresh_from_db()
+        self.assertEqual(boletim.tipo, "RE")
+
+    def test_tipo_nao_muda_se_o_numero_da_medicao_ja_existe_no_outro_tipo(self):
+        self._importar()
+        boletim = BoletimBdo.objects.get()
+        boletim.tipo = "RI"
+        boletim.save(update_fields=["tipo"])
+        MedicaoBdo.objects.create(boletim=boletim, tipo="RI", numero=6)
+        outro = BoletimBdo.objects.create(numero="9999", tipo="RE")
+        MedicaoBdo.objects.create(boletim=outro, tipo="RE", numero=6)
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse("bdo_tipo", args=[boletim.pk]), {"tipo": "RE"}, follow=True)
+        self.assertContains(resp, "já existe a Medição 06 do RE")
+        boletim.refresh_from_db()
+        self.assertEqual(boletim.tipo, "RI")
 
     def test_relatorio_bdo_filtra_os_boletins_por_tipo(self):
         self._importar(tipo="RI")

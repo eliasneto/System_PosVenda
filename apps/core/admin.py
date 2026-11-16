@@ -2,7 +2,7 @@ from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import RoboRpaEace, User
+from .models import LinkPainelTecnico, RoboRpaEace, User
 
 
 @admin.register(User)
@@ -50,13 +50,47 @@ class RoboRpaEaceAdmin(admin.ModelAdmin):
     list_filter = ("ativo",)
     search_fields = ("nome", "usuario")
 
+    def get_urls(self):
+        """Painel técnico da fila (pedido do usuário, 2026-11-16): o painel da TV com servidor, limite/freio e o uso
+        de memória e processador de cada robô. Dentro do admin: só quem pode ver os robôs."""
+        from django.urls import path
+
+        from apps.ri import views_fila_tv
+
+        def protegida(view):
+            def com_permissao(request, *args, **kwargs):
+                if not self.has_view_permission(request):
+                    from django.core.exceptions import PermissionDenied
+
+                    raise PermissionDenied
+                return view(request, *args, **kwargs)
+
+            return self.admin_site.admin_view(com_permissao)
+
+        return [
+            path("painel-tecnico/", protegida(views_fila_tv.painel_tecnico_view),
+                 name="core_roborpaeace_painel_tecnico"),
+            path("painel-tecnico/conteudo/", protegida(views_fila_tv.painel_tecnico_conteudo_view),
+                 name="core_roborpaeace_painel_tecnico_conteudo"),
+            path("painel-tecnico/planilha/", protegida(views_fila_tv.resposta_planilha),
+                 name="core_roborpaeace_painel_tecnico_planilha"),
+        ] + super().get_urls()
+
     def changelist_view(self, request, extra_context=None):
         """Mostra no topo da lista quantos robôs a máquina aguenta agora
-        (gravado pelo supervisor a cada ~15 s - `EstadoRobosRpaEace`)."""
+        (gravado pelo supervisor a cada ~5 s - `EstadoRobosRpaEace`) e o link do painel técnico."""
         from django.contrib import messages
+        from django.urls import reverse
+        from django.utils.html import format_html
 
         from .models import EstadoRobosRpaEace
 
+        messages.info(request, format_html(
+            'Painel técnico da fila (servidor e uso de memória e processador de cada robô): <a href="{}" '
+            'target="_blank" rel="noopener"><b>abrir o painel técnico</b></a> · para entregar a alguém: '
+            '<a href="{}"><b>Links do painel técnico</b></a>.',
+            reverse("admin:core_roborpaeace_painel_tecnico"), reverse("admin:core_linkpaineltecnico_changelist"),
+        ))
         estado = EstadoRobosRpaEace.objects.filter(pk=1).first()
         if estado and estado.atualizado_em:
             texto = (
@@ -90,3 +124,38 @@ class RoboRpaEaceAdmin(admin.ModelAdmin):
             f"Criado(s): {', '.join(criados)} - inativo(s). Marque \"Ativo\" na lista para começar a rodar "
             "(acima do limite em vigor, os demais ficam esperando - veja a capacidade no topo da lista).",
         )
+
+
+@admin.register(LinkPainelTecnico)
+class LinkPainelTecnicoAdmin(admin.ModelAdmin):
+    """Pedido do usuário (2026-11-16): o link do painel técnico da fila para entregar a quem precisa (sem acesso ao
+    admin). Um link por pessoa: desmarcar "Ativo" corta o acesso só dela; para trocar um link vazado, desative-o e
+    crie outro."""
+
+    list_display = ("nome", "link", "ativo", "criado_em")
+    list_editable = ("ativo",)
+    list_filter = ("ativo",)
+    search_fields = ("nome",)
+    readonly_fields = ("link",)
+    fields = ("nome", "ativo", "link")
+
+    def get_form(self, request, obj=None, **kwargs):
+        self._request = request
+        return super().get_form(request, obj, **kwargs)
+
+    def get_changelist(self, request, **kwargs):
+        self._request = request
+        return super().get_changelist(request, **kwargs)
+
+    @admin.display(description="Link para entregar")
+    def link(self, obj):
+        from django.urls import reverse
+        from django.utils.html import format_html
+
+        if not obj or not obj.pk:
+            return "O link aparece depois de salvar."
+        endereco = reverse("painel_tecnico_link", args=[obj.codigo])
+        request = getattr(self, "_request", None)
+        if request is not None:
+            endereco = request.build_absolute_uri(endereco)
+        return format_html('<a href="{0}" target="_blank" rel="noopener">{0}</a>', endereco)

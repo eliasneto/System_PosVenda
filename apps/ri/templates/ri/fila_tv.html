@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Fila do RPA EACE | Painel</title>
+<title>Fila do RPA EACE | {% if tecnico %}Painel técnico{% else %}Painel{% endif %}</title>
 <link rel="icon" type="image/svg+xml" href="{% static 'img/favicon.svg' %}">
 {% comment %}
 Painel da fila para TV (pedido do usuário, 2026-11-11) - sem login, sem
@@ -42,7 +42,7 @@ mostra o aviso "sem conexão".
     animation: piscar 1.6s ease-in-out infinite; }
   @keyframes piscar { 50% { border-color: transparent; } }
   .relatorio { display: flex; gap: 0.6vw; align-items: center; font-size: 0.9vw; color: var(--suave); }
-  .relatorio input { background: var(--cartao); color: var(--texto); border: 1px solid var(--borda);
+  .relatorio input, .relatorio select { background: var(--cartao); color: var(--texto); border: 1px solid var(--borda);
     border-radius: 0.5vw; padding: 0.4vh 0.5vw; font-size: 0.9vw; color-scheme: dark; }
   .relatorio button { background: var(--amarelo); color: #111; border: 0; border-radius: 0.5vw;
     padding: 0.6vh 1vw; font-weight: 900; font-size: 0.9vw; cursor: pointer; }
@@ -83,14 +83,30 @@ mostra o aviso "sem conexão".
   .st-erro { color: var(--vermelho); font-weight: 900; }
   .st-repete { color: var(--amarelo); font-weight: 900; }
   .motivo { color: var(--suave); font-size: 0.85vw; }
+  /* Painel técnico (2026-11-16): uso de cada robô em % da máquina */
+  .tecnico-titulo { font-size: 1.2vw; color: var(--suave); text-transform: none; }
+  .tecnico-linha { display: flex; flex-wrap: wrap; gap: 1.5vw; font-size: 1vw; color: var(--suave); font-weight: 700; margin: -0.4vh 0 1.2vh; }
+  .tecnico-linha b { color: var(--texto); }
+  .uso { display: flex; gap: 1vw; font-size: 0.95vw; font-weight: 800; margin-top: 0.6vh; }
+  .uso span { display: inline-flex; align-items: center; gap: 0.4vw; }
+  .uso i { display: inline-block; width: 4vw; height: 0.9vh; background: #1f2a40; border-radius: 99px; overflow: hidden; }
+  .uso i b { display: block; height: 100%; background: var(--azul); }
+  .robo .uso-chip { color: var(--suave); font-weight: 700; }
 </style>
 </head>
 <body>
   <div class="topo">
-    <h1>Fila do <span>RPA EACE</span></h1>
+    <h1>Fila do <span>RPA EACE</span>{% if tecnico %} <small class="tecnico-titulo">· técnico</small>{% endif %}</h1>
     {# Pedido do usuário (2026-11-11): planilha de relatório - fora do miolo que é trocado a cada 10 s, para as datas não se apagarem. #}
-    <form class="relatorio" method="get" action="{% url 'fila_tv_planilha' token=token %}">
+    <form class="relatorio" method="get" action="{{ url_planilha }}">
       <span>Relatório:</span>
+      {# Processo separado (pedido do usuário, 2026-11-16) #}
+      <label>Processo <select name="tipo">
+        <option value="">Todos</option>
+        <option value="RI">RI</option>
+        <option value="MIP">MIP</option>
+        <option value="BDO">BDO</option>
+      </select></label>
       <label>De <input type="date" name="de"></label>
       <label>Até <input type="date" name="ate"></label>
       <button type="submit">⬇ Baixar planilha</button>
@@ -109,7 +125,7 @@ mostra o aviso "sem conexão".
   <div id="conteudo">{% include "ri/_fila_tv_conteudo.html" %}</div>
 <script>
 (function () {
-  var url = "{% url 'fila_tv_conteudo' token=token %}";
+  var url = "{{ url_conteudo|escapejs }}";
   var relogio = document.getElementById("relogio");
   function atualizar() {
     var req = new XMLHttpRequest();

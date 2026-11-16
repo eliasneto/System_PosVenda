@@ -140,7 +140,22 @@ sobreposto e um Boletim já importado é recusado. O grid fica em
                     {% for boletim in boletins %}
                     <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                         <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ boletim.numero }}</span></td>
-                        <td class="px-4 py-2"><span class="text-[11px] font-black text-gray-900 dark:text-gray-100">{{ boletim.tipo|default:"—" }}</span></td>
+                        <td class="px-4 py-2 whitespace-nowrap">
+                            {# Pedido do usuário (2026-11-16): corrigir o Boletim importado com o tipo trocado. #}
+                            <form method="POST" action="{% url 'bdo_tipo' boletim.pk %}" class="flex items-center gap-1.5"
+                                  onsubmit="return confirm('Alterar o tipo do Boletim {{ boletim.numero }}? A Medição já gerada dele acompanha o novo tipo.')">
+                                {% csrf_token %}
+                                <label for="tipo-{{ boletim.pk }}" class="sr-only">Tipo do Boletim {{ boletim.numero }}</label>
+                                <select id="tipo-{{ boletim.pk }}" name="tipo" required
+                                        class="px-2 py-1 bg-gray-50 dark:bg-gray-800 border {% if boletim.tipo %}border-transparent{% else %}border-amber-400{% endif %} rounded-lg outline-none focus:ring-2 focus:ring-amber-400 font-black text-[11px] text-gray-900 dark:text-gray-100">
+                                    {% if not boletim.tipo %}<option value="">—</option>{% endif %}
+                                    {% for valor, rotulo in tipos %}<option value="{{ valor }}"{% if valor == boletim.tipo %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+                                </select>
+                                <button type="submit" class="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-gray-100" title="Salvar o tipo" aria-label="Salvar o tipo do Boletim {{ boletim.numero }}">
+                                    <i data-lucide="check" class="w-3.5 h-3.5" aria-hidden="true"></i>
+                                </button>
+                            </form>
+                        </td>
                         <td class="px-4 py-2 whitespace-nowrap">
                             <form method="POST" action="{% url 'bdo_mes_referencia' boletim.pk %}" class="flex items-center gap-1.5">
                                 {% csrf_token %}

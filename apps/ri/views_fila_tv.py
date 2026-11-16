@@ -19,6 +19,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.http import Http404
 from django.shortcuts import render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 
@@ -176,6 +177,8 @@ def saude_servidor(meminfo="/proc/meminfo", stat="/proc/stat") -> dict | None:
             "Se continuar, desative um robô no admin."
         )
     return {
+        # em % (painel técnico, 2026-11-16), como o processador
+        "memoria_pct": round(100 * (total_mb - livre_mb) / total_mb) if total_mb else 0,
         "livre_gb": f"{livre_mb / 1024:.1f}".replace(".", ","),
         "total_gb": f"{total_mb / 1024:.0f}",
         "swap_usado_gb": f"{swap_usado_mb / 1024:.1f}".replace(".", ",") if swap_usado_mb > 256 else "",
@@ -207,7 +210,10 @@ def _previsao_fila_zerar(pendentes: int, saida_hora: int, agora) -> dict | None:
     return {"texto": texto, "as": fim.strftime("%H:%M") if mesmo_dia else fim.strftime("%d/%m %H:%M")}
 
 
-def contexto_fila_tv(agora=None) -> dict:
+def contexto_fila_tv(agora=None, tecnico=False) -> dict:
+    """`tecnico`: o painel técnico do admin (2026-11-16) - tudo do painel do usuário mais servidor (memória e
+    processador em %), limite/capacidade/freio dos robôs e o uso de cada robô. O link do usuário não mostra nada
+    disso."""
     agora = agora or timezone.now()
     inicio_do_dia = timezone.localtime(agora).replace(hour=0, minute=0, second=0, microsecond=0)
     uma_hora = agora - timedelta(hours=1)
@@ -294,13 +300,21 @@ def contexto_fila_tv(agora=None) -> dict:
 
     ocupados = {item["log"].robo_id for item in processando}
     robos = [
-        {"nome": robo.nome, "trabalhando": robo.pk in ocupados}
+        {"nome": robo.nome, "trabalhando": robo.pk in ocupados, "chave": str(robo.pk)}
         for robo in RoboRpaEace.objects.filter(ativo=True).order_by("pk")
     ]
     if not robos:
-        robos = [{"nome": "Robô padrão", "trabalhando": bool(processando)}]
+        robos = [{"nome": "Robô padrão", "trabalhando": bool(processando), "chave": "padrao"}]
 
+    estado_robos = EstadoRobosRpaEace.objects.filter(pk=1).first() if tecnico else None
+    if estado_robos:
+        usos = estado_robos.robos_uso or {}
+        for robo in robos:
+            robo["uso"] = usos.get(robo["chave"])
+        for item in processando:
+            item["uso"] = usos.get(str(item["log"].robo_id) if item["log"].robo_id else "padrao")
     return {
+        "tecnico": tecnico,
         "agora": agora,
         "processando": processando,
         "proximos": proximos,
@@ -317,15 +331,21 @@ def contexto_fila_tv(agora=None) -> dict:
         "falha_hora": tentativas_hora - sucesso_hora,
         "taxa_hora": round(100 * sucesso_hora / tentativas_hora) if tentativas_hora else None,
         "intervalo_segundos": INTERVALO_SEGUNDOS,
-        "servidor": saude_servidor(),
-        "estado_robos": EstadoRobosRpaEace.objects.filter(pk=1).first(),
+        "servidor": saude_servidor() if tecnico else None,
+        "estado_robos": estado_robos,
+        # 1 minuto depois de uma redução e some (pedido do usuário, 2026-11-16)
+        "aviso_freio": bool(estado_robos and estado_robos.freio_motivo and estado_robos.freio_aviso_ate
+                            and estado_robos.freio_aviso_ate > agora),
     }
 
 
 @never_cache
 def fila_tv_view(request, token):
     _validar_token(token)
-    return render(request, "ri/fila_tv.html", {**contexto_fila_tv(), "token": token})
+    return render(request, "ri/fila_tv.html", {
+        **contexto_fila_tv(), "url_conteudo": reverse("fila_tv_conteudo", args=[token]),
+        "url_planilha": reverse("fila_tv_planilha", args=[token]),
+    })
 
 
 @never_cache
@@ -333,13 +353,17 @@ def fila_tv_planilha_view(request, token):
     """Pedido do usuário (2026-11-11): planilha de relatório de tudo que foi
     processado (`relatorio_fila_tv.gerar_planilha`), com período opcional
     `?de=AAAA-MM-DD&ate=AAAA-MM-DD`."""
+    _validar_token(token)
+    return resposta_planilha(request)
+
+
+def resposta_planilha(request):
+    """A planilha do painel (link do usuário e painel técnico do admin)."""
     from datetime import date
 
     from django.http import HttpResponse
 
-    from .relatorio_fila_tv import gerar_planilha
-
-    _validar_token(token)
+    from .relatorio_fila_tv import TIPOS, gerar_planilha
 
     def _data(nome):
         try:
@@ -348,9 +372,11 @@ def fila_tv_planilha_view(request, token):
             return None
 
     de, ate = _data("de"), _data("ate")
-    nome = f"relatorio_rpa_eace_{timezone.localtime().strftime('%Y%m%d_%H%M')}.xlsx"
+    tipo = (request.GET.get("tipo") or "").upper()  # RI, MIP ou BDO (2026-11-16); vazio = todos
+    tipo = tipo if tipo in TIPOS else ""
+    nome = f"relatorio_rpa_eace_{f'{tipo.lower()}_' if tipo else ''}{timezone.localtime().strftime('%Y%m%d_%H%M')}.xlsx"
     resposta = HttpResponse(
-        gerar_planilha(de, ate),
+        gerar_planilha(de, ate, tipo),
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     resposta["Content-Disposition"] = f'attachment; filename="{nome}"'
@@ -361,3 +387,46 @@ def fila_tv_planilha_view(request, token):
 def fila_tv_conteudo_view(request, token):
     _validar_token(token)
     return render(request, "ri/_fila_tv_conteudo.html", contexto_fila_tv())
+
+
+# Painel técnico (pedido do usuário, 2026-11-16): dentro do admin do Django (`RoboRpaEaceAdmin.get_urls`, só equipe
+# do admin) - o mesmo painel com servidor, limite/freio e o uso de cada robô.
+def painel_tecnico_view(request):
+    return render(request, "ri/fila_tv.html", {
+        **contexto_fila_tv(tecnico=True), "url_conteudo": reverse("admin:core_roborpaeace_painel_tecnico_conteudo"),
+        "url_planilha": reverse("admin:core_roborpaeace_painel_tecnico_planilha"),
+    })
+
+
+def painel_tecnico_conteudo_view(request):
+    return render(request, "ri/_fila_tv_conteudo.html", contexto_fila_tv(tecnico=True))
+
+
+# Link do painel técnico para entregar a quem precisa, sem login (`LinkPainelTecnico`, criado no admin): código
+# inexistente ou link desativado -> 404, como o link da TV.
+def _validar_link_tecnico(codigo: str) -> None:
+    from apps.core.models import LinkPainelTecnico
+
+    if not codigo or not LinkPainelTecnico.objects.filter(codigo=codigo, ativo=True).exists():
+        raise Http404
+
+
+@never_cache
+def painel_tecnico_link_view(request, codigo):
+    _validar_link_tecnico(codigo)
+    return render(request, "ri/fila_tv.html", {
+        **contexto_fila_tv(tecnico=True), "url_conteudo": reverse("painel_tecnico_link_conteudo", args=[codigo]),
+        "url_planilha": reverse("painel_tecnico_link_planilha", args=[codigo]),
+    })
+
+
+@never_cache
+def painel_tecnico_link_conteudo_view(request, codigo):
+    _validar_link_tecnico(codigo)
+    return render(request, "ri/_fila_tv_conteudo.html", contexto_fila_tv(tecnico=True))
+
+
+@never_cache
+def painel_tecnico_link_planilha_view(request, codigo):
+    _validar_link_tecnico(codigo)
+    return resposta_planilha(request)

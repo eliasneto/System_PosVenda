@@ -225,23 +225,90 @@ def ligar_nota(nota, municipios, usados):
         nota.motivo = f"A NF diz {escrito}, que não está no Boletim {nota.boletim.numero}: escolha o município."
 
 
-@transaction.atomic
-def processar_remessa(arquivo, usuario=None):
-    """Grava a remessa e cada NF dela, ligada ao Boletim e ao município. A mesma NF (número + Boletim) que já
-    foi para o portal fica de fora; a que ainda não foi é substituída pela nova. Devolve a remessa (com `resumo`).
-    Arquivo ilegível: RemessaNfBdoError (nada é gravado)."""
-    conteudo = arquivo.read()
-    lidas = {}
-    for nome, pdf in iterar_pdfs(conteudo, arquivo.name):
-        dados = ler_nf(ler_texto_pdf(pdf))
-        lidas.setdefault(dados["numero"] or nome, (nome, pdf, dados))  # o .zip de dentro repete as NFs
-    if not lidas:
-        raise RemessaNfBdoError("Nenhum PDF de Nota Fiscal dentro do arquivo.")
-    remessa = RemessaNfBdo(nome_original=arquivo.name[:255], enviado_por=usuario)
-    remessa.arquivo.save(arquivo.name, ContentFile(conteudo), save=False)
+def receber_remessa(arquivo, usuario=None):
+    """Só guarda o arquivo (situação "Lendo"); a leitura é `ler_remessa`, em segundo plano na tela
+    (2026-11-16: ler na hora do envio dava 504). Tipo de arquivo errado: RemessaNfBdoError (nada é gravado)."""
+    nome = arquivo.name
+    if not nome.lower().endswith((".zip", ".rar")):
+        raise RemessaNfBdoError("Envie o arquivo do financeiro em .zip ou .rar.")
+    if nome.lower().endswith(".rar") and shutil.which("unar") is None:
+        raise RemessaNfBdoError("O servidor não tem a ferramenta 'unar' para abrir .rar: reenvie em .zip.")
+    remessa = RemessaNfBdo(nome_original=nome[:255], enviado_por=usuario, situacao=RemessaNfBdo.LENDO)
+    remessa.arquivo.save(nome, arquivo, save=False)
     remessa.save()
+    return remessa
 
-    boletins = {b.numero: b for b in BoletimBdo.objects.filter(numero__in={d["boletim"] for _, _, d in lidas.values()})}
+
+def ler_remessa(remessa):
+    """Lê as NFs da remessa recebida e grava cada uma (`_gravar_notas`). Erro vira a situação "Erro" da remessa
+    com o motivo - nenhuma NF fica pela metade. Devolve a remessa."""
+    try:
+        with remessa.arquivo.open("rb") as arquivo:
+            conteudo = arquivo.read()
+        lidas = {}
+        for quantidade, (nome, pdf) in enumerate(iterar_pdfs(conteudo, remessa.nome_original), start=1):
+            dados = ler_nf(ler_texto_pdf(pdf))
+            lidas.setdefault(dados["numero"] or nome, (nome, pdf, dados))  # o .zip de dentro repete as NFs
+            if quantidade % 10 == 0:  # andamento na tela
+                RemessaNfBdo.objects.filter(pk=remessa.pk).update(resumo={"lidas": quantidade})
+        if not lidas:
+            raise RemessaNfBdoError("Nenhum PDF de Nota Fiscal dentro do arquivo.")
+        _gravar_notas(remessa, lidas)
+    except RemessaNfBdoError as erro:
+        _remessa_com_erro(remessa, str(erro))
+    except Exception:  # noqa: BLE001 - a remessa não pode ficar "Lendo" para sempre
+        logger.exception("Remessa de NFs do BDO #%s: erro inesperado na leitura.", remessa.pk)
+        _remessa_com_erro(remessa, "Erro inesperado ao ler o arquivo. Envie de novo; se repetir, avise o suporte.")
+    return remessa
+
+
+def _remessa_com_erro(remessa, motivo):
+    remessa.situacao, remessa.erro, remessa.concluida_em = RemessaNfBdo.ERRO, motivo[:500], timezone.now()
+    remessa.save(update_fields=["situacao", "erro", "concluida_em"])
+
+
+def ler_remessa_em_segundo_plano(remessa_id):
+    """A tela não espera a leitura (até minutos com centenas de NFs): roda numa thread do próprio servidor web.
+    Se o servidor reiniciar no meio, `recuperar_remessas_interrompidas` marca a remessa com erro."""
+    import threading
+
+    from django.db import close_old_connections, connection
+
+    def rodar():
+        close_old_connections()
+        try:
+            remessa = RemessaNfBdo.objects.filter(pk=remessa_id, situacao=RemessaNfBdo.LENDO).first()
+            if remessa is not None:
+                ler_remessa(remessa)
+        finally:
+            connection.close()
+
+    threading.Thread(target=rodar, name=f"remessa-nf-bdo-{remessa_id}", daemon=True).start()
+
+
+def recuperar_remessas_interrompidas(agora=None) -> int:
+    """Remessa "Lendo" há mais de 30 minutos (servidor reiniciado no meio): erro, para enviar de novo."""
+    agora = agora or timezone.now()
+    return RemessaNfBdo.objects.filter(situacao=RemessaNfBdo.LENDO, enviado_em__lt=agora - TEMPO_MAXIMO_PROCESSANDO).update(
+        situacao=RemessaNfBdo.ERRO, concluida_em=agora,
+        erro="A leitura foi interrompida (servidor reiniciado). Envie o arquivo de novo.")
+
+
+def processar_remessa(arquivo, usuario=None):
+    """Recebe e lê na hora (comandos e testes). Arquivo ilegível: RemessaNfBdoError."""
+    remessa = ler_remessa(receber_remessa(arquivo, usuario))
+    if remessa.situacao == RemessaNfBdo.ERRO:
+        raise RemessaNfBdoError(remessa.erro)
+    return remessa
+
+
+@transaction.atomic
+def _gravar_notas(remessa, lidas):
+    """Grava cada NF lida, ligada ao Boletim e ao município. A mesma NF (número + Boletim) que já foi para o
+    portal fica de fora; a que ainda não foi é substituída pela nova."""
+    # trava os Boletins: 2 remessas do mesmo Boletim lidas ao mesmo tempo não se atropelam
+    boletins = {b.numero: b for b in BoletimBdo.objects.select_for_update().filter(
+        numero__in={d["boletim"] for _, _, d in lidas.values()})}
     ja_enviadas = 0
     notas = []
     for nome, pdf, dados in lidas.values():
@@ -285,7 +352,8 @@ def processar_remessa(arquivo, usuario=None):
         contagem[nota.situacao] = contagem.get(nota.situacao, 0) + 1
     remessa.resumo = {"pdfs": len(lidas), "gravadas": len(notas), "ja_enviadas": ja_enviadas,
                       "boletins": sorted({n.boletim.numero for n in notas if n.boletim}), "situacoes": contagem}
-    remessa.save(update_fields=["resumo"])
+    remessa.situacao, remessa.erro, remessa.concluida_em = RemessaNfBdo.CONCLUIDA, "", timezone.now()
+    remessa.save(update_fields=["resumo", "situacao", "erro", "concluida_em"])
     return remessa
 
 

@@ -2,6 +2,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 
 from decouple import config as env
@@ -11,7 +12,9 @@ from django.db import close_old_connections
 from django.utils import timezone
 
 from apps.core.models import EstadoRobosRpaEace, RoboRpaEace
-from apps.ri.capacidade_robos import FreioDeSeguranca, capacidade_maquina, ler_recursos
+from apps.ri.capacidade_robos import (
+    SEGUNDOS_AVISO, FreioDeSeguranca, UsoDosRobos, capacidade_maquina, ler_recursos,
+)
 from apps.ri.fila_rpa_eace import recuperar_envios_de_robos_parados
 
 PADRAO = None  # robô padrão (login do .env), usado quando não há robô ativo
@@ -52,7 +55,9 @@ class Command(BaseCommand):
         intervalo = options["intervalo"]
         teto_manual = max(0, options["max_robos"] or 0)
         freio = FreioDeSeguranca()
+        uso = UsoDosRobos()
         limite_anterior = None
+        aviso_ate = None
         estado_gravado_em = 0.0
         manage_py = str(Path(settings.BASE_DIR) / "manage.py")
         rodando: dict[int | None, subprocess.Popen] = {}
@@ -85,7 +90,16 @@ class Command(BaseCommand):
             # atual e esperam.
             recursos = ler_recursos()
             capacidade = capacidade_maquina(recursos)
-            limite = freio.atualizar(recursos, len(rodando), teto_manual or capacidade)
+            try:
+                cadastrados = list(RoboRpaEace.objects.filter(ativo=True).order_by("pk").values_list("pk", flat=True))
+            except Exception as exc:  # banco fora do ar: tenta de novo no próximo ciclo
+                self.stderr.write(f"Supervisor: erro ao ler os robôs ({exc}).")
+                close_old_connections()
+                time.sleep(5)
+                continue
+            # O limite nunca passa dos robôs ativos no cadastro (bug de 2026-11-16: com 5 ativos a TV mostrava 9).
+            aviso_antes = freio.aviso_ativo()
+            limite = freio.atualizar(recursos, len(rodando), min(teto_manual or capacidade, len(cadastrados) or 1))
             if limite != limite_anterior:
                 self.stdout.write(
                     f"Limite de robôs: {limite} (capacidade da máquina {capacidade}"
@@ -93,17 +107,28 @@ class Command(BaseCommand):
                     f"{f', freio: {freio.motivo}' if freio.motivo else ''})."
                 )
                 limite_anterior = limite
+            aviso = freio.aviso_ativo()
+            if aviso and not aviso_antes:
+                aviso_ate = timezone.now() + timedelta(seconds=SEGUNDOS_AVISO)
+                estado_gravado_em = 0.0  # grava já: a TV mostra o aviso na próxima atualização
             try:
-                ativos = list(
-                    RoboRpaEace.objects.filter(ativo=True).order_by("pk").values_list("pk", flat=True)[:limite]
-                )
-                if time.monotonic() - estado_gravado_em >= 15:
+                ativos = cadastrados[:limite]
+                # a cada 5 s: o painel técnico mostra o uso de cada robô (atualiza de 10 em 10 s)
+                if time.monotonic() - estado_gravado_em >= 5:
+                    try:
+                        robos_uso = uso.medir({chave if chave is not PADRAO else "padrao": processo.pid
+                                               for chave, processo in rodando.items()}, recursos)
+                    except OSError as exc:  # medir nunca pode parar os robôs
+                        self.stderr.write(f"Supervisor: uso dos robôs não medido ({exc}).")
+                        robos_uso = {}
                     EstadoRobosRpaEace.objects.update_or_create(pk=1, defaults={
+                        "robos_uso": robos_uso,
                         "capacidade_maquina": min(capacidade, 999),
                         "limite_atual": limite,
                         "teto_manual": teto_manual,
                         "robos_rodando": len(rodando),
                         "freio_motivo": freio.motivo[:120],
+                        "freio_aviso_ate": aviso_ate,
                         "recursos": (
                             f"{recursos.nucleos} núcleos · {recursos.total_mb / 1024:.0f} GB de memória"
                             if recursos else ""
