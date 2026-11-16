@@ -139,23 +139,22 @@ class LinkPainelTecnicoAdmin(admin.ModelAdmin):
     readonly_fields = ("link",)
     fields = ("nome", "ativo", "link")
 
-    def get_form(self, request, obj=None, **kwargs):
-        self._request = request
-        return super().get_form(request, obj, **kwargs)
-
-    def get_changelist(self, request, **kwargs):
-        self._request = request
-        return super().get_changelist(request, **kwargs)
+    class Media:
+        # Mostra o endereço completo e copia (core/link_painel_tecnico.js)
+        js = ("core/link_painel_tecnico.js",)
 
     @admin.display(description="Link para entregar")
     def link(self, obj):
+        """Endereço montado pelo navegador (`href` relativo), nunca pelo servidor: o nginx repassa o host sem a porta
+        :8000 e o link saía apontando para outro serviço ("Not Found", 2026-11-16)."""
         from django.urls import reverse
         from django.utils.html import format_html
 
         if not obj or not obj.pk:
             return "O link aparece depois de salvar."
         endereco = reverse("painel_tecnico_link", args=[obj.codigo])
-        request = getattr(self, "_request", None)
-        if request is not None:
-            endereco = request.build_absolute_uri(endereco)
-        return format_html('<a href="{0}" target="_blank" rel="noopener">{0}</a>', endereco)
+        return format_html(
+            '<a class="link-painel-tecnico" href="{0}" target="_blank" rel="noopener">{0}</a> '
+            '<button type="button" class="button copiar-link-painel" data-href="{0}">Copiar link</button>',
+            endereco,
+        )

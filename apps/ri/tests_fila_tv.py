@@ -111,7 +111,11 @@ class FilaTvTests(TestCase):
         self.assertGreaterEqual(len(link.codigo), 30)
         url = reverse("painel_tecnico_link", args=[link.codigo])
         lista = self.client.get(reverse("admin:core_linkpaineltecnico_changelist"))
-        self.assertContains(lista, f"http://testserver{url}")
+        # href relativo: o navegador completa com o endereço e a porta certos (o servidor não sabe a porta :8000)
+        self.assertContains(lista, f'class="link-painel-tecnico" href="{url}"')
+        self.assertContains(lista, "Copiar link")
+        self.assertContains(lista, "core/link_painel_tecnico.js")
+        self.assertNotContains(lista, "http://testserver/painel-tecnico/")
         self.client.logout()
         # quem recebe abre sem login
         pagina = self.client.get(url)
