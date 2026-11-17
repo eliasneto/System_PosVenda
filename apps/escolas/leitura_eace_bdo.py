@@ -37,6 +37,10 @@ MENSAGENS_MOTIVO_BDO = {
     "pedido_nao_encontrado": "O Boletim não está no grid de BDOs do portal.",
     "abrir_notas_fiscais": "Não foi possível abrir a seção \"Notas Fiscais\" do Boletim.",
     "notas_fiscais_sem_cards": "A seção \"Notas Fiscais\" do Boletim ainda não tem nenhum card de município.",
+    "campos_nf_em_branco": "O portal não preencheu data de emissão e valores da NF depois do upload - "
+                           "a NF não foi confirmada. Tente de novo.",
+    "descricao_em_branco": "A Descrição da NF ficou em branco no portal - a NF não foi confirmada "
+                           "(texto padrão só para o BDO RE).",
 }
 
 

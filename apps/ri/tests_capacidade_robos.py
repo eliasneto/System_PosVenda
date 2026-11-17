@@ -120,6 +120,43 @@ class FreioDeSegurancaTests(SimpleTestCase):
         self.assertEqual(segunda["3"]["cpu_pct"], 0.0)
         self.assertEqual(uso.medir({}, maquina), {})
 
+    def test_processador_do_servidor_na_mesma_janela_dos_robos(self):
+        # Correção 2026-11-17: o total vem da mesma medição dos robôs, então a soma deles nunca passa do total.
+        import os
+        import tempfile
+
+        from apps.ri.capacidade_robos import UsoDosRobos
+
+        proc = tempfile.mkdtemp()
+        os.makedirs(f"{proc}/100")
+        with open(f"{proc}/uptime", "w", encoding="ascii") as arquivo:
+            arquivo.write("1000.0 0")
+
+        def momento(robo_ticks, ocupado, ocioso):
+            campos = ["S", 1] + [0] * 9 + [robo_ticks, 0] + [0] * 6 + [0, 0, 1]
+            with open(f"{proc}/100/stat", "w", encoding="ascii") as arquivo:
+                arquivo.write("100 (python) " + " ".join(str(c) for c in campos))
+            with open(f"{proc}/stat", "w", encoding="ascii") as arquivo:
+                arquivo.write(f"cpu  {ocupado} 0 0 {ocioso} 0 0 0 0 0 0\ncpu0 0 0 0 0\n")
+
+        uso = UsoDosRobos(proc)
+        ticks = uso._ticks_por_segundo
+        maquina = recursos(10, 4)
+        momento(0, 0, 0)
+        uso.medir({2: 100}, maquina, agora=10)
+        self.assertIsNone(uso.cpu_servidor_pct)  # 1ª medição: ainda sem janela
+        # em 2 s, 4 núcleos = 8 s de máquina: o robô usou 2 s, a máquina 3 s
+        momento(ticks * 2, ticks * 3, ticks * 5)
+        robos = uso.medir({2: 100}, maquina, agora=12)
+        self.assertEqual(robos["2"]["cpu_pct"], 25.0)
+        self.assertEqual(uso.cpu_servidor_pct, 38)  # 3/8
+        # sem robô rodando o total continua sendo medido
+        momento(ticks * 2, ticks * 4, ticks * 12)
+        self.assertEqual(uso.medir({}, maquina, agora=14), {})
+        self.assertEqual(uso.cpu_servidor_pct, 12)  # 1/8
+        self.assertEqual(uso.medir({}, None), {})
+        self.assertIsNone(uso.cpu_servidor_pct)
+
     def test_nunca_abaixo_de_1(self):
         freio = FreioDeSeguranca()
         apertado = recursos(50, 24, disponivel_gb=0.5)

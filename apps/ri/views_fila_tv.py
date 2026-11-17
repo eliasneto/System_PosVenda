@@ -28,6 +28,7 @@ from types import SimpleNamespace
 
 from apps.escolas.models import LogRpaEaceMip, NotaFiscalBdo
 
+from .capacidade_robos import amostra_cpu as _amostra_cpu
 from .models import LogRpaEace
 
 INTERVALO_SEGUNDOS = 10
@@ -121,14 +122,6 @@ def _ler_meminfo(caminho="/proc/meminfo") -> dict[str, int]:
     return valores
 
 
-def _amostra_cpu(caminho: str) -> tuple[int, int]:
-    """(total, ocioso) em ticks, somando todos os núcleos (linha "cpu")."""
-    with open(caminho, encoding="ascii") as arquivo:
-        campos = [int(v) for v in arquivo.readline().split()[1:9]]
-    user, nice, system, idle, iowait, irq, softirq, steal = (campos + [0] * 8)[:8]
-    return user + nice + system + idle + iowait + irq + softirq + steal, idle + iowait
-
-
 def uso_cpu_pct(caminho="/proc/stat", pausa=0.5) -> int:
     """% do tempo em que os núcleos estiveram ocupados desde a leitura
     anterior (se recente) ou numa janela curta de `pausa` segundos."""
@@ -148,13 +141,15 @@ def uso_cpu_pct(caminho="/proc/stat", pausa=0.5) -> int:
     return max(0, min(100, round(100 * (delta_total - (ocioso1 - ocioso0)) / delta_total)))
 
 
-def saude_servidor(meminfo="/proc/meminfo", stat="/proc/stat") -> dict | None:
+def saude_servidor(meminfo="/proc/meminfo", stat="/proc/stat", cpu_pct: int | None = None) -> dict | None:
     """Memória livre e carga do processador do servidor, com o nível
     ("ok"/"atencao"/"critico") de cada uma e a mensagem do alerta. `None`
-    fora do Linux (ex.: rodando direto no Windows)."""
+    fora do Linux (ex.: rodando direto no Windows). `cpu_pct`: o valor já
+    medido pelo supervisor dos robôs; sem ele, mede aqui."""
     try:
         mem = _ler_meminfo(meminfo)
-        cpu_pct = uso_cpu_pct(stat)
+        if cpu_pct is None:
+            cpu_pct = uso_cpu_pct(stat)
     except (OSError, ValueError, IndexError):
         return None
     livre_mb = mem.get("MemAvailable", 0) // 1024
@@ -208,6 +203,20 @@ def _previsao_fila_zerar(pendentes: int, saida_hora: int, agora) -> dict | None:
     fim = timezone.localtime(agora + timedelta(minutes=minutos))
     mesmo_dia = fim.date() == timezone.localtime(agora).date()
     return {"texto": texto, "as": fim.strftime("%H:%M") if mesmo_dia else fim.strftime("%d/%m %H:%M")}
+
+
+SEGUNDOS_MEDICAO_RECENTE = 30
+
+
+def _cpu_do_supervisor(estado_robos, agora) -> int | None:
+    """Processador do servidor medido pelo supervisor na mesma janela do uso
+    de cada robô (correção 2026-11-17: medido aqui, em outra janela, a soma
+    dos robôs passava do total). `None` se o supervisor não gravou há pouco
+    (parado) - aí a tela mede por conta própria."""
+    if (estado_robos and estado_robos.cpu_servidor_pct is not None and estado_robos.atualizado_em
+            and agora - estado_robos.atualizado_em <= timedelta(seconds=SEGUNDOS_MEDICAO_RECENTE)):
+        return estado_robos.cpu_servidor_pct
+    return None
 
 
 def contexto_fila_tv(agora=None, tecnico=False) -> dict:
@@ -331,7 +340,7 @@ def contexto_fila_tv(agora=None, tecnico=False) -> dict:
         "falha_hora": tentativas_hora - sucesso_hora,
         "taxa_hora": round(100 * sucesso_hora / tentativas_hora) if tentativas_hora else None,
         "intervalo_segundos": INTERVALO_SEGUNDOS,
-        "servidor": saude_servidor() if tecnico else None,
+        "servidor": saude_servidor(cpu_pct=_cpu_do_supervisor(estado_robos, agora)) if tecnico else None,
         "estado_robos": estado_robos,
         # 1 minuto depois de uma redução e some (pedido do usuário, 2026-11-16)
         "aviso_freio": bool(estado_robos and estado_robos.freio_motivo and estado_robos.freio_aviso_ate
@@ -400,33 +409,3 @@ def painel_tecnico_view(request):
 
 def painel_tecnico_conteudo_view(request):
     return render(request, "ri/_fila_tv_conteudo.html", contexto_fila_tv(tecnico=True))
-
-
-# Link do painel técnico para entregar a quem precisa, sem login (`LinkPainelTecnico`, criado no admin): código
-# inexistente ou link desativado -> 404, como o link da TV.
-def _validar_link_tecnico(codigo: str) -> None:
-    from apps.core.models import LinkPainelTecnico
-
-    if not codigo or not LinkPainelTecnico.objects.filter(codigo=codigo, ativo=True).exists():
-        raise Http404
-
-
-@never_cache
-def painel_tecnico_link_view(request, codigo):
-    _validar_link_tecnico(codigo)
-    return render(request, "ri/fila_tv.html", {
-        **contexto_fila_tv(tecnico=True), "url_conteudo": reverse("painel_tecnico_link_conteudo", args=[codigo]),
-        "url_planilha": reverse("painel_tecnico_link_planilha", args=[codigo]),
-    })
-
-
-@never_cache
-def painel_tecnico_link_conteudo_view(request, codigo):
-    _validar_link_tecnico(codigo)
-    return render(request, "ri/_fila_tv_conteudo.html", contexto_fila_tv(tecnico=True))
-
-
-@never_cache
-def painel_tecnico_link_planilha_view(request, codigo):
-    _validar_link_tecnico(codigo)
-    return resposta_planilha(request)

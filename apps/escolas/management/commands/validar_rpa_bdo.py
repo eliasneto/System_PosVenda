@@ -4,7 +4,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.integracoes.eace.rpa_bdo import RpaBdoIndisponivel, anexar_pdf_bdo
+from apps.integracoes.eace.rpa_bdo import DESCRICAO_PADRAO_BDO_RE, RpaBdoIndisponivel, anexar_pdf_bdo
 
 
 class Command(BaseCommand):
@@ -48,6 +48,8 @@ class Command(BaseCommand):
         )
         parser.add_argument("--video", action="store_true", help="Grava um video (.webm) da execucao na pasta.")
         parser.add_argument("--aplicar", action="store_true", help="Anexa o PDF de verdade (exige --pdf e --municipio).")
+        parser.add_argument("--re", action="store_true",
+                            help="Boletim RE: Descricao em branco no portal recebe o texto padrao do BDO RE.")
 
     def handle(self, *args, **opcoes):
         municipio = opcoes["municipio"]
@@ -88,6 +90,7 @@ class Command(BaseCommand):
                 lento_ms=lento,
                 gravar_video=opcoes["video"],
                 pedido=pedido,
+                descricao_padrao=DESCRICAO_PADRAO_BDO_RE if opcoes["re"] else None,
             )
         except RpaBdoIndisponivel as exc:
             raise CommandError(str(exc)) from exc

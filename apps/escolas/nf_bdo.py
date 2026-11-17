@@ -430,10 +430,13 @@ def processar_proximo_envio_nf_bdo(robo=None):
 
     situacao, motivo, status_portal = NotaFiscalBdo.ERRO, "", ""
     try:
-        from apps.integracoes.eace.rpa_bdo import RpaBdoIndisponivel, anexar_pdf_bdo
+        from apps.integracoes.eace.rpa_bdo import DESCRICAO_PADRAO_BDO_RE, RpaBdoIndisponivel, anexar_pdf_bdo
 
+        # Descrição em branco no portal: texto padrão só no Boletim RE (pedido do usuário, 2026-11-17)
+        descricao_padrao = DESCRICAO_PADRAO_BDO_RE if nota.boletim.tipo == BoletimBdo.TIPO_RE else None
         resultado = anexar_pdf_bdo(pedido=nota.boletim.numero, municipio=nota.municipio_bdo.municipio,
-                                   uf=nota.municipio_bdo.uf, caminho_pdf=nota.arquivo.path, progresso_callback=progresso)
+                                   uf=nota.municipio_bdo.uf, caminho_pdf=nota.arquivo.path, progresso_callback=progresso,
+                                   descricao_padrao=descricao_padrao)
     except RpaBdoIndisponivel:
         logger.exception("NF do BDO #%s: ambiente sem Playwright/Chromium.", nota.pk)
         motivo = "ambiente_indisponivel"

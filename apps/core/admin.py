@@ -2,7 +2,7 @@ from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import LinkPainelTecnico, RoboRpaEace, User
+from .models import RoboRpaEace, User
 
 
 @admin.register(User)
@@ -87,9 +87,8 @@ class RoboRpaEaceAdmin(admin.ModelAdmin):
 
         messages.info(request, format_html(
             'Painel técnico da fila (servidor e uso de memória e processador de cada robô): <a href="{}" '
-            'target="_blank" rel="noopener"><b>abrir o painel técnico</b></a> · para entregar a alguém: '
-            '<a href="{}"><b>Links do painel técnico</b></a>.',
-            reverse("admin:core_roborpaeace_painel_tecnico"), reverse("admin:core_linkpaineltecnico_changelist"),
+            'target="_blank" rel="noopener"><b>abrir o painel técnico</b></a>.',
+            reverse("admin:core_roborpaeace_painel_tecnico"),
         ))
         estado = EstadoRobosRpaEace.objects.filter(pk=1).first()
         if estado and estado.atualizado_em:
@@ -123,38 +122,4 @@ class RoboRpaEaceAdmin(admin.ModelAdmin):
             request,
             f"Criado(s): {', '.join(criados)} - inativo(s). Marque \"Ativo\" na lista para começar a rodar "
             "(acima do limite em vigor, os demais ficam esperando - veja a capacidade no topo da lista).",
-        )
-
-
-@admin.register(LinkPainelTecnico)
-class LinkPainelTecnicoAdmin(admin.ModelAdmin):
-    """Pedido do usuário (2026-11-16): o link do painel técnico da fila para entregar a quem precisa (sem acesso ao
-    admin). Um link por pessoa: desmarcar "Ativo" corta o acesso só dela; para trocar um link vazado, desative-o e
-    crie outro."""
-
-    list_display = ("nome", "link", "ativo", "criado_em")
-    list_editable = ("ativo",)
-    list_filter = ("ativo",)
-    search_fields = ("nome",)
-    readonly_fields = ("link",)
-    fields = ("nome", "ativo", "link")
-
-    class Media:
-        # Mostra o endereço completo e copia (core/link_painel_tecnico.js)
-        js = ("core/link_painel_tecnico.js",)
-
-    @admin.display(description="Link para entregar")
-    def link(self, obj):
-        """Endereço montado pelo navegador (`href` relativo), nunca pelo servidor: o nginx repassa o host sem a porta
-        :8000 e o link saía apontando para outro serviço ("Not Found", 2026-11-16)."""
-        from django.urls import reverse
-        from django.utils.html import format_html
-
-        if not obj or not obj.pk:
-            return "O link aparece depois de salvar."
-        endereco = reverse("painel_tecnico_link", args=[obj.codigo])
-        return format_html(
-            '<a class="link-painel-tecnico" href="{0}" target="_blank" rel="noopener">{0}</a> '
-            '<button type="button" class="button copiar-link-painel" data-href="{0}">Copiar link</button>',
-            endereco,
         )

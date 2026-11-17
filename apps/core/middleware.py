@@ -14,7 +14,6 @@ from django.urls import Resolver404, resolve
 # Visualizador ou sem acesso liberado no mesmo navegador).
 _URL_NAMES_ISENTOS = {
     "login", "logout", "fila_tv", "fila_tv_conteudo", "fila_tv_planilha",
-    "painel_tecnico_link", "painel_tecnico_link_conteudo", "painel_tecnico_link_planilha",
 }
 _PREFIXOS_ISENTOS = ("/admin/", "/static/", "/media/")
 

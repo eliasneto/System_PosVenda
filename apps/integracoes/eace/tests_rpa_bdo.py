@@ -105,7 +105,7 @@ class AnexarPdfBdoTests(SimpleTestCase):
 
     @staticmethod
     def _upload(**kwargs):
-        return patch("apps.integracoes.eace.rpa_bdo.anexar_pdf_no_card", **kwargs)
+        return patch("apps.integracoes.eace.rpa_bdo.anexar_pdf_no_card_bdo", **kwargs)
 
     @staticmethod
     def _status_apos_upload(status="Aguardando Aprovação"):
@@ -165,7 +165,7 @@ class AnexarPdfBdoTests(SimpleTestCase):
                     _card(status="Aprovado", posicao=1),
                     _card(posicao=2),
                 ]),
-                "upload": self._upload(return_value=True),
+                "upload": self._upload(return_value=None),
                 "confirmar": self._status_apos_upload(),
             },
             uf="MS",
@@ -175,10 +175,31 @@ class AnexarPdfBdoTests(SimpleTestCase):
         self.assertEqual(resultado.pedido, "3658")
         self.assertEqual(mocks["expandir"].call_args.args[1], 3)
         self.assertEqual(mocks["notas"].call_args.args[1], 3)
-        _, posicao, caminho = mocks["upload"].call_args.args
+        _, posicao, caminho, descricao_padrao = mocks["upload"].call_args.args
         self.assertEqual(posicao, 2)
         self.assertEqual(caminho, str(self.pdf))
+        self.assertIsNone(descricao_padrao)
         self.assertEqual(etapas[-1], ("Confirmando o envio", 100))
+
+    def test_card_reprovado_recebe_a_nf_de_novo(self):
+        # Pedido do usuário (2026-11-17): NF devolvida pelo cliente (card "Reprovado") é reenviada
+        resultado, mocks = self._rodar({
+            **self._caminho(), "cards": self._cards([_card(status="Reprovado")]),
+            "upload": self._upload(return_value=None), "confirmar": self._status_apos_upload(),
+        })
+        self.assertTrue(resultado.sucesso)
+        mocks["upload"].assert_called_once()
+
+    def test_campos_da_nf_em_branco_nao_confirma(self):
+        # Correção 2026-11-17: o portal não preencheu os campos do modal a tempo -> falha, sem confirmar
+        resultado, mocks = self._rodar({
+            **self._caminho(), "cards": self._cards([_card()]),
+            "upload": self._upload(return_value="campos_nf_em_branco"), "confirmar": self._status_apos_upload(),
+        }, descricao_padrao="TEXTO RE")
+        self.assertFalse(resultado.sucesso)
+        self.assertEqual(resultado.motivo, "campos_nf_em_branco")
+        self.assertEqual(mocks["upload"].call_args.args[3], "TEXTO RE")
+        mocks["confirmar"].assert_not_called()
 
     def test_card_ja_aprovado_nao_anexa(self):
         resultado, mocks = self._rodar({
@@ -213,7 +234,7 @@ class AnexarPdfBdoTests(SimpleTestCase):
         resultado, _ = self._rodar({
             **self._caminho(),
             "cards": self._cards([_card()]),
-            "upload": self._upload(return_value=True),
+            "upload": self._upload(return_value=None),
             "confirmar": self._status_apos_upload("Pendente"),
         })
         self.assertEqual(resultado.motivo, "envio_nao_confirmado")

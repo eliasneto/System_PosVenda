@@ -35,7 +35,6 @@ from .rpa_mip import (
     _ATRIBUTO_CARD_MUNICIPIO,
     _ATRIBUTO_LINHA_PEDIDO,
     _encerrar,
-    anexar_pdf_no_card,
     cards_do_municipio,
     confirmar_envio_card,
     destacar_card,
@@ -48,6 +47,7 @@ from .rpa_mip import (
     normalizar_texto,
     posicao_do_pedido,
     status_enviado,
+    status_pendente,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,11 @@ def extrair_dados_nf_bdo(caminho_pdf: str) -> dict:
 #   abrir_notas_fiscais      - secao "Notas Fiscais" do pedido nao respondeu
 #   notas_fiscais_sem_cards  - secao "Notas Fiscais" aberta, mas sem nenhum card
 #                              (o BDO ainda nao chegou na emissao da NF)
+#   campos_nf_em_branco      - depois do upload o portal nao preencheu "Data emissão NF", "Valor a ser medido"
+#                              e "Valor bruto da nota" a tempo - o RPA NAO confirma (correcao 2026-11-17)
+#   descricao_em_branco      - "Descrição" em branco num Boletim que nao e RE (so o RE tem texto padrao)
 MOTIVOS_REGRA_DE_NEGOCIO_BDO = frozenset({
+    "descricao_em_branco",
     "pdf_sem_valor",
     "pedidos_nao_encontrados",
     "pedido_nao_encontrado",
@@ -154,6 +158,7 @@ def anexar_pdf_bdo(
     headless: bool | None = None,
     lento_ms: int = 0,
     gravar_video: bool = False,
+    descricao_padrao: str | None = None,
 ) -> ResultadoRpaBdo:
     """Anexa o PDF da Nota Fiscal no card do `municipio` (secao "Notas
     Fiscais" do pedido `pedido` = numero do Boletim) cujo status esta
@@ -161,6 +166,10 @@ def anexar_pdf_bdo(
 
     `uf` (opcional) restringe os cards a essa UF - o BDO mistura estados
     (ex.: "Campo Grande/MS" e municipios de SP no mesmo pedido).
+
+    `descricao_padrao`: texto da "Descrição" do modal "Enviar nota fiscal"
+    quando o portal a deixa em branco - so no Boletim RE
+    (`DESCRICAO_PADRAO_BDO_RE`); sem ele, descricao em branco nao e enviada.
 
     Opcoes do modo de validacao: as mesmas de `rpa_mip.anexar_pdf_mip`.
     So em `simular=True`, `caminho_pdf` e `municipio` podem ser `None`.
@@ -281,7 +290,7 @@ def anexar_pdf_bdo(
                         cards_encontrados=todos_os_cards,
                     )
 
-                card_alvo, motivo = localizar_card_pendente(cards, dados_pdf["valor"])
+                card_alvo, motivo = localizar_card_pendente(cards, dados_pdf["valor"], aceita=status_aceita_nf_bdo)
                 if motivo:
                     resultado = falhar(motivo, card_alvo["valor"] if card_alvo else None)
                     resultado.cards_encontrados = todos_os_cards
@@ -305,8 +314,9 @@ def anexar_pdf_bdo(
                         pedido=pedido, simulado=True, cards_encontrados=todos_os_cards,
                     )
 
-                if not anexar_pdf_no_card(pagina, card_alvo["posicao"], caminho_pdf):
-                    return falhar("upload", card_alvo["valor"])
+                motivo = anexar_pdf_no_card_bdo(pagina, card_alvo["posicao"], caminho_pdf, descricao_padrao)
+                if motivo:
+                    return falhar(motivo, card_alvo["valor"])
                 avancar()  # "Anexando o PDF"
 
                 status_final = confirmar_envio_card(pagina, card_alvo["posicao"])
@@ -328,6 +338,209 @@ def anexar_pdf_bdo(
     except PlaywrightError as exc:
         logger.error("Erro inesperado do Playwright: %s", exc)
         return ResultadoRpaBdo(sucesso=False, motivo="erro_playwright", dados_pdf=dados_pdf, pedido=pedido)
+
+
+# Pedido do usuario (2026-11-17): NF devolvida pelo cliente deixa o card "Reprovado" - o BDO reenvia nele (o
+# MIP e o RI continuam so em "Pendente").
+STATUS_REPROVADO = "REPROVADO"
+
+
+def status_aceita_nf_bdo(status: str) -> bool:
+    return status_pendente(status) or normalizar_texto(status) == STATUS_REPROVADO
+
+
+# Pedido do usuario (2026-11-17): o cliente devolveu as NFs do BDO enviadas com campos em branco no modal
+# "Enviar nota fiscal". O portal preenche os campos sozinho depois do upload, mas as vezes demora, e o RPA
+# confirmava antes (espera fixa de ~4,5 s). Agora espera os campos e, so no BDO RE, completa a Descricao.
+DESCRICAO_PADRAO_BDO_RE = "MENSALIDADE ASSINATURA DE ACESSO BDO RE"
+CAMPO_DATA_EMISSAO = "Data emissão NF"
+CAMPO_VALOR_MEDIDO = "Valor a ser medido"
+CAMPO_VALOR_BRUTO = "Valor bruto da nota"
+CAMPO_DESCRICAO = "Descrição"
+CAMPOS_OBRIGATORIOS_NF_BDO = (CAMPO_DATA_EMISSAO, CAMPO_VALOR_MEDIDO, CAMPO_VALOR_BRUTO)
+_ATRIBUTO_CAMPO_NF = "data-rpa-bdo-campo"
+
+# Le o valor de cada campo do modal pelo rotulo (sem depender de id/classe do portal): acha o menor bloco que
+# contem todos os rotulos (o formulario do modal) e, para cada rotulo, o 1o input/textarea depois dele no
+# mesmo grupo. Marca o campo com `data-rpa-bdo-campo` para o Playwright preencher. Campo nao achado -> null.
+_JS_LER_CAMPOS_NF = """({rotulos, atributo}) => {
+  const norm = s => (s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const visivel = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const alvos = rotulos.map(norm);
+  let raiz = null;
+  for (const el of document.querySelectorAll('body *')) {
+    if (!visivel(el)) continue;
+    const texto = norm(el.textContent);
+    if (alvos.every(a => texto.includes(a)) && (!raiz || el.textContent.length < raiz.textContent.length)) raiz = el;
+  }
+  const resultado = {};
+  rotulos.forEach((rotulo, i) => { resultado[rotulo] = null; });
+  if (!raiz) return resultado;
+  const campoDe = rotuloEl => {
+    let atual = rotuloEl;
+    for (let nivel = 0; nivel < 5 && atual && atual !== raiz.parentElement; nivel++, atual = atual.parentElement) {
+      const campos = [...atual.querySelectorAll('input:not([type=hidden]):not([type=file]), textarea')].filter(visivel);
+      const depois = campos.find(c => rotuloEl.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING);
+      if (depois) return depois;
+    }
+    return null;
+  };
+  rotulos.forEach((rotulo, i) => {
+    const alvo = alvos[i];
+    const candidatos = [...raiz.querySelectorAll('*')].filter(el => {
+      const texto = norm(el.textContent);
+      return visivel(el) && texto.startsWith(alvo) && texto.length <= alvo.length + 40;
+    }).sort((a, b) => a.textContent.length - b.textContent.length);
+    for (const rotuloEl of candidatos) {
+      const campo = campoDe(rotuloEl);
+      if (campo) {
+        campo.setAttribute(atributo, String(i));
+        resultado[rotulo] = campo.value == null ? '' : String(campo.value);
+        return;
+      }
+    }
+  });
+  return resultado;
+}"""
+
+
+def campo_nf_preenchido(valor: str | None) -> bool:
+    """Valor de campo do modal preenchido: nao vazio e, se for numero/moeda, diferente de zero ("R$0,00")."""
+    texto = (valor or "").strip()
+    if not texto:
+        return False
+    if re.fullmatch(r"(R\$)?\s*[\d.,\s]+", texto):
+        return bool(re.sub(r"\D", "", texto).strip("0"))
+    return True
+
+
+def ler_campos_nf_bdo(pagina) -> dict[str, str | None]:
+    rotulos = [*CAMPOS_OBRIGATORIOS_NF_BDO, CAMPO_DESCRICAO]
+    try:
+        return pagina.evaluate(_JS_LER_CAMPOS_NF, {"rotulos": rotulos, "atributo": _ATRIBUTO_CAMPO_NF})
+    except Exception as exc:  # pagina navegando/fechando: le de novo no proximo ciclo
+        logger.warning("    Nao foi possivel ler os campos do modal: %s", exc)
+        return {rotulo: None for rotulo in rotulos}
+
+
+def aguardar_campos_nf_bdo(
+    pagina, descricao_padrao: str | None = None, timeout_ms: int = 90_000, intervalo_ms: int = 1_000,
+    espera_descricao_ms: int = 10_000, espera_minima_ms: int = 10_000,
+) -> str | None:
+    """Espera o portal preencher "Data emissão NF", "Valor a ser medido" e "Valor bruto da nota" (2 leituras
+    iguais seguidas, para nao pegar o campo no meio do preenchimento). Depois, se a "Descrição" continuar em
+    branco por `espera_descricao_ms`: preenche com `descricao_padrao` (BDO RE) ou devolve "descricao_em_branco".
+    Nunca antes de `espera_minima_ms` depois do upload (pedido do usuario, 2026-11-17): o portal leva uns 10 s
+    para trazer os dados de todos os campos (impostos, valor liquido), mesmo com os 3 obrigatorios ja na tela.
+    Devolve o motivo da falha ou `None` (pode confirmar)."""
+    decorrido, anterior, campos = 0, None, {}
+    while True:
+        campos = ler_campos_nf_bdo(pagina)
+        obrigatorios = {rotulo: campos.get(rotulo) for rotulo in CAMPOS_OBRIGATORIOS_NF_BDO}
+        if (all(campo_nf_preenchido(valor) for valor in obrigatorios.values()) and obrigatorios == anterior
+                and decorrido >= espera_minima_ms):
+            break
+        anterior = obrigatorios
+        if decorrido >= timeout_ms:
+            logger.error("    Portal nao preencheu os campos da NF em %ss: %s", timeout_ms // 1000, campos)
+            return "campos_nf_em_branco"
+        pagina.wait_for_timeout(intervalo_ms)
+        decorrido += intervalo_ms
+    logger.info("    Campos da NF preenchidos pelo portal: %s", campos)
+
+    esperou = 0
+    while not (campos.get(CAMPO_DESCRICAO) or "").strip() and esperou < espera_descricao_ms:
+        pagina.wait_for_timeout(intervalo_ms)
+        esperou += intervalo_ms
+        campos = ler_campos_nf_bdo(pagina)
+    if (campos.get(CAMPO_DESCRICAO) or "").strip():
+        return None
+    if not descricao_padrao:
+        logger.error("    Descricao da NF em branco (Boletim sem texto padrao) - nao confirma.")
+        return "descricao_em_branco"
+    if campos.get(CAMPO_DESCRICAO) is None:
+        logger.error("    Campo Descricao nao encontrado no modal - nao confirma.")
+        return "campos_nf_em_branco"
+    indice = [*CAMPOS_OBRIGATORIOS_NF_BDO, CAMPO_DESCRICAO].index(CAMPO_DESCRICAO)
+    campo = pagina.locator(f"[{_ATRIBUTO_CAMPO_NF}='{indice}']").first
+    try:
+        # Digitado tecla por tecla e saindo do campo (Tab): o portal (Bubble) ignora o `fill` - o texto sumia e o
+        # "Confirmar informações" seguia desativado (teste real no Boletim 3851, 2026-11-17).
+        campo.click()
+        campo.press_sequentially(descricao_padrao, delay=30)
+        campo.press("Tab")
+        pagina.wait_for_timeout(1_500)
+        preenchido = campo.input_value(timeout=5_000).strip()
+    except Exception as exc:
+        logger.error("    Erro ao preencher a Descricao: %s", exc)
+        return "descricao_em_branco"
+    if preenchido != descricao_padrao:
+        logger.error("    Descricao nao ficou gravada no campo (lido: %r).", preenchido)
+        return "descricao_em_branco"
+    logger.info("    Descricao em branco preenchida com o texto padrao: %s", descricao_padrao)
+    return None
+
+
+TITULO_MODAL_NF = "Enviar nota fiscal"
+BOTAO_CONFIRMAR_NF = "Confirmar informações"
+BOTAO_REENVIAR_NF = "Reenviar nota"
+
+
+def confirmar_modal_nf_bdo(pagina, timeout_ms: int = 20_000) -> bool:
+    """Clica em "Confirmar informações" e espera o modal fechar - aberto ainda = o portal nao aceitou."""
+    try:
+        pagina.locator(f"button:has-text('{BOTAO_CONFIRMAR_NF}')").filter(visible=True).last.click(timeout=10_000)
+    except Exception as exc:
+        logger.error("    Botao '%s' nao clicado: %s", BOTAO_CONFIRMAR_NF, exc)
+        return False
+    titulo = pagina.get_by_text(TITULO_MODAL_NF).filter(visible=True)
+    for _ in range(timeout_ms // 1_000):
+        if not titulo.count():
+            logger.info("    [Modal] Informacoes confirmadas.")
+            return True
+        pagina.wait_for_timeout(1_000)
+    logger.error("    Modal '%s' continua aberto depois de confirmar.", TITULO_MODAL_NF)
+    return False
+
+
+def anexar_pdf_no_card_bdo(pagina, posicao: int, caminho_pdf: str, descricao_padrao: str | None = None) -> str | None:
+    """Anexa o PDF no card e so confirma o modal "Enviar nota fiscal" depois que os campos estao preenchidos
+    (`aguardar_campos_nf_bdo`). No card Reprovado (NF devolvida) o portal ainda pede "Reenviar nota" depois do
+    modal - sem ele o card continua Reprovado (teste real no Boletim 3851, 2026-11-17). Devolve o motivo da
+    falha ou `None`."""
+    from .dashboard import _ir_para_linha, _set_arquivo
+
+    card = pagina.locator(f"[{_ATRIBUTO_CARD_MUNICIPIO}='{posicao}']")
+    _ir_para_linha(pagina, card)
+    logger.info("    PDF upload...")
+    campo_arquivo = card.locator("input[type='file']").first
+    try:
+        visivel = campo_arquivo.is_visible()
+    except Exception:
+        visivel = False
+    if visivel:
+        anexou = _set_arquivo(pagina, campo_arquivo, caminho_pdf, "PDF")
+    else:  # card Reprovado: o campo existe escondido (o clique esperaria 30 s a toa)
+        try:
+            campo_arquivo.set_input_files(caminho_pdf)
+            logger.info("    PDF anexado via set_input_files (campo escondido): %s", caminho_pdf)
+            anexou = True
+        except Exception as exc:
+            logger.error("    Erro ao anexar PDF: %s", exc)
+            anexou = False
+    if not anexou:
+        return "upload"
+    motivo = aguardar_campos_nf_bdo(pagina, descricao_padrao)
+    if motivo:
+        return motivo
+    if not confirmar_modal_nf_bdo(pagina):
+        return "envio_nao_confirmado"
+    pagina.wait_for_timeout(1_500)
+    reenviar = card.locator(f"button:has-text('{BOTAO_REENVIAR_NF}')").filter(visible=True)
+    if reenviar.count():
+        reenviar.first.click()
+        logger.info("    Card Reprovado: '%s' clicado.", BOTAO_REENVIAR_NF)
+    return None
 
 
 def ler_cards_bdo(pedido: str, progresso_callback=None) -> ResultadoRpaBdo:

@@ -100,36 +100,33 @@ class FilaTvTests(TestCase):
         lista = self.client.get(reverse("admin:core_roborpaeace_changelist"))
         self.assertContains(lista, "abrir o painel técnico")
 
-    def test_link_do_painel_tecnico_criado_no_admin_para_entregar(self):
-        from apps.core.models import LinkPainelTecnico
+    def test_processador_do_painel_vem_do_supervisor(self):
+        # Correção 2026-11-17: mesma janela do uso dos robôs; supervisor parado -> a tela mede por conta própria
+        from unittest.mock import patch
 
+        from apps.ri.views_fila_tv import contexto_fila_tv
+
+        estado = self._estado()
+        estado.cpu_servidor_pct = 42
+        estado.save()
+        with patch("apps.ri.views_fila_tv.uso_cpu_pct", return_value=7) as medir_aqui, \
+                patch("apps.ri.views_fila_tv._ler_meminfo", return_value={"MemTotal": 8 << 20, "MemAvailable": 4 << 20}):
+            self.assertEqual(contexto_fila_tv(tecnico=True)["servidor"]["cpu_pct"], 42)
+            medir_aqui.assert_not_called()
+            estado.atualizado_em = timezone.now() - timezone.timedelta(minutes=2)
+            estado.save()
+            self.assertEqual(contexto_fila_tv(tecnico=True)["servidor"]["cpu_pct"], 7)
+
+    def test_painel_tecnico_so_no_admin_sem_link_sem_login(self):
+        # Pedido do usuário (2026-11-17): o link sem login do painel técnico foi removido
         self._estado()
+        for caminho in ("/painel-tecnico/qualquer-codigo/", "/painel-tecnico/qualquer-codigo/conteudo/"):
+            self.assertNotEqual(self.client.get(caminho).status_code, 200)
         admin = User.objects.create_superuser(username="adm2", password="senha-teste-123", email="adm2@t.local")
         self.client.force_login(admin)
-        self.client.post(reverse("admin:core_linkpaineltecnico_add"), {"nome": "Equipe de infra", "ativo": "on"})
-        link = LinkPainelTecnico.objects.get()
-        self.assertGreaterEqual(len(link.codigo), 30)
-        url = reverse("painel_tecnico_link", args=[link.codigo])
-        lista = self.client.get(reverse("admin:core_linkpaineltecnico_changelist"))
-        # href relativo: o navegador completa com o endereço e a porta certos (o servidor não sabe a porta :8000)
-        self.assertContains(lista, f'class="link-painel-tecnico" href="{url}"')
-        self.assertContains(lista, "Copiar link")
-        self.assertContains(lista, "core/link_painel_tecnico.js")
-        self.assertNotContains(lista, "http://testserver/painel-tecnico/")
-        self.client.logout()
-        # quem recebe abre sem login
-        pagina = self.client.get(url)
-        self.assertContains(pagina, "Memória em uso")
-        self.assertRegex(pagina.content.decode(), r"mem 8[.,]5% · cpu 15[.,]2%")
-        self.assertContains(self.client.get(reverse("painel_tecnico_link_conteudo", args=[link.codigo])), "Servidor:")
-        planilha = self.client.get(reverse("painel_tecnico_link_planilha", args=[link.codigo]))
-        self.assertIn("attachment", planilha["Content-Disposition"])
-        # desativado ou código errado: 404
-        self.assertEqual(self.client.get(reverse("painel_tecnico_link", args=["errado"])).status_code, 404)
-        link.ativo = False
-        link.save()
-        self.assertEqual(self.client.get(url).status_code, 404)
-        self.assertEqual(self.client.get(reverse("painel_tecnico_link_conteudo", args=[link.codigo])).status_code, 404)
+        lista = self.client.get(reverse("admin:core_roborpaeace_changelist"))
+        self.assertContains(lista, "abrir o painel técnico")
+        self.assertNotContains(lista, "Links do painel técnico")
 
     def test_tela_fila_atualiza_sozinha_e_mostra_o_botao_da_tv(self):
         user = User.objects.create_user(username="analista", password="senha-teste-123", acesso_liberado=True)

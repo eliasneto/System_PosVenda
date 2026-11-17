@@ -123,6 +123,7 @@ class Command(BaseCommand):
                         robos_uso = {}
                     EstadoRobosRpaEace.objects.update_or_create(pk=1, defaults={
                         "robos_uso": robos_uso,
+                        "cpu_servidor_pct": uso.cpu_servidor_pct,
                         "capacidade_maquina": min(capacidade, 999),
                         "limite_atual": limite,
                         "teto_manual": teto_manual,

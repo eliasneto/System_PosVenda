@@ -129,10 +129,11 @@ class NfBdoTests(TestCase):
             nf_bdo.decidir_nota(divergente, self.cards["Itobi"].pk, self.analista)
         self.assertEqual(nf_bdo.enfileirar_notas(self.boletim, self.analista), 2)
 
-        chamadas = []
+        chamadas, descricoes = [], []
 
         def robo(**kwargs):
             chamadas.append((kwargs["pedido"], kwargs["municipio"], kwargs["uf"]))
+            descricoes.append(kwargs["descricao_padrao"])
             if kwargs["municipio"] == "Itobi":
                 return SimpleNamespace(sucesso=True, motivo=None, status_portal="NF anexada")
             return SimpleNamespace(sucesso=False, motivo="valor_divergente", status_portal="Pendente")
@@ -142,6 +143,17 @@ class NfBdoTests(TestCase):
             nf_bdo.processar_proximo_envio_nf_bdo()
             self.assertIsNone(nf_bdo.processar_proximo_envio_nf_bdo())
         self.assertEqual(chamadas, [("3657", "Itobi", "SP"), ("3657", "Cândido Rodrigues", "SP")])
+        # Boletim RE: Descrição em branco no portal recebe o texto padrão (pedido do usuário, 2026-11-17)
+        self.assertEqual(descricoes, ["MENSALIDADE ASSINATURA DE ACESSO BDO RE"] * 2)
+        self.boletim.tipo = "RI"
+        self.boletim.save()
+        erro = NotaFiscalBdo.objects.get(numero_nf="218")
+        nf_bdo.enfileirar_notas(self.boletim, self.analista, [erro.pk])
+        with patch("apps.integracoes.eace.rpa_bdo.anexar_pdf_bdo", robo):
+            nf_bdo.processar_proximo_envio_nf_bdo()
+        self.assertIsNone(descricoes[-1])  # RI: sem texto padrão
+        self.boletim.tipo = "RE"
+        self.boletim.save()
         self.assertEqual(self._situacoes(), {"349": ("anexada", "Itobi"), "218": ("erro", "Cândido Rodrigues")})
         self.cards["Itobi"].refresh_from_db()
         self.assertEqual((self.cards["Itobi"].status_eace, self.cards["Itobi"].arquivo_nf_eace),

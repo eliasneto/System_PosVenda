@@ -99,18 +99,47 @@ def memoria_apertada(recursos: Recursos) -> str:
     return ""
 
 
+def amostra_cpu(caminho: str) -> tuple[int, int]:
+    """(total, ocioso) em ticks de /proc/stat, somando todos os núcleos (linha "cpu")."""
+    with open(caminho, encoding="ascii") as arquivo:
+        campos = [int(v) for v in arquivo.readline().split()[1:9]]
+    user, nice, system, idle, iowait, irq, softirq, steal = (campos + [0] * 8)[:8]
+    return user + nice + system + idle + iowait + irq + softirq + steal, idle + iowait
+
+
 class UsoDosRobos:
     """Memória e processador de cada robô, em % da máquina (painel técnico, pedido do usuário, 2026-11-16).
 
     Cada robô é 1 processo do supervisor mais os filhos (o Chromium do Playwright e os processos dele): soma a
     memória (RSS) e o tempo de processador de toda a árvore lendo /proc. Processador = tempo usado desde a medição
     anterior ÷ (tempo passado × núcleos); sem medição anterior do mesmo processo (passada nova), a média desde
-    que ele começou. `proc` injetável para teste."""
+    que ele começou. `proc` injetável para teste.
+
+    `cpu_servidor_pct` (correção 2026-11-17): o processador da máquina inteira medido na MESMA janela dos robôs.
+    Antes a TV media o total por conta própria, em outra janela (cada um dos 5 processos do gunicorn guardava a
+    sua leitura anterior, então o total era a média de 20-50 s contra os últimos 5 s dos robôs) e a soma dos
+    robôs passava do total. `None` na 1ª medição ou fora do Linux."""
 
     def __init__(self, proc: str = "/proc"):
         self.proc = proc
         self._anterior: dict = {}  # chave do robô -> (pid, instante, ticks)
         self._ticks_por_segundo = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        self._stat_anterior: tuple[int, int] | None = None
+        self.cpu_servidor_pct: int | None = None
+
+    def _medir_servidor(self) -> None:
+        try:
+            total, ocioso = amostra_cpu(f"{self.proc}/stat")
+        except (OSError, ValueError):
+            self._stat_anterior, self.cpu_servidor_pct = None, None
+            return
+        anterior, self._stat_anterior = self._stat_anterior, (total, ocioso)
+        delta_total = total - anterior[0] if anterior else 0
+        if delta_total <= 0:
+            self.cpu_servidor_pct = None
+            return
+        ocupado = delta_total - (ocioso - anterior[1])
+        self.cpu_servidor_pct = max(0, min(100, round(100 * ocupado / delta_total)))
 
     def _processos(self) -> dict[int, tuple[int, int, int, int]]:
         """pid -> (ppid, ticks de processador, memória em kB, início em ticks desde o boot)."""
@@ -141,12 +170,16 @@ class UsoDosRobos:
 
     def medir(self, raizes: dict, recursos: Recursos | None, agora: float | None = None) -> dict[str, dict]:
         """`raizes`: chave do robô -> pid do processo dele. Devolve {chave: {"memoria_pct", "cpu_pct",
-        "memoria_mb"}} (chave em texto, para gravar em JSON)."""
-        if recursos is None or not raizes:
-            self._anterior = {}
+        "memoria_mb"}} (chave em texto, para gravar em JSON). Atualiza também `cpu_servidor_pct`."""
+        if recursos is None:
+            self._anterior, self._stat_anterior, self.cpu_servidor_pct = {}, None, None
             return {}
         agora = time.monotonic() if agora is None else agora
         processos = self._processos()
+        self._medir_servidor()  # logo depois dos processos: mesma janela que o uso dos robôs
+        if not raizes:
+            self._anterior = {}
+            return {}
         filhos: dict[int, list[int]] = {}
         for pid, (ppid, *_resto) in processos.items():
             filhos.setdefault(ppid, []).append(pid)

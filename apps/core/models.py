@@ -123,27 +123,10 @@ class TravaFilaRpaEace(models.Model):
 
 
 def _novo_codigo_painel():
+    """Só para a migração 0007 (o link sem login do painel técnico foi removido em 2026-11-17)."""
     import secrets
 
     return secrets.token_urlsafe(24)
-
-
-class LinkPainelTecnico(models.Model):
-    """Link do painel técnico da fila do RPA EACE (pedido do usuário, 2026-11-16): criado no admin para entregar a
-    quem precisa acompanhar servidor e robôs sem acesso ao admin. Um por pessoa; desativar corta o acesso só dela."""
-
-    nome = models.CharField("Para quem", max_length=100)
-    codigo = models.CharField("Código do link", max_length=64, unique=True, default=_novo_codigo_painel, editable=False)
-    ativo = models.BooleanField("Ativo", default=True)
-    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
-
-    class Meta:
-        ordering = ["nome"]
-        verbose_name = "Link do painel técnico"
-        verbose_name_plural = "Links do painel técnico"
-
-    def __str__(self):
-        return self.nome
 
 
 class EstadoRobosRpaEace(models.Model):
@@ -161,6 +144,8 @@ class EstadoRobosRpaEace(models.Model):
     freio_aviso_ate = models.DateTimeField("Aviso do freio até", null=True, blank=True)
     # Painel técnico (2026-11-16): {"<id do robô>" ou "padrao": {"memoria_pct", "cpu_pct", "memoria_mb"}}, % da máquina.
     robos_uso = models.JSONField("Uso de cada robô", default=dict, blank=True)
+    # Processador da máquina medido na mesma janela de `robos_uso` (2026-11-17): a soma dos robôs não passa dele.
+    cpu_servidor_pct = models.PositiveSmallIntegerField("Processador do servidor (%)", null=True, blank=True)
     recursos =models.CharField("Recursos da máquina", max_length=200, blank=True)
     atualizado_em = models.DateTimeField("Atualizado em", null=True, blank=True)
 

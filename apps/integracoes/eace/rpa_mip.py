@@ -807,9 +807,10 @@ def status_enviado(status: str) -> bool:
     return normalizar_texto(status) in STATUS_ENVIADOS
 
 
-def localizar_card_pendente(cards: list[dict], valor_pdf: str) -> tuple[dict | None, str | None]:
+def localizar_card_pendente(cards: list[dict], valor_pdf: str, aceita=None) -> tuple[dict | None, str | None]:
     """Escolhe, entre os cards do municipio, o pendente cujo valor bate com
-    o do PDF.
+    o do PDF. `aceita(status)`: quais status podem receber a NF (padrao:
+    `status_pendente`; o BDO aceita tambem "Reprovado" - `rpa_bdo`).
 
     Retorna `(card, None)` quando ha exatamente 1 candidato, ou
     `(card_de_referencia, motivo)` em caso de falha - o card de referencia
@@ -818,7 +819,8 @@ def localizar_card_pendente(cards: list[dict], valor_pdf: str) -> tuple[dict | N
     "SAO PAULO", com valores diferentes) - o valor desempata; com 2+
     candidatos de mesmo valor, recusa em vez de adivinhar.
     """
-    pendentes = [card for card in cards if status_pendente(card["status"])]
+    aceita = aceita or status_pendente
+    pendentes = [card for card in cards if aceita(card["status"])]
     if not pendentes:
         return None, "documento_ja_enviado"
 

@@ -61,7 +61,12 @@ espera de banco/disco.
 - Código que guarda estado em memória de processo (cache local, variáveis
   globais) passa a ter 1 cópia por processo - ex.: a última leitura de
   processador do painel da TV (`views_fila_tv._ULTIMA_AMOSTRA_CPU`) é por
-  processo, sem problema para o cálculo.
+  processo. **Isso foi um problema (2026-11-17):** cada processo media o
+  total numa janela diferente (20-50 s), contra os últimos 5 s do uso de
+  cada robô, e a soma dos robôs passava do total. Correção: o supervisor
+  dos robôs mede o total na mesma janela (`UsoDosRobos.cpu_servidor_pct`,
+  gravado em `EstadoRobosRpaEace.cpu_servidor_pct`); a leitura por
+  processo ficou só de reserva, para quando o supervisor está parado.
 
 ## Regra para outros sistemas (lição aprendida)
 Todo sistema Django/Flask servido por gunicorn **deve declarar
