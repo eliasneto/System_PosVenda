@@ -8,6 +8,11 @@ urlpatterns = [
     path("fila-tv/<str:token>/", views_fila_tv.fila_tv_view, name="fila_tv"),
     path("fila-tv/<str:token>/conteudo/", views_fila_tv.fila_tv_conteudo_view, name="fila_tv_conteudo"),
     path("fila-tv/<str:token>/planilha/", views_fila_tv.fila_tv_planilha_view, name="fila_tv_planilha"),
+    path("painel-tecnico/<str:codigo>/", views_fila_tv.painel_tecnico_link_view, name="painel_tecnico_link"),
+    path("painel-tecnico/<str:codigo>/conteudo/", views_fila_tv.painel_tecnico_link_conteudo_view,
+         name="painel_tecnico_link_conteudo"),
+    path("painel-tecnico/<str:codigo>/planilha/", views_fila_tv.painel_tecnico_link_planilha_view,
+         name="painel_tecnico_link_planilha"),
     path("administrador/planilha-eace/", views.planilha_eace_view, name="planilha_eace"),
     path(
         "administrador/planilha-eace/sincronizar-todas/",

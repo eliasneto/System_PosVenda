@@ -409,3 +409,33 @@ def painel_tecnico_view(request):
 
 def painel_tecnico_conteudo_view(request):
     return render(request, "ri/_fila_tv_conteudo.html", contexto_fila_tv(tecnico=True))
+
+
+# Link do painel técnico para entregar a quem precisa, sem login (`LinkPainelTecnico`, criado no admin): código
+# inexistente ou link desativado -> 404, como o link da TV.
+def _validar_link_tecnico(codigo: str) -> None:
+    from apps.core.models import LinkPainelTecnico
+
+    if not codigo or not LinkPainelTecnico.objects.filter(codigo=codigo, ativo=True).exists():
+        raise Http404
+
+
+@never_cache
+def painel_tecnico_link_view(request, codigo):
+    _validar_link_tecnico(codigo)
+    return render(request, "ri/fila_tv.html", {
+        **contexto_fila_tv(tecnico=True), "url_conteudo": reverse("painel_tecnico_link_conteudo", args=[codigo]),
+        "url_planilha": reverse("painel_tecnico_link_planilha", args=[codigo]),
+    })
+
+
+@never_cache
+def painel_tecnico_link_conteudo_view(request, codigo):
+    _validar_link_tecnico(codigo)
+    return render(request, "ri/_fila_tv_conteudo.html", contexto_fila_tv(tecnico=True))
+
+
+@never_cache
+def painel_tecnico_link_planilha_view(request, codigo):
+    _validar_link_tecnico(codigo)
+    return resposta_planilha(request)

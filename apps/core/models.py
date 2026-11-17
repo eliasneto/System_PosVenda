@@ -123,10 +123,28 @@ class TravaFilaRpaEace(models.Model):
 
 
 def _novo_codigo_painel():
-    """Só para a migração 0007 (o link sem login do painel técnico foi removido em 2026-11-17)."""
     import secrets
 
     return secrets.token_urlsafe(24)
+
+
+class LinkPainelTecnico(models.Model):
+    """Link do painel técnico da fila do RPA EACE (pedido do usuário, 2026-11-16): criado no admin para entregar a
+    quem precisa acompanhar servidor e robôs sem acesso ao admin. Um por pessoa; desativar corta o acesso só dela.
+    Removido por engano em 2026-11-17 e restaurado no mesmo dia (migração 0010): abre SEM login."""
+
+    nome = models.CharField("Para quem", max_length=100)
+    codigo = models.CharField("Código do link", max_length=64, unique=True, default=_novo_codigo_painel, editable=False)
+    ativo = models.BooleanField("Ativo", default=True)
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+
+    class Meta:
+        ordering = ["nome"]
+        verbose_name = "Link do painel técnico"
+        verbose_name_plural = "Links do painel técnico"
+
+    def __str__(self):
+        return self.nome
 
 
 class EstadoRobosRpaEace(models.Model):
