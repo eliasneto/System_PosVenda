@@ -18,6 +18,11 @@ from django.views.decorators.http import require_POST
 
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
+from apps.ri.cancelamento_eace import (
+    CancelamentoEaceError,
+    cancelar_faturamento_mip,
+    motivo_bloqueio_cancelamento_faturamento_mip,
+)
 from apps.ri.forms import RiHistoricoForm, RiItemIxcProdutoFormSet
 from apps.ri.models import Documento, EmailFinanceiroLog, KitPadrao, Ri, RiHistorico, RiItemIxc
 from apps.ri.services import sincronizar_divergencia_kit_relatorio
@@ -1446,8 +1451,46 @@ def mip_detail_view(request, inep):
             "lote_do_inep": escola.lotes.order_by("-criado_em").first(),
             "somente_servico_editavel": somente_servico_editavel,
             "produto_servico_formset": produto_servico_formset,
+            **_contexto_cancelar_faturamento_mip(escola, ri, request.user),
         },
     )
+
+
+def _contexto_cancelar_faturamento_mip(escola, ri, user):
+    """Botão "Cancelar faturamento" da tela do MIP (pedido do usuário, 2026-11-18): só o Administrador, só com o
+    INEP no MIP; bloqueado (LOTE, robô rodando, complementar) aparece desabilitado com o motivo."""
+    if not user.is_administrador or not escola.status_mip or ri is None:
+        return {"pode_cancelar_faturamento_mip": False}
+    return {
+        "pode_cancelar_faturamento_mip": True,
+        "bloqueio_cancelar_faturamento_mip": motivo_bloqueio_cancelamento_faturamento_mip(ri),
+    }
+
+
+@login_required
+@require_POST
+def mip_cancelar_faturamento_view(request, inep):
+    """NF já gerada que o cliente cancelou (pedido do usuário, 2026-11-18): com o motivo, o faturamento do RI
+    deixa de valer (fica só no histórico), o INEP sai do MIP e o RI volta para "Implantação EACE" para refazer o
+    processo (`apps.ri.cancelamento_eace.cancelar_faturamento_mip`). Só o Administrador."""
+    if not request.user.is_administrador:
+        return HttpResponseForbidden("Somente Administrador pode cancelar o faturamento.")
+    escola = get_object_or_404(Escola, inep=inep)
+    ri = Ri.objects.filter(escola=escola).order_by("-criado_em").first()
+    if ri is None:
+        messages.error(request, "Este INEP não tem RI.")
+        return redirect("mip_detail", inep=inep)
+    try:
+        cancelar_faturamento_mip(ri, request.POST.get("motivo"), request.user, request.META.get("REMOTE_ADDR"))
+    except CancelamentoEaceError as erro:
+        messages.error(request, str(erro))
+        return redirect("mip_detail", inep=inep)
+    messages.success(
+        request,
+        f'Faturamento do INEP {inep} cancelado: o RI voltou para "Implantação EACE" e o INEP saiu do MIP. As NFs, '
+        "o e-mail e os logs do RPA ficaram só no histórico, e o financeiro é avisado pela integração.",
+    )
+    return redirect("ri_detail", inep=inep)
 
 
 @login_required

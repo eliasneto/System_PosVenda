@@ -78,6 +78,10 @@ urlpatterns = [
     path("mip/<str:inep>/", views.mip_detail_view, name="mip_detail"),
     path("mip/<str:inep>/status/", views.mip_status_update_view, name="mip_status_update"),
     path(
+        "mip/<str:inep>/cancelar-faturamento/", views.mip_cancelar_faturamento_view,
+        name="mip_cancelar_faturamento",
+    ),
+    path(
         "mip/<str:inep>/lado-ixc/servico/salvar/",
         views.mip_item_ixc_somente_servico_salvar_view,
         name="mip_item_ixc_somente_servico_salvar",

@@ -165,6 +165,8 @@ def cancelamentos_pendentes_view(request):
     return JsonResponse({"cancelamentos": [{
         "id": c.pk,
         "inep": c.ri.escola.inep,
+        "origem": c.origem,
+        "origem_descricao": c.get_origem_display(),
         "codigos_rastreio": c.codigos_rastreio,
         "message_ids": c.message_ids,
         "motivo": c.motivo,
@@ -194,6 +196,7 @@ def confirmar_cancelamento_view(request):
             cancelamento.save(update_fields=["confirmado_em", "resultado_financeiro"])
             RiHistorico.objects.create(
                 ri=cancelamento.ri, tipo=RiHistorico.MENSAGEM, autor=None,
-                mensagem=(f"O financeiro recebeu o cancelamento pela EACE. {cancelamento.resultado_financeiro}")[:250],
+                mensagem=(f"O financeiro recebeu o cancelamento ({cancelamento.get_origem_display()}). "
+                          f"{cancelamento.resultado_financeiro}")[:250],
             )
     return JsonResponse({"id": cancelamento.pk, "confirmado_em": timezone.localtime(cancelamento.confirmado_em).isoformat()})

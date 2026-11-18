@@ -7,7 +7,12 @@ lados e os dados preenchidos ficam como estavam (decisão do usuário: só o fat
 
 O financeiro fica sabendo pela integração (`GET /api/financeiro/cancelamentos/`): marca os e-mails dele como
 "Cancelado pela EACE" e eles não geram mais NF. Se a resposta do financeiro chegar depois do cancelamento, ela é
-ignorada (`resposta_de_processo_cancelado`)."""
+ignorada (`resposta_de_processo_cancelado`).
+
+"Cancelar faturamento" do MIP (pedido do usuário, 2026-11-18; `cancelar_faturamento_mip`): NF já gerada que o
+cliente cancelou, com o INEP já no MIP (RI em "Faturamento RI Concluído") e fora de LOTE. Mesmo cancelamento acima,
+só pelo Administrador, e o INEP ainda sai do MIP (`Escola.status_mip` vazio): quando o RI chegar de novo em
+"Faturamento RI Concluído", ele volta ao MIP em "Aguardando Validação EACE" (`Ri.save`)."""
 
 from django.db import transaction
 from django.utils import timezone
@@ -15,6 +20,8 @@ from django.utils import timezone
 from apps.auditoria.models import Auditoria
 from apps.auditoria.services import registrar as auditar
 from apps.core.email_tracking import extrair_codigos_rastreio
+
+from apps.escolas.models import Lote
 
 from .models import (
     CancelamentoEace,
@@ -46,7 +53,25 @@ def motivo_bloqueio_cancelamento(ri):
         return "Este RI não tem e-mail enviado ao financeiro para cancelar."
     if ri.escola.status_mip:
         return ('O INEP já está no MIP: o cancelamento pela EACE só pode ser feito antes do "Faturamento RI '
-                'Concluído".')
+                'Concluído". Use "Cancelar faturamento" na tela do INEP no MIP (Administrador).')
+    return _bloqueio_comum(ri)
+
+
+def motivo_bloqueio_cancelamento_faturamento_mip(ri):
+    """Por que o faturamento do INEP não pode ser cancelado pelo MIP agora (texto), ou "" se pode."""
+    if ri is None:
+        return "Este INEP não tem RI."
+    escola = ri.escola
+    if not escola.status_mip:
+        return "O INEP não está no MIP."
+    lote_ativo = escola.lotes.exclude(status=Lote.REPROVADO).order_by("-criado_em").first()
+    if lote_ativo is not None:
+        return (f'O INEP está no {lote_ativo}: o faturamento de LOTE se desfaz pelo LOTE ("Desfazer LOTE" ou '
+                '"Reprovar"), em Projeto > MIP (LOTE).')
+    return _bloqueio_comum(ri)
+
+
+def _bloqueio_comum(ri):
     if ri.faturamentos_complementares.exclude(status=FaturamentoComplementar.RASCUNHO).exists():
         return "O RI tem faturamento complementar enviado: o cancelamento automático não é seguro. Avise o administrador."
     if LogRpaEace.objects.filter(ri=ri, resultado=LogRpaEace.PROCESSANDO).exists():
@@ -65,43 +90,82 @@ def cancelar_pela_eace(ri, motivo, usuario, ip_origem=None):
         bloqueio = motivo_bloqueio_cancelamento(ri)
         if bloqueio:
             raise CancelamentoEaceError(bloqueio)
+        return _cancelar(ri, motivo, usuario, ip_origem, CancelamentoEace.EACE)
 
-        emails = EmailFinanceiroLog.objects.filter(ri=ri, faturamento_complementar__isnull=True)
-        documentos = Documento.objects.filter(ri=ri)
-        logs_rpa = LogRpaEace.objects.filter(ri=ri, faturamento_complementar__isnull=True)
-        envios = EnvioFinanceiro.objects.filter(ri=ri, faturamento_complementar__isnull=True,
-                                                cancelamento_eace__isnull=True)
-        codigos = sorted({codigo for assunto in _envios_ativos(ri).values_list("assunto", flat=True)
-                          for codigo in extrair_codigos_rastreio(assunto)})
-        resumo = {
-            "emails_enviados": emails.filter(direcao=EmailFinanceiroLog.ENVIADO).count(),
-            "respostas": emails.filter(direcao=EmailFinanceiroLog.RECEBIDO).count(),
-            "documentos": documentos.count(),
-            "logs_rpa": logs_rpa.count(),
-        }
-        cancelamento = CancelamentoEace.objects.create(
-            ri=ri, motivo=motivo, status_anterior=ri.status, codigos_rastreio=codigos,
-            message_ids=list(envios.values_list("message_id", flat=True)), resumo=resumo, criado_por=usuario,
-        )
-        for consulta in (emails, documentos, logs_rpa, envios):
-            consulta.update(cancelamento_eace=cancelamento)
-        RiDivergencia.objects.filter(ri=ri, tipo=RiDivergencia.TIPO_NF_FINANCEIRO, resolvida_em__isnull=True).update(
-            resolvida_em=timezone.now())
 
-        ri.dados_financeiro_confirmados_em = None
-        ri.observacoes_envio_financeiro = ""
-        ri.save(update_fields=["dados_financeiro_confirmados_em", "observacoes_envio_financeiro", "atualizado_em"])
+def cancelar_faturamento_mip(ri, motivo, usuario, ip_origem=None):
+    """"Cancelar faturamento" da tela do MIP (ver o docstring do módulo; a view confere o Administrador). Devolve o
+    `CancelamentoEace`. Bloqueio: CancelamentoEaceError."""
+    motivo = (motivo or "").strip()
+    if not motivo:
+        raise CancelamentoEaceError("Informe o motivo do cancelamento do faturamento.")
+    with transaction.atomic():
+        ri = Ri.objects.select_for_update().select_related("escola").get(pk=ri.pk)
+        bloqueio = motivo_bloqueio_cancelamento_faturamento_mip(ri)
+        if bloqueio:
+            raise CancelamentoEaceError(bloqueio)
+        return _cancelar(ri, motivo, usuario, ip_origem, CancelamentoEace.CLIENTE_MIP)
+
+
+def _cancelar(ri, motivo, usuario, ip_origem, origem):
+    """Parte comum dos dois cancelamentos - chamada dentro da transação, com o RI travado."""
+    escola = ri.escola
+    emails = EmailFinanceiroLog.objects.filter(ri=ri, faturamento_complementar__isnull=True)
+    documentos = Documento.objects.filter(ri=ri)
+    logs_rpa = LogRpaEace.objects.filter(ri=ri, faturamento_complementar__isnull=True)
+    envios = EnvioFinanceiro.objects.filter(ri=ri, faturamento_complementar__isnull=True,
+                                            cancelamento_eace__isnull=True)
+    codigos = sorted({codigo for assunto in _envios_ativos(ri).values_list("assunto", flat=True)
+                      for codigo in extrair_codigos_rastreio(assunto)})
+    resumo = {
+        "emails_enviados": emails.filter(direcao=EmailFinanceiroLog.ENVIADO).count(),
+        "respostas": emails.filter(direcao=EmailFinanceiroLog.RECEBIDO).count(),
+        "documentos": documentos.count(),
+        "logs_rpa": logs_rpa.count(),
+    }
+    cancelamento = CancelamentoEace.objects.create(
+        ri=ri, origem=origem, status_mip_anterior=escola.status_mip or "", motivo=motivo,
+        status_anterior=ri.status, codigos_rastreio=codigos,
+        message_ids=list(envios.values_list("message_id", flat=True)), resumo=resumo, criado_por=usuario,
+    )
+    for consulta in (emails, documentos, logs_rpa, envios):
+        consulta.update(cancelamento_eace=cancelamento)
+    RiDivergencia.objects.filter(ri=ri, tipo=RiDivergencia.TIPO_NF_FINANCEIRO, resolvida_em__isnull=True).update(
+        resolvida_em=timezone.now())
+
+    ri.dados_financeiro_confirmados_em = None
+    ri.observacoes_envio_financeiro = ""
+    campos = ["dados_financeiro_confirmados_em", "observacoes_envio_financeiro", "atualizado_em"]
+    if origem == CancelamentoEace.CLIENTE_MIP:
+        ri.concluido_em = None
+        campos.append("concluido_em")
+    ri.save(update_fields=campos)
+    titulo = ("Processo cancelado pela EACE" if origem == CancelamentoEace.EACE
+              else "Faturamento cancelado no MIP (NF cancelada pelo cliente)")
+    RiHistorico.objects.create(
+        ri=ri, tipo=RiHistorico.MENSAGEM, autor=usuario,
+        mensagem=(f"{titulo}. Motivo: {motivo}"[:180]
+                  + f" | Desconsiderados: {resumo['emails_enviados']} e-mail(s) enviado(s), "
+                  f"{resumo['respostas']} resposta(s), {resumo['documentos']} PDF/XML, "
+                  f"{resumo['logs_rpa']} log(s) RPA.")[:250],
+    )
+    if origem == CancelamentoEace.CLIENTE_MIP:
+        # Sai do MIP antes de o RI voltar: com `status_mip` vazio, o próximo "Faturamento RI Concluído" põe o INEP
+        # de novo no MIP em "Aguardando Validação EACE" (`Ri.save`).
+        status_mip_anterior = escola.get_status_mip_display()
+        escola.status_mip = None
+        escola.pausado_mip = False
+        escola.save(update_fields=["status_mip", "pausado_mip"])
         RiHistorico.objects.create(
-            ri=ri, tipo=RiHistorico.MENSAGEM, autor=usuario,
-            mensagem=(f"Processo cancelado pela EACE. Motivo: {motivo}"[:180]
-                      + f" | Desconsiderados: {resumo['emails_enviados']} e-mail(s) enviado(s), "
-                      f"{resumo['respostas']} resposta(s), {resumo['documentos']} PDF/XML, "
-                      f"{resumo['logs_rpa']} log(s) RPA.")[:250],
+            ri=ri, tipo=RiHistorico.LOG_CAMPO, autor=usuario, campo="Status (MIP)",
+            valor_anterior=status_mip_anterior, valor_novo="Fora do MIP (faturamento cancelado)",
         )
-        trocar_status_com_log(ri, Ri.IMPLANTACAO_EACE, usuario)
-        auditar(usuario, Auditoria.ALTERACAO_CAMPO, entidade="Ri", entidade_id=ri.pk, campo="cancelamento_eace",
-                valor_anterior=cancelamento.status_anterior, valor_novo=f"Cancelado pela EACE: {motivo}"[:255],
-                ip_origem=ip_origem)
+    trocar_status_com_log(ri, Ri.IMPLANTACAO_EACE, usuario)
+    auditar(usuario, Auditoria.ALTERACAO_CAMPO, entidade="Ri", entidade_id=ri.pk, campo="cancelamento_eace",
+            valor_anterior=cancelamento.status_anterior,
+            valor_novo=(f"Cancelado pela EACE: {motivo}" if origem == CancelamentoEace.EACE
+                        else f"Faturamento cancelado no MIP: {motivo}")[:255],
+            ip_origem=ip_origem)
     return cancelamento
 
 

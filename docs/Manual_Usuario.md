@@ -341,6 +341,30 @@ Na tela do INEP (**Projeto › MIP** › INEP):
 
 Outras ações na lista (Administrador e Analista): **Pausar** (o INEP fica fora da criação de LOTE), **Retomar** e **Retirar da lista** / **Retirar selecionados**.
 
+## O que fazer quando o cliente cancelou a NF de um INEP que já está no MIP
+
+Use quando a Nota Fiscal do RI já foi gerada, o INEP já foi para o MIP e o cliente cancelou a NF. Só o **Administrador** faz.
+
+Caminho: **Projeto › MIP** › clique no INEP.
+
+1. Clique no botão **Cancelar faturamento** (ao lado do Status (MIP)).
+2. Na janela **Cancelar faturamento — INEP ...**, escreva o **Motivo** (obrigatório). Exemplo: "cliente cancelou as NFs do INEP".
+3. Clique em **Confirmar cancelamento**. Para desistir, clique em **Voltar**.
+4. Aparece a mensagem **"Faturamento do INEP ... cancelado: o RI voltou para "Implantação EACE" e o INEP saiu do MIP..."** e a tela do RI se abre.
+
+O que acontece:
+
+- As Notas Fiscais (PDF/XML), o e-mail enviado ao financeiro, a resposta e os registros de envio ao portal EACE deixam de valer. Eles continuam no **Histórico de comunicação** do RI, junto com o motivo, quem cancelou e quando.
+- O INEP sai do MIP e o RI volta para **Implantação EACE**. Os itens dos 3 lados e os dados já preenchidos continuam como estavam.
+- Quando chegar a hora, faça o processo do RI de novo (envio ao financeiro, NF, portal EACE). Quando o RI chegar outra vez em **Faturamento RI Concluído**, o INEP volta sozinho ao MIP em **Aguardando Validação EACE**.
+- O financeiro recebe o aviso do cancelamento pela integração.
+
+Quando o botão aparece cinza (não dá para clicar), passe o mouse sobre ele para ver o motivo:
+
+- **"O INEP está no LOTE-...: o faturamento de LOTE se desfaz pelo LOTE..."**: o INEP já está num LOTE. Use **Desfazer** ou **Reprovar** em **Projeto › MIP (LOTE)**.
+- **"Um robô do RPA EACE está anexando NF deste RI agora..."**: espere o robô terminar e tente de novo.
+- **"O RI tem faturamento complementar enviado..."**: avise o administrador do sistema.
+
 ## Como criar um LOTE no MIP
 
 Caminho: **Projeto › MIP**.

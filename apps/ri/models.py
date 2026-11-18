@@ -1246,7 +1246,19 @@ class CancelamentoEace(models.Model):
     O financeiro busca os cancelamentos pela API (`api_envio_financeiro.py`), marca os e-mails dele como
     "Cancelado pela EACE" (pelos códigos de rastreio e Message-IDs abaixo) e confirma (`confirmado_em`)."""
 
+    # Pedido do usuário (2026-11-18): NF já gerada que o cliente cancelou, com o INEP já no MIP - "Cancelar
+    # faturamento" da tela do MIP (`cancelar_faturamento_mip`). Mesmo efeito do cancelamento pela EACE, e o INEP
+    # ainda sai do MIP para refazer o processo.
+    EACE = "eace"
+    CLIENTE_MIP = "cliente_mip"
+    ORIGEM_CHOICES = [
+        (EACE, "Cancelado pela EACE"),
+        (CLIENTE_MIP, "Faturamento cancelado no MIP (NF cancelada pelo cliente)"),
+    ]
+
     ri = models.ForeignKey(Ri, on_delete=models.CASCADE, related_name="cancelamentos_eace")
+    origem = models.CharField("Origem", max_length=20, choices=ORIGEM_CHOICES, default=EACE)
+    status_mip_anterior = models.CharField("Status (MIP) anterior", max_length=30, blank=True)
     motivo = models.TextField("Motivo")
     status_anterior = models.CharField("Status anterior", max_length=30)
     codigos_rastreio = models.JSONField("Códigos de rastreio dos e-mails", default=list, blank=True)

@@ -90,6 +90,7 @@ class EnvioFinanceiroAdmin(admin.ModelAdmin):
 
 @admin.register(CancelamentoEace)
 class CancelamentoEaceAdmin(admin.ModelAdmin):
-    list_display = ("ri", "status_anterior", "criado_por", "criado_em", "confirmado_em")
+    list_display = ("ri", "origem", "status_anterior", "criado_por", "criado_em", "confirmado_em")
+    list_filter = ("origem",)
     search_fields = ("ri__escola__inep", "motivo")
     raw_id_fields = ("ri",)
