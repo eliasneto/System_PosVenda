@@ -76,9 +76,12 @@ do RI/MIP. Linhas de itens: JS em `ri_detail.html` (`configurarComplementar`).
                                 <i data-lucide="plus" class="w-3.5 h-3.5"></i> Adicionar item
                             </button>
                         </div>
-                        {% if complementar_osps|length > 1 %}
-                        <p class="text-[10px] text-gray-400 dark:text-gray-500 mb-2">Este RI tem mais de uma OSP: escolha o Num OSP de cada item.</p>
-                        {% endif %}
+                        <p class="text-[10px] text-gray-400 dark:text-gray-500 mb-2">
+                            O Num OSP pode ser digitado ou escolhido entre as OSPs do RI.{% if complementar_osps|length > 1 %} Este RI tem mais de uma OSP: informe o Num OSP de cada item.{% endif %}
+                        </p>
+                        <datalist id="osps-complementar-{{ ri.pk }}">
+                            {% for osp in complementar_osps %}<option value="{{ osp }}"></option>{% endfor %}
+                        </datalist>
                         <div class="flex flex-col gap-2" data-complementar-linhas>
                             {% if complementar_rascunho %}
                             {% for item in complementar_rascunho.itens %}

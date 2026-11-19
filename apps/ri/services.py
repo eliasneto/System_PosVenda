@@ -543,6 +543,9 @@ def catalogo_faturamento_complementar(escola):
     return qs.order_by(F("numero_access_points").asc(nulls_last=True), "descricao")
 
 
+NUM_OSP_MAX_LENGTH = 50  # = LogRpaEace.num_osp / RiItemRelatorioEace.num_osp
+
+
 def osps_do_ri(ri):
     """OSPs distintas do Lado Relatório EACE (3º lado), na ordem dos itens."""
     return list(dict.fromkeys(
@@ -555,9 +558,11 @@ def osps_do_ri(ri):
 def montar_itens_faturamento_complementar(ri, linhas):
     """Valida as linhas da tela (`[(kit_padrao_id, quantidade, num_osp)]`) e
     devolve os itens do complementar (formato de `FaturamentoComplementar.
-    itens`), com o valor unitário do catálogo NESTE momento. Num OSP: com
-    mais de 1 OSP no RI é obrigatório (uma delas); com 1 só, vale ela; sem
-    OSP no RI, fica vazio. Levanta `FaturamentoComplementarError`."""
+    itens`), com o valor unitário do catálogo NESTE momento. Num OSP é
+    editável (pedido do usuário, 2026-11-19): vale o que foi digitado, mesmo
+    fora das OSPs do RI; em branco, com mais de 1 OSP no RI é obrigatório,
+    com 1 só vale ela, sem OSP no RI fica vazio. Levanta
+    `FaturamentoComplementarError`."""
     catalogo = {str(item.pk): item for item in catalogo_faturamento_complementar(ri.escola)}
     osps = osps_do_ri(ri)
     itens, erros = [], []
@@ -578,17 +583,14 @@ def montar_itens_faturamento_complementar(ri, linhas):
         if quantidade_int < 1:
             erros.append(f"Item {indice}: informe a quantidade (1 ou mais).")
             continue
-        if len(osps) > 1:
-            if num_osp not in osps:
-                erros.append(f"Item {indice}: escolha o Num OSP (este RI tem mais de uma OSP).")
+        if len(num_osp) > NUM_OSP_MAX_LENGTH:
+            erros.append(f"Item {indice}: Num OSP muito longo (máximo {NUM_OSP_MAX_LENGTH} caracteres).")
+            continue
+        if not num_osp:
+            if len(osps) > 1:
+                erros.append(f"Item {indice}: informe o Num OSP (este RI tem mais de uma OSP).")
                 continue
-        elif len(osps) == 1:
-            if num_osp and num_osp != osps[0]:
-                erros.append(f"Item {indice}: Num OSP inválido.")
-                continue
-            num_osp = osps[0]
-        else:
-            num_osp = ""
+            num_osp = osps[0] if osps else ""
         eh_kit = kit.kit_fechado_por_escola
         descricao = kit.descricao_curta or kit.descricao
         item_lpu, aba = _item_lpu_e_aba(descricao, eh_kit, kit)

@@ -210,6 +210,20 @@ class NumeracaoEPlanilhaTests(BaseComplementar):
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(FaturamentoComplementar.objects.exists())
 
+    def test_osp_editavel_aceita_valor_fora_do_ri(self):
+        self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 1, " 9999 ")])
+        self.assertEqual(self.ri.faturamentos_complementares.get().itens[0]["num_osp"], "9999")
+
+    def test_osp_editavel_com_osp_unica_mantem_valor_digitado(self):
+        RiItemRelatorioEace.objects.filter(ri=self.ri, num_osp="1002").update(num_osp="1001")
+        self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 1, "7777")])
+        self.assertEqual(self.ri.faturamentos_complementares.get().itens[0]["num_osp"], "7777")
+
+    def test_osp_muito_longa_recusada(self):
+        resp = self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 1, "9" * 51)])
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(FaturamentoComplementar.objects.exists())
+
     def test_osp_unica_do_ri_e_preenchida_sozinha(self):
         RiItemRelatorioEace.objects.filter(ri=self.ri, num_osp="1002").update(num_osp="1001")
         self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 1, "")])

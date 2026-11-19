@@ -205,7 +205,7 @@ Quem pode: **Administrador** e **Analista**. Com o INEP em "Processo Concluído"
 3. Em **Novo: complementar C...**, preencha cada item:
    - **KIT / produto**: escolha na lista (é a mesma lista do Lado IXC).
    - **Qtd.**: a quantidade.
-   - **Num OSP**: escolha a OSP do item. É obrigatório quando o RI tem mais de uma OSP; com uma OSP só, ela já vem escolhida.
+   - **Num OSP**: digite o número da OSP do item ou escolha uma das OSPs do RI que aparecem como sugestão. Pode ser uma OSP que ainda não está no RI. É obrigatório quando o RI tem mais de uma OSP; com uma OSP só, ela já vem preenchida (e pode ser trocada).
    O valor unitário vem da tabela de preços e não pode ser alterado; o total aparece embaixo. Use **Adicionar item** para mais linhas e o **x** para tirar uma linha.
 4. Escolha o **CFOP da planilha** (**5117 – antigo (entrega futura)** ou **5102-004 – novo (venda)**) e, se quiser, escreva **Observações**.
 5. Para conferir antes, clique em **Baixar planilha**. A planilha se chama "FATURAMENTO MATERIAS EACE - COMPLEMENTAR C... - INEP - escola". Nada é enviado; o complementar fica guardado como rascunho com o mesmo número.
@@ -226,7 +226,7 @@ Regras:
 
 Mensagens comuns:
 
-- **"Faturamento complementar: Item 1: escolha o Num OSP (este RI tem mais de uma OSP)."** — escolha a OSP do item indicado.
+- **"Faturamento complementar: Item 1: informe o Num OSP (este RI tem mais de uma OSP)."** — preencha o Num OSP do item indicado.
 - **"Faturamento complementar: Item 1: escolha um KIT/produto da lista."** ou **"... informe a quantidade (1 ou mais)."** — complete a linha indicada.
 - **"Antes de gerar a planilha do faturamento complementar, preencha no Lado IXC: ..."** — complete os campos citados no Lado IXC e tente de novo.
 - **"O faturamento complementar só pode ser feito por Administrador ou Analista."**
