@@ -1867,12 +1867,14 @@ def _linhas_complementar_do_post(post):
     produtos = post.getlist("item_produto")
     quantidades = post.getlist("item_quantidade")
     osps = post.getlist("item_osp")
+    valores = post.getlist("item_valor")
     total = max(len(produtos), len(quantidades))
     return [
         (
             produtos[i] if i < len(produtos) else "",
             quantidades[i] if i < len(quantidades) else "",
             osps[i] if i < len(osps) else "",
+            valores[i] if i < len(valores) else "",
         )
         for i in range(total)
     ]

@@ -555,10 +555,27 @@ def osps_do_ri(ri):
     ))
 
 
+def _valor_unitario_complementar(texto, valor_catalogo):
+    """Valor digitado na tela ("1234.56", "1234,56" ou "1.234,56"), com 2
+    casas; em branco, o do catálogo. `None` quando inválido ou <= 0."""
+    if not texto:
+        return valor_catalogo
+    texto = texto.replace("R$", "").replace(" ", "")
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    try:
+        valor = Decimal(texto).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return None
+    return valor if valor > 0 else None
+
+
 def montar_itens_faturamento_complementar(ri, linhas):
-    """Valida as linhas da tela (`[(kit_padrao_id, quantidade, num_osp)]`) e
-    devolve os itens do complementar (formato de `FaturamentoComplementar.
-    itens`), com o valor unitário do catálogo NESTE momento. Num OSP é
+    """Valida as linhas da tela (`[(kit_padrao_id, quantidade, num_osp,
+    valor_unitario)]`) e devolve os itens do complementar (formato de
+    `FaturamentoComplementar.itens`). Valor unitário é editável (pedido do
+    usuário, 2026-11-19): vale o digitado (> 0); em branco/ausente, o do
+    catálogo NESTE momento. Num OSP é
     editável (pedido do usuário, 2026-11-19): vale o que foi digitado, mesmo
     fora das OSPs do RI; em branco, com mais de 1 OSP no RI é obrigatório,
     com 1 só vale ela, sem OSP no RI fica vazio. Levanta
@@ -566,7 +583,9 @@ def montar_itens_faturamento_complementar(ri, linhas):
     catalogo = {str(item.pk): item for item in catalogo_faturamento_complementar(ri.escola)}
     osps = osps_do_ri(ri)
     itens, erros = [], []
-    for indice, (kit_id, quantidade, num_osp) in enumerate(linhas, start=1):
+    for indice, linha in enumerate(linhas, start=1):
+        kit_id, quantidade, num_osp = linha[:3]
+        valor_texto = str(linha[3] if len(linha) > 3 else "").strip()
         kit_id = str(kit_id or "").strip()
         quantidade_texto = str(quantidade or "").strip()
         num_osp = (num_osp or "").strip()
@@ -582,6 +601,10 @@ def montar_itens_faturamento_complementar(ri, linhas):
             quantidade_int = 0
         if quantidade_int < 1:
             erros.append(f"Item {indice}: informe a quantidade (1 ou mais).")
+            continue
+        valor_unitario = _valor_unitario_complementar(valor_texto, kit.valor_faturavel)
+        if valor_unitario is None:
+            erros.append(f"Item {indice}: informe um valor unitário válido (maior que zero).")
             continue
         if len(num_osp) > NUM_OSP_MAX_LENGTH:
             erros.append(f"Item {indice}: Num OSP muito longo (máximo {NUM_OSP_MAX_LENGTH} caracteres).")
@@ -599,7 +622,7 @@ def montar_itens_faturamento_complementar(ri, linhas):
             "descricao": descricao,
             "eh_kit": eh_kit,
             "quantidade": quantidade_int,
-            "valor_unitario": str(kit.valor_faturavel),
+            "valor_unitario": str(valor_unitario),
             "item_lpu": item_lpu,
             "aba": aba,
             "num_osp": num_osp,

@@ -206,7 +206,9 @@ Quem pode: **Administrador** e **Analista**. Com o INEP em "Processo Concluído"
    - **KIT / produto**: escolha na lista (é a mesma lista do Lado IXC).
    - **Qtd.**: a quantidade.
    - **Num OSP**: digite o número da OSP do item ou escolha uma das OSPs do RI que aparecem como sugestão. Pode ser uma OSP que ainda não está no RI. É obrigatório quando o RI tem mais de uma OSP; com uma OSP só, ela já vem preenchida (e pode ser trocada).
-   O valor unitário vem da tabela de preços e não pode ser alterado; o total aparece embaixo. Use **Adicionar item** para mais linhas e o **x** para tirar uma linha.
+   - **Valor un. (R$)**: ao escolher o KIT/produto, vem o valor da tabela de preços. Pode ser alterado (precisa ser maior que zero); o subtotal da linha e o total embaixo usam o valor digitado.
+
+   Use **Adicionar item** para mais linhas e o **x** para tirar uma linha.
 4. Escolha o **CFOP da planilha** (**5117 – antigo (entrega futura)** ou **5102-004 – novo (venda)**) e, se quiser, escreva **Observações**.
 5. Para conferir antes, clique em **Baixar planilha**. A planilha se chama "FATURAMENTO MATERIAS EACE - COMPLEMENTAR C... - INEP - escola". Nada é enviado; o complementar fica guardado como rascunho com o mesmo número.
 6. Clique em **Enviar ao financeiro**. Na tela **Confirmar envio do complementar C...**, confira **Para**, **Cc** e **Assunto** e clique em **Confirmar envio** (ou **Voltar** para corrigir).

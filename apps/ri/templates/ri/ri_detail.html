@@ -764,8 +764,9 @@ configurarBlocoProdutos({
     classeLinha: '.produto-servico-ixc-linha',
 });
 // Faturamento complementar (v1.6.0): linhas de itens do modal — "Adicionar
-// item" clona a linha-modelo, "x" remove; valor unitário (do catálogo, não
-// editável) e totais só exibidos, o servidor recalcula tudo pelo catálogo.
+// item" clona a linha-modelo, "x" remove; trocar o KIT preenche o valor
+// unitário com o do catálogo, que continua editável (2026-11-19); subtotal
+// e total usam o valor digitado.
 (function configurarComplementar() {
     var form = document.querySelector('[data-form-complementar]');
     if (!form) return;
@@ -777,12 +778,10 @@ configurarBlocoProdutos({
     function recalcular() {
         var total = 0;
         linhas.querySelectorAll('[data-complementar-linha]').forEach(function (linha) {
-            var opcao = linha.querySelector('[data-complementar-produto]').selectedOptions[0];
-            var unitario = opcao && opcao.dataset.valor ? parseFloat(opcao.dataset.valor) : 0;
+            var unitario = parseFloat(linha.querySelector('[data-complementar-valor]').value) || 0;
             var quantidade = parseInt(linha.querySelector('[data-complementar-quantidade]').value, 10) || 0;
             var subtotal = unitario * quantidade;
             total += subtotal;
-            linha.querySelector('[data-complementar-unitario]').textContent = unitario ? formatar(unitario) + ' un.' : '—';
             linha.querySelector('[data-complementar-subtotal]').textContent = formatar(subtotal);
         });
         form.querySelector('[data-complementar-total]').textContent = formatar(total);
@@ -802,7 +801,15 @@ configurarBlocoProdutos({
             recalcular();
         }
     });
-    linhas.addEventListener('change', recalcular);
+    linhas.addEventListener('change', function (evento) {
+        var produto = evento.target.closest('[data-complementar-produto]');
+        if (produto) {
+            var opcao = produto.selectedOptions[0];
+            var campoValor = produto.closest('[data-complementar-linha]').querySelector('[data-complementar-valor]');
+            campoValor.value = opcao && opcao.dataset.valor ? parseFloat(opcao.dataset.valor).toFixed(2) : '';
+        }
+        recalcular();
+    });
     linhas.addEventListener('input', recalcular);
     recalcular();
 })();

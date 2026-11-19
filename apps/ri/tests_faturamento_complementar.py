@@ -134,6 +134,7 @@ class BaseComplementar(TestCase):
             "item_produto": [str(i[0]) for i in itens],
             "item_quantidade": [str(i[1]) for i in itens],
             "item_osp": [i[2] for i in itens],
+            "item_valor": [i[3] if len(i) > 3 else "" for i in itens],
             "para": "financeiro@speedcsc.com.br",
             "cc": "",
             "assunto": "Faturamento EACE complementar",
@@ -218,6 +219,21 @@ class NumeracaoEPlanilhaTests(BaseComplementar):
         RiItemRelatorioEace.objects.filter(ri=self.ri, num_osp="1002").update(num_osp="1001")
         self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 1, "7777")])
         self.assertEqual(self.ri.faturamentos_complementares.get().itens[0]["num_osp"], "7777")
+
+    def test_valor_unitario_editavel(self):
+        self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 2, "1002", "1.234,50"), (self.kit.pk, 1, "1001", "950.10")])
+        itens = self.ri.faturamentos_complementares.get().itens
+        self.assertEqual([i["valor_unitario"] for i in itens], ["1234.50", "950.10"])
+
+    def test_valor_unitario_em_branco_usa_catalogo(self):
+        self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 1, "1002", "")])
+        self.assertEqual(self.ri.faturamentos_complementares.get().itens[0]["valor_unitario"], "300.00")
+
+    def test_valor_unitario_invalido_ou_zero_recusado(self):
+        for valor in ("0", "-5", "abc"):
+            resp = self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 1, "1002", valor)])
+            self.assertEqual(resp.status_code, 302)
+        self.assertFalse(FaturamentoComplementar.objects.exists())
 
     def test_osp_muito_longa_recusada(self):
         resp = self._post(self.analista, "baixar", itens=[(self.nobreak.pk, 1, "9" * 51)])
