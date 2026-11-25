@@ -47,6 +47,50 @@ def motivo_falha_navegacao(pagina: Page, motivo: str) -> str:
     return motivo
 
 
+# Popup do Bubble aberto por cima do dashboard (com o fundo `.greyout` que
+# toma o clique) e o "X" dele (icone ionic `#close`).
+_SELETOR_AVISO_PORTAL = ".bubble-element.Popup:visible"
+_SELETOR_FECHAR_AVISO = "button:has(use[href*='#close'])"
+_MAX_AVISOS_FECHADOS = 3
+_TENTATIVAS_CLIQUE_MEDICOES = 3
+
+
+def fechar_avisos_do_portal(pagina: Page) -> int:
+    """Fecha os avisos informativos que o portal abre por cima do dashboard
+    logo apos o login e devolve quantos fechou.
+
+    Em 2026-11-25 o portal passou a abrir o aviso "Fechamento 2026 - Data
+    de corte" depois do login; o fundo do popup tomava o clique e todo
+    envio dava `abrir_medicoes` (INEP 17051207 e outros). Fecha com Esc e,
+    se nao bastar, pelo "X" do popup. O modal do Termo de uso nao e
+    fechado (decisao do usuario de 2026-11-03: alguem aceita no portal).
+    """
+    fechados = 0
+    while fechados < _MAX_AVISOS_FECHADOS:
+        if termo_de_uso_pendente(pagina):
+            return fechados
+        aviso = pagina.locator(_SELETOR_AVISO_PORTAL)
+        try:
+            if aviso.count() == 0:
+                return fechados
+        except Exception:
+            return fechados
+
+        logger.warning("Aviso do portal EACE aberto por cima do dashboard - fechando.")
+        pagina.keyboard.press("Escape")
+        try:
+            aviso.first.wait_for(state="hidden", timeout=3_000)
+        except PWTimeout:
+            try:
+                aviso.first.locator(_SELETOR_FECHAR_AVISO).first.click(timeout=3_000)
+                aviso.first.wait_for(state="hidden", timeout=3_000)
+            except PWTimeout:
+                logger.error("Nao foi possivel fechar o aviso do portal EACE.")
+                return fechados
+        fechados += 1
+    return fechados
+
+
 def abrir_medicoes(pagina: Page) -> bool:
     """Aguarda o dashboard carregar e clica no card 'Medições'.
 
@@ -54,17 +98,31 @@ def abrir_medicoes(pagina: Page) -> bool:
     buscava 'Medicoes' sem acento, o que nunca deu match (Playwright
     ':has-text' nao ignora acento); corrigido em 2026-09-03 apos teste
     real contra o portal (FEAT-033, Fase 1).
+
+    Antes de cada clique fecha os avisos do portal (`fechar_avisos_do_portal`);
+    o aviso pode abrir alguns segundos depois do dashboard, por isso o
+    clique tem mais de uma tentativa.
     """
     logger.info("Aguardando dashboard carregar...")
 
+    card = pagina.locator(".clickable-element:has-text('Medições')").first
     try:
-        card = pagina.locator(".clickable-element:has-text('Medições')").first
         card.wait_for(state="visible", timeout=60_000)
-        logger.info("Dashboard carregado. Clicando em 'Medições'...")
-        card.click()
     except PWTimeout as exc:
-        logger.error("Timeout ao aguardar/clicar em 'Medições': %s", exc)
+        logger.error("Timeout ao aguardar o card 'Medições': %s", exc)
         return False
+
+    for tentativa in range(1, _TENTATIVAS_CLIQUE_MEDICOES + 1):
+        fechar_avisos_do_portal(pagina)
+        try:
+            logger.info("Dashboard carregado. Clicando em 'Medições'...")
+            card.click(timeout=10_000)
+            break
+        except PWTimeout as exc:
+            if tentativa == _TENTATIVAS_CLIQUE_MEDICOES or termo_de_uso_pendente(pagina):
+                logger.error("Timeout ao clicar em 'Medições': %s", exc)
+                return False
+            logger.warning("Clique em 'Medições' bloqueado (tentativa %s) - tentando de novo.", tentativa)
 
     try:
         pagina.locator("button:has-text('Ver OSPs')").wait_for(state="visible", timeout=15_000)

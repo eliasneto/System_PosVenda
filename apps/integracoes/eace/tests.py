@@ -896,3 +896,111 @@ class BotaoEnviarNotasTests(SimpleTestCase):
         with patch("apps.integracoes.eace.dashboard.time.monotonic", side_effect=[0, 0, 100]):
             self.assertFalse(clicar_enviar_notas(pagina))
         btn.click.assert_not_called()
+
+
+class AvisoDoPortalSobreODashboardTests(SimpleTestCase):
+    """Correção v1.6.1 (2026-11-25, INEP 17051207): o aviso "Fechamento
+    2026" aberto pelo portal depois do login tomava o clique em "Medições"
+    e todo envio dava `abrir_medicoes`."""
+
+    def _pagina(self, avisos_abertos, esc_fecha=True, card_click_side_effect=None):
+        from playwright.sync_api import TimeoutError as PWTimeout
+
+        estado = {"avisos": avisos_abertos}
+        aviso = MagicMock()
+        aviso.count.side_effect = lambda: estado["avisos"]
+
+        def esperar_sumir(state, timeout):
+            if not esc_fecha and not estado.get("x_clicado"):
+                raise PWTimeout("aviso continua aberto")
+
+        def fechar_pelo_x(timeout):
+            estado["x_clicado"] = True
+
+        aviso.first.wait_for.side_effect = esperar_sumir
+        aviso.first.locator.return_value.first.click.side_effect = fechar_pelo_x
+
+        def esc(tecla):
+            if esc_fecha:
+                estado["avisos"] -= 1
+
+        card = MagicMock()
+        if card_click_side_effect:
+            card.click.side_effect = card_click_side_effect
+
+        def locator(seletor):
+            if "Popup" in seletor:
+                return aviso
+            if "Medições" in seletor:
+                return MagicMock(first=card)
+            return MagicMock()
+
+        pagina = MagicMock()
+        pagina.locator.side_effect = locator
+        pagina.keyboard.press.side_effect = esc
+        return pagina, card, aviso, estado
+
+    def test_fecha_aviso_com_esc(self):
+        from apps.integracoes.eace import dashboard
+
+        pagina, _, aviso, _ = self._pagina(avisos_abertos=1)
+        with patch.object(dashboard, "termo_de_uso_pendente", return_value=False):
+            self.assertEqual(dashboard.fechar_avisos_do_portal(pagina), 1)
+        pagina.keyboard.press.assert_called_once_with("Escape")
+        aviso.first.locator.return_value.first.click.assert_not_called()
+
+    def test_esc_nao_fecha_usa_o_x(self):
+        from apps.integracoes.eace import dashboard
+
+        pagina, _, aviso, estado = self._pagina(avisos_abertos=1, esc_fecha=False)
+        aviso.first.locator.return_value.first.click.side_effect = (
+            lambda timeout: estado.update(x_clicado=True, avisos=0)
+        )
+        with patch.object(dashboard, "termo_de_uso_pendente", return_value=False):
+            self.assertEqual(dashboard.fechar_avisos_do_portal(pagina), 1)
+        aviso.first.locator.return_value.first.click.assert_called_once()
+
+    def test_sem_aviso_nao_aperta_nada(self):
+        from apps.integracoes.eace import dashboard
+
+        pagina, _, _, _ = self._pagina(avisos_abertos=0)
+        with patch.object(dashboard, "termo_de_uso_pendente", return_value=False):
+            self.assertEqual(dashboard.fechar_avisos_do_portal(pagina), 0)
+        pagina.keyboard.press.assert_not_called()
+
+    def test_termo_de_uso_nao_e_fechado(self):
+        from apps.integracoes.eace import dashboard
+
+        pagina, _, _, _ = self._pagina(avisos_abertos=1)
+        with patch.object(dashboard, "termo_de_uso_pendente", return_value=True):
+            self.assertEqual(dashboard.fechar_avisos_do_portal(pagina), 0)
+        pagina.keyboard.press.assert_not_called()
+
+    def test_abrir_medicoes_fecha_aviso_antes_de_clicar(self):
+        from apps.integracoes.eace import dashboard
+
+        pagina, card, _, estado = self._pagina(avisos_abertos=1)
+        with patch.object(dashboard, "termo_de_uso_pendente", return_value=False):
+            self.assertTrue(dashboard.abrir_medicoes(pagina))
+        self.assertEqual(estado["avisos"], 0)
+        card.click.assert_called_once()
+
+    def test_abrir_medicoes_tenta_de_novo_quando_aviso_abre_depois(self):
+        from playwright.sync_api import TimeoutError as PWTimeout
+        from apps.integracoes.eace import dashboard
+
+        pagina, card, _, _ = self._pagina(
+            avisos_abertos=0, card_click_side_effect=[PWTimeout("coberto"), None],
+        )
+        with patch.object(dashboard, "termo_de_uso_pendente", return_value=False):
+            self.assertTrue(dashboard.abrir_medicoes(pagina))
+        self.assertEqual(card.click.call_count, 2)
+
+    def test_abrir_medicoes_desiste_com_termo_de_uso(self):
+        from playwright.sync_api import TimeoutError as PWTimeout
+        from apps.integracoes.eace import dashboard
+
+        pagina, card, _, _ = self._pagina(avisos_abertos=0, card_click_side_effect=PWTimeout("coberto"))
+        with patch.object(dashboard, "termo_de_uso_pendente", return_value=True):
+            self.assertFalse(dashboard.abrir_medicoes(pagina))
+        card.click.assert_called_once()
